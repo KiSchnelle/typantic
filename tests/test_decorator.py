@@ -1,6 +1,7 @@
 """Tests for the pydantic_to_typer decorator."""
 
 import inspect
+import re
 from collections.abc import Callable
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -13,6 +14,13 @@ from typer.testing import CliRunner
 from typantic import pydantic_to_typer
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escape sequences from rendered Rich/Typer output."""
+    return _ANSI_RE.sub("", text)
 
 # ---------------------------------------------------------------------------
 # Validators
@@ -183,29 +191,31 @@ class TestHelp:
     def test_argument_shown(self) -> None:
         app, _ = _make_app(FullConfig)
         result = runner.invoke(app, ["--help"])
-        assert "Input folders." in result.output
+        assert "Input folders." in _plain(result.output)
 
     def test_option_shown(self) -> None:
         app, _ = _make_app(FullConfig)
         result = runner.invoke(app, ["--help"])
-        assert "--output-dir" in result.output
-        assert "Output directory." in result.output
+        output = _plain(result.output)
+        assert "--output-dir" in output
+        assert "Output directory." in output
 
     def test_optional_field_shown(self) -> None:
         app, _ = _make_app(FullConfig)
         result = runner.invoke(app, ["--help"])
-        assert "--seed" in result.output
-        assert "Random seed." in result.output
+        output = _plain(result.output)
+        assert "--seed" in output
+        assert "Random seed." in output
 
     def test_default_factory_shown_in_help(self) -> None:
         app, _ = _make_app(FullConfig)
         result = runner.invoke(app, ["--help"])
-        assert "0.5" in result.output
+        assert "0.5" in _plain(result.output)
 
     def test_bool_flag_shown(self) -> None:
         app, _ = _make_app(FullConfig)
         result = runner.invoke(app, ["--help"])
-        assert "--dry-run" in result.output
+        assert "--dry-run" in _plain(result.output)
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +313,7 @@ class TestValidationErrors:
         app, _ = _make_app(FullConfig)
         result = runner.invoke(app, ["/no/such/dir", "--output-dir", str(out)])
         assert result.exit_code != 0
-        assert "Not a directory" in result.output
+        assert "Not a directory" in _plain(result.output)
 
     def test_missing_required_option(self, tmp_path: Path) -> None:
         d = tmp_path / "a"
@@ -396,12 +406,13 @@ class TestEnum:
         app, _ = _make_app(EnumModel)
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "--color" in result.output
-        assert "--priority" in result.output
+        output = _plain(result.output)
+        assert "--color" in output
+        assert "--priority" in output
         # Typer renders enum choices
-        assert "red" in result.output
-        assert "green" in result.output
-        assert "blue" in result.output
+        assert "red" in output
+        assert "green" in output
+        assert "blue" in output
 
     def test_str_enum_default(self) -> None:
         app, results = _make_app(EnumModel)
@@ -455,8 +466,9 @@ class TestTuple:
         app, _ = _make_app(TupleModel)
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "--point" in result.output
-        assert "--bounds" in result.output
+        output = _plain(result.output)
+        assert "--point" in output
+        assert "--bounds" in output
 
     def test_tuple_required(self) -> None:
         app, results = _make_app(TupleModel)
