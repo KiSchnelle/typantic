@@ -1,0 +1,86 @@
+[project]
+name = "typantic"
+version = "0.1.0"
+description = "Auto-generate Typer CLI interfaces from Pydantic models."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "Kilian Schnelle" }]
+keywords = ["typer", "pydantic", "cli", "validation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = ["pydantic>=2.0", "typer>=0.9"]
+
+[dependency-groups]
+dev = ["mypy>=2.1.0", "pytest>=7.0", "ruff>=0.15.13"]
+
+[project.urls]
+Homepage = "https://github.com/KiSchnelle/typantic"
+Repository = "https://github.com/KiSchnelle/typantic"
+Issues = "https://github.com/KiSchnelle/typantic/issues"
+Changelog = "https://github.com/KiSchnelle/typantic/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.11.1,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "typantic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+
+[tool.ruff.lint]
+extend-select = ["ALL"]
+ignore = [
+    "TD003",
+    "FIX002",
+    "TD002",
+    "TD004",
+    "ERA001",
+    "COM812",
+    "TC002",
+    "TC003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",    # assert is fine in tests
+    "D100",    # no module docstring needed
+    "D101",    # no class docstring needed
+    "D102",    # no method docstring needed
+    "D103",    # no function docstring needed
+    "D104",    # no package docstring needed
+    "ANN",     # no type annotations needed
+    "PLR2004", # magic values are fine in tests
+    "INP001",  # implicit namespace package is fine
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+disallow_untyped_defs = true
+disallow_untyped_calls = true
+disallow_incomplete_defs = true
+strict = true
+exclude = '(?:^|/)(tests|manual_tests|dist)(?:/|$)'
+
+[tool.pyright]
+ignore = ["manual_tests/**", "dist/**"]
+typeCheckingMode = "strict"
