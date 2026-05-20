@@ -5,7 +5,9 @@ description = "Auto-generate Typer CLI interfaces from Pydantic models."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
-authors = [{ name = "Kilian Schnelle" }]
+authors = [
+    { name = "Kilian Schnelle", email = "kilian.schnelle@kischnelle.dev" },
+]
 keywords = ["typer", "pydantic", "cli", "validation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
