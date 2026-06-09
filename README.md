@@ -109,7 +109,7 @@ Your function receives the **validated model instance** — validators, `default
 
 - Python ≥ 3.12
 - Pydantic ≥ 2.0
-- Typer ≥ 0.9
+- Typer ≥ 0.26
 
 ## License
 
