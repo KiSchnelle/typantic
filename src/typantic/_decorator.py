@@ -93,6 +93,8 @@ def pydantic_to_typer(
         - ``Field(default=...)``  ->  Typer default value
         - ``Field(default_factory=...)``  ->  factory is called once at
           decoration time to supply the Typer default
+        - a ``None`` default  ->  rendered as ``[default: (None)]`` in
+          ``--help`` (Click would otherwise omit it entirely)
 
     The decorated function receives the **validated** Pydantic model
     instance, so all ``AfterValidator`` / ``BeforeValidator`` logic runs
@@ -134,6 +136,14 @@ def pydantic_to_typer(
             base_type = _extract_base_type(resolved_hints[name])
             help_text = field_info.description or ""
 
+            default: object
+            if field_info.is_required():
+                default = inspect.Parameter.empty
+            elif field_info.default_factory is not None:
+                default = field_info.default_factory()  # type: ignore[call-arg]
+            else:
+                default = field_info.default
+
             typer_meta: typer.models.ArgumentInfo | typer.models.OptionInfo
             if field_info.kw_only is False:
                 typer_meta = typer.Argument(
@@ -142,18 +152,16 @@ def pydantic_to_typer(
                 )
             else:
                 panel = _panel_for_field(model_cls, name) if subpanels else None
-                typer_meta = typer.Option(help=help_text, rich_help_panel=panel)
+                typer_meta = typer.Option(
+                    help=help_text,
+                    rich_help_panel=panel,
+                    # Click omits `None` defaults entirely; surface them as
+                    # "[default: (None)]" so optional options are visibly so.
+                    show_default="None" if default is None else True,
+                )
 
             annotated = Annotated[base_type, typer_meta]  # type: ignore[valid-type]
             new_annotations[name] = annotated
-
-            default: object
-            if field_info.is_required():
-                default = inspect.Parameter.empty
-            elif field_info.default_factory is not None:
-                default = field_info.default_factory()  # type: ignore[call-arg]
-            else:
-                default = field_info.default
 
             new_params.append(
                 inspect.Parameter(

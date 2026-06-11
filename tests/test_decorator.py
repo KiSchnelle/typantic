@@ -616,3 +616,27 @@ class TestSubpanels:
         app = _make_panel_app(PanelModel, subpanels=True)
         result = runner.invoke(app, ["--help"])
         assert "--cli-panel" not in _plain(result.output)
+
+
+# ---------------------------------------------------------------------------
+# Tests: None defaults in help
+# ---------------------------------------------------------------------------
+
+
+class TestNoneDefaultHelp:
+    def test_none_default_rendered(self) -> None:
+        app, _ = _make_app(FullConfig)
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "(None)" in _plain(result.output)
+
+    def test_regular_default_still_rendered(self) -> None:
+        app, _ = _make_app(FullConfig)
+        result = runner.invoke(app, ["--help"])
+        assert "0.5" in _plain(result.output)
+
+    def test_none_default_still_passes_none(self) -> None:
+        app, results = _make_app(SimpleModel)
+        result = runner.invoke(app, ["Alice"])
+        assert result.exit_code == 0
+        assert results[0].count == 1

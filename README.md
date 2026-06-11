@@ -75,7 +75,7 @@ $ python example.py --help
 ╭─ Options ────────────────────────────────────────────────────╮
 │ *  --output     PATH     Output directory.  [required]       │
 │    --threshold  FLOAT    Detection threshold.  [default: 0.5]│
-│    --seed       INTEGER  Random seed.                        │
+│    --seed       INTEGER  Random seed.  [default: (None)]     │
 │    --help                Show this message and exit.         │
 ╰──────────────────────────────────────────────────────────────╯
 ```
@@ -102,6 +102,7 @@ Your function receives the **validated model instance** — validators, `default
 | `Field(default=...)`              | Default value shown in `--help`         |
 | `Field(default_factory=...)`      | Factory called once at decoration time  |
 | `int \| None`                     | Optional CLI option                     |
+| `default=None`                    | Rendered as `[default: (None)]`         |
 | `list[Path]`                      | Variadic positional argument            |
 | `AfterValidator`, `BeforeValidator` | Run at call time via Pydantic         |
 
