@@ -51,8 +51,36 @@ def _extract_base_type(annotation: object) -> object:
     return annotation
 
 
+def _panel_for_field(model_cls: type[BaseModel], field_name: str) -> str | None:
+    """Return the help panel title for a field, or ``None`` for the default group.
+
+    The panel is taken from the ``cli_panel`` class attribute of the class that
+    *defines* the field -- the most-base class in the MRO whose ``model_fields``
+    contains it. Classes that declare no ``cli_panel`` of their own contribute
+    no panel, so grouping is fully explicit and opt-in per (mixin) class.
+
+    Args:
+        model_cls: The decorated model class.
+        field_name: The field to resolve.
+
+    Returns:
+        The panel title, or ``None`` if the defining class declares none.
+    """
+    for klass in reversed(model_cls.__mro__):
+        if (
+            issubclass(klass, BaseModel)
+            and klass is not BaseModel
+            and field_name in klass.model_fields
+        ):
+            panel = klass.__dict__.get("cli_panel")
+            return panel if isinstance(panel, str) else None
+    return None
+
+
 def pydantic_to_typer(
     model_cls: type[BaseModel],
+    *,
+    subpanels: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Rewrite a function's signature so Typer sees individual CLI params.
 
@@ -73,6 +101,11 @@ def pydantic_to_typer(
     Args:
         model_cls: The Pydantic model class whose fields define the CLI
             parameters.
+        subpanels: Group options into Rich help panels. Each option is placed
+            in the panel named by the ``cli_panel`` class attribute of the
+            class that defines its field (useful for models composed from
+            mixins). Fields whose defining class declares no ``cli_panel``
+            stay in the default options group. Arguments are never panelled.
 
     Returns:
         A decorator that transforms a ``func(model)`` signature into one
@@ -82,7 +115,7 @@ def pydantic_to_typer(
         >>> import typer
         >>> app = typer.Typer()
         >>> @app.command()
-        ... @pydantic_to_typer(MyConfig)
+        ... @pydantic_to_typer(MyConfig, subpanels=True)
         ... def run(config: MyConfig): ...
     """
 
@@ -108,7 +141,8 @@ def pydantic_to_typer(
                     show_default=False,
                 )
             else:
-                typer_meta = typer.Option(help=help_text)
+                panel = _panel_for_field(model_cls, name) if subpanels else None
+                typer_meta = typer.Option(help=help_text, rich_help_panel=panel)
 
             annotated = Annotated[base_type, typer_meta]  # type: ignore[valid-type]
             new_annotations[name] = annotated

@@ -105,6 +105,54 @@ Your function receives the **validated model instance** — validators, `default
 | `list[Path]`                      | Variadic positional argument            |
 | `AfterValidator`, `BeforeValidator` | Run at call time via Pydantic         |
 
+## Help panels for mixin-composed models
+
+Large configs composed from mixins can group their options into titled Rich
+help panels. Opt in with `subpanels=True` and give each mixin a `cli_panel`
+class attribute — every option lands in the panel of the class that defines
+its field:
+
+```python
+from typing import Annotated, ClassVar
+
+from pydantic import BaseModel, Field
+
+from typantic import pydantic_to_typer
+
+
+class ComputeMixin(BaseModel):
+    cli_panel: ClassVar[str] = "Compute"
+
+    cpus: Annotated[int, Field(default=4, description="CPU count.")]
+
+
+class Config(ComputeMixin):
+    dry_run: Annotated[bool, Field(default=False, description="Dry run.")]
+
+
+@app.command()
+@pydantic_to_typer(Config, subpanels=True)
+def run(config: Config): ...
+```
+
+```
+$ python example.py --help
+
+ Usage: example.py [OPTIONS]
+
+╭─ Options ──────────────────────────────────────────────────────╮
+│ --dry-run    --no-dry-run    Dry run.  [default: no-dry-run]   │
+│ --help                       Show this message and exit.       │
+╰────────────────────────────────────────────────────────────────╯
+╭─ Compute ──────────────────────────────────────────────────────╮
+│ --cpus        INTEGER        CPU count.  [default: 4]          │
+╰────────────────────────────────────────────────────────────────╯
+```
+
+`--cpus` renders under a "Compute" panel; `--dry-run` stays in the default
+options group (its defining class declares no `cli_panel`). Arguments are
+never panelled.
+
 ## Requirements
 
 - Python ≥ 3.12

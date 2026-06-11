@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, ClassVar, get_args
 
 import typer
 from pydantic import AfterValidator, BaseModel, Field
@@ -504,3 +504,115 @@ class TestTuple:
         assert isinstance(config, TupleAnnotatedModel)
         # AfterValidator rounds to 2 decimals
         assert config.coords == (3.14, 2.72)
+
+
+# ---------------------------------------------------------------------------
+# Test models: subpanels
+# ---------------------------------------------------------------------------
+
+
+class ComputeMixin(BaseModel):
+    cli_panel: ClassVar[str] = "Compute Resources"
+
+    cpus: Annotated[
+        int,
+        Field(default=4, description="CPU count.", kw_only=True),
+    ]
+    gpus: Annotated[
+        int,
+        Field(default=0, description="GPU count.", kw_only=True),
+    ]
+
+
+class UntitledMixin(BaseModel):
+    verbose: Annotated[
+        bool,
+        Field(default=False, description="Verbose output.", kw_only=True),
+    ]
+
+
+class PanelModel(ComputeMixin, UntitledMixin):
+    target: Annotated[
+        str,
+        Field(description="Run target.", kw_only=False),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(default=False, description="Dry run.", kw_only=True),
+    ]
+
+
+class SelfTitledModel(BaseModel):
+    cli_panel: ClassVar[str] = "Own Panel"
+
+    speed: Annotated[
+        int,
+        Field(default=1, description="Speed.", kw_only=True),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Tests: subpanels
+# ---------------------------------------------------------------------------
+
+
+def _make_panel_app(model_cls: type[BaseModel], *, subpanels: bool) -> typer.Typer:
+    app = typer.Typer()
+
+    @app.command()
+    @pydantic_to_typer(model_cls, subpanels=subpanels)
+    def cmd(config: BaseModel) -> None: ...
+
+    _ = cmd
+    return app
+
+
+def _param_meta(app: typer.Typer, name: str) -> object:
+    cb = app.registered_commands[0].callback
+    assert cb is not None
+    return get_args(cb.__annotations__[name])[1]
+
+
+class TestSubpanels:
+    def test_off_by_default(self) -> None:
+        app, _ = _make_app(PanelModel)
+        meta = _param_meta(app, "cpus")
+        assert meta.rich_help_panel is None
+
+    def test_panel_from_defining_mixin(self) -> None:
+        app = _make_panel_app(PanelModel, subpanels=True)
+        assert _param_meta(app, "cpus").rich_help_panel == "Compute Resources"
+        assert _param_meta(app, "gpus").rich_help_panel == "Compute Resources"
+
+    def test_mixin_without_cli_panel_stays_default(self) -> None:
+        app = _make_panel_app(PanelModel, subpanels=True)
+        assert _param_meta(app, "verbose").rich_help_panel is None
+
+    def test_model_own_field_without_cli_panel_stays_default(self) -> None:
+        app = _make_panel_app(PanelModel, subpanels=True)
+        assert _param_meta(app, "dry_run").rich_help_panel is None
+
+    def test_model_with_own_cli_panel_groups_its_fields(self) -> None:
+        app = _make_panel_app(SelfTitledModel, subpanels=True)
+        assert _param_meta(app, "speed").rich_help_panel == "Own Panel"
+
+    def test_argument_never_panelled(self) -> None:
+        app = _make_panel_app(PanelModel, subpanels=True)
+        assert _param_meta(app, "target").rich_help_panel is None
+
+    def test_panel_title_rendered_in_help(self) -> None:
+        app = _make_panel_app(PanelModel, subpanels=True)
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "Compute Resources" in _plain(result.output)
+
+    def test_panel_title_absent_when_disabled(self) -> None:
+        app = _make_panel_app(PanelModel, subpanels=False)
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "Compute Resources" not in _plain(result.output)
+
+    def test_cli_panel_not_a_cli_option(self) -> None:
+        app = _make_panel_app(PanelModel, subpanels=True)
+        result = runner.invoke(app, ["--help"])
+        assert "--cli-panel" not in _plain(result.output)
