@@ -5,13 +5,13 @@ import re
 from collections.abc import Callable
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import Annotated, ClassVar, get_args
+from typing import Annotated, ClassVar, Literal, get_args
 
 import typer
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, SecretStr
 from typer.testing import CliRunner
 
-from typantic import pydantic_to_typer
+from typantic import add_command, pydantic_to_typer
 
 runner = CliRunner()
 
@@ -21,6 +21,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 def _plain(text: str) -> str:
     """Strip ANSI escape sequences from rendered Rich/Typer output."""
     return _ANSI_RE.sub("", text)
+
 
 # ---------------------------------------------------------------------------
 # Validators
@@ -166,10 +167,14 @@ class TestSignature:
         sig = inspect.signature(self._callback(app))
         assert sig.parameters["count"].default == 1
 
-    def test_default_factory_called(self) -> None:
+    def test_default_factory_passed_as_callable(self) -> None:
+        # The factory is passed through to Click as a callable default so it is
+        # re-evaluated on every invocation, while still resolving to its value.
         app, _ = _make_app(FullConfig)
         sig = inspect.signature(self._callback(app))
-        assert sig.parameters["threshold"].default == 0.5
+        factory = sig.parameters["threshold"].default
+        assert callable(factory)
+        assert factory() == 0.5
 
     def test_none_default_for_optional(self) -> None:
         app, _ = _make_app(FullConfig)
@@ -567,10 +572,12 @@ def _make_panel_app(model_cls: type[BaseModel], *, subpanels: bool) -> typer.Typ
     return app
 
 
-def _param_meta(app: typer.Typer, name: str) -> object:
+def _param_meta(app: typer.Typer, name: str) -> typer.models.ParameterInfo:
     cb = app.registered_commands[0].callback
     assert cb is not None
-    return get_args(cb.__annotations__[name])[1]
+    meta = get_args(cb.__annotations__[name])[1]
+    assert isinstance(meta, typer.models.ParameterInfo)
+    return meta
 
 
 class TestSubpanels:
@@ -639,4 +646,345 @@ class TestNoneDefaultHelp:
         app, results = _make_app(SimpleModel)
         result = runner.invoke(app, ["Alice"])
         assert result.exit_code == 0
-        assert results[0].count == 1
+        config = results[0]
+        assert isinstance(config, SimpleModel)
+        assert config.count == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: Literal choices
+# ---------------------------------------------------------------------------
+
+
+class LiteralModel(BaseModel):
+    mode: Annotated[
+        Literal["fast", "slow"],
+        Field(default="fast", description="Run mode.", kw_only=True),
+    ]
+
+
+class TestLiteral:
+    def test_help_shows_choices(self) -> None:
+        app, _ = _make_app(LiteralModel)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "fast" in output
+        assert "slow" in output
+
+    def test_valid_choice_accepted(self) -> None:
+        app, results = _make_app(LiteralModel)
+        result = runner.invoke(app, ["--mode", "slow"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, LiteralModel)
+        assert config.mode == "slow"
+
+    def test_invalid_choice_rejected(self) -> None:
+        app, _ = _make_app(LiteralModel)
+        result = runner.invoke(app, ["--mode", "bogus"])
+        assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: lazy default_factory
+# ---------------------------------------------------------------------------
+
+
+_counter = {"n": 0}
+
+
+def _increment() -> int:
+    _counter["n"] += 1
+    return _counter["n"]
+
+
+class CounterModel(BaseModel):
+    ticket: Annotated[
+        int,
+        Field(default_factory=_increment, description="Ticket number.", kw_only=True),
+    ]
+
+
+class TestLazyFactory:
+    def test_factory_runs_per_invocation(self) -> None:
+        _counter["n"] = 0
+        app, results = _make_app(CounterModel)
+        runner.invoke(app, [])
+        runner.invoke(app, [])
+        first, second = results[0], results[1]
+        assert isinstance(first, CounterModel)
+        assert isinstance(second, CounterModel)
+        assert first.ticket != second.ticket
+
+    def test_explicit_value_overrides_factory(self) -> None:
+        app, results = _make_app(CounterModel)
+        result = runner.invoke(app, ["--ticket", "99"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, CounterModel)
+        assert config.ticket == 99
+
+    def test_sample_value_shown_in_help(self) -> None:
+        app, _ = _make_app(CounterModel)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "default" in output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: SecretStr
+# ---------------------------------------------------------------------------
+
+
+class SecretModel(BaseModel):
+    name: Annotated[
+        str,
+        Field(description="Name.", kw_only=False),
+    ]
+    token: Annotated[
+        SecretStr,
+        Field(description="API token.", kw_only=True),
+    ]
+
+
+class TestSecret:
+    def test_secret_value_wrapped(self) -> None:
+        app, results = _make_app(SecretModel)
+        result = runner.invoke(app, ["alice", "--token", "hunter2"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, SecretModel)
+        assert isinstance(config.token, SecretStr)
+        assert config.token.get_secret_value() == "hunter2"
+
+    def test_secret_prompts_when_omitted(self) -> None:
+        app, results = _make_app(SecretModel)
+        result = runner.invoke(app, ["alice"], input="prompted\n")
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, SecretModel)
+        assert config.token.get_secret_value() == "prompted"
+
+    def test_secret_option_listed_in_help(self) -> None:
+        app, _ = _make_app(SecretModel)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "--token" in output
+
+
+# ---------------------------------------------------------------------------
+# Tests: CLI hints (short flags, custom names, envvars)
+# ---------------------------------------------------------------------------
+
+
+class HintModel(BaseModel):
+    verbose: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Verbose output.",
+            kw_only=True,
+            json_schema_extra={"cli_short": "-v"},
+        ),
+    ]
+    output: Annotated[
+        str,
+        Field(
+            default="out",
+            description="Output path.",
+            kw_only=True,
+            json_schema_extra={"cli_name": "--dest"},
+        ),
+    ]
+    api_key: Annotated[
+        str,
+        Field(
+            default="",
+            description="API key.",
+            kw_only=True,
+            json_schema_extra={"cli_envvar": "TYPANTIC_API_KEY"},
+        ),
+    ]
+
+
+class TestCliHints:
+    def test_short_flag(self) -> None:
+        app, results = _make_app(HintModel)
+        result = runner.invoke(app, ["-v"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, HintModel)
+        assert config.verbose is True
+
+    def test_long_flag_still_works_with_short(self) -> None:
+        app, results = _make_app(HintModel)
+        result = runner.invoke(app, ["--verbose"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, HintModel)
+        assert config.verbose is True
+
+    def test_custom_name(self) -> None:
+        app, results = _make_app(HintModel)
+        result = runner.invoke(app, ["--dest", "build"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, HintModel)
+        assert config.output == "build"
+
+    def test_custom_name_replaces_default_flag(self) -> None:
+        app, _ = _make_app(HintModel)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "--dest" in output
+        assert "--output" not in output
+
+    def test_envvar(self) -> None:
+        app, results = _make_app(HintModel)
+        result = runner.invoke(app, [], env={"TYPANTIC_API_KEY": "from-env"})
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, HintModel)
+        assert config.api_key == "from-env"
+
+
+# ---------------------------------------------------------------------------
+# Tests: numeric constraints
+# ---------------------------------------------------------------------------
+
+
+class BoundedModel(BaseModel):
+    level: Annotated[
+        int,
+        Field(default=5, ge=0, le=10, description="Level.", kw_only=True),
+    ]
+
+
+class TestNumericBounds:
+    def test_in_range_accepted(self) -> None:
+        app, results = _make_app(BoundedModel)
+        result = runner.invoke(app, ["--level", "7"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, BoundedModel)
+        assert config.level == 7
+
+    def test_above_max_rejected(self) -> None:
+        app, _ = _make_app(BoundedModel)
+        result = runner.invoke(app, ["--level", "20"])
+        assert result.exit_code != 0
+
+    def test_below_min_rejected(self) -> None:
+        app, _ = _make_app(BoundedModel)
+        result = runner.invoke(app, ["--level", "-1"])
+        assert result.exit_code != 0
+
+    def test_range_shown_in_help(self) -> None:
+        app, _ = _make_app(BoundedModel)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "10" in output
+
+
+# ---------------------------------------------------------------------------
+# Test models: nested
+# ---------------------------------------------------------------------------
+
+
+class Database(BaseModel):
+    host: Annotated[
+        str,
+        Field(default="localhost", description="DB host.", kw_only=True),
+    ]
+    port: Annotated[
+        int,
+        Field(default=5432, ge=1, le=65535, description="DB port.", kw_only=True),
+    ]
+
+
+def _nonempty(v: str) -> str:
+    if not v:
+        msg = "must not be empty"
+        raise ValueError(msg)
+    return v
+
+
+class NestedConfig(BaseModel):
+    name: Annotated[
+        str,
+        Field(description="App name.", kw_only=False),
+    ]
+    db: Database
+    label: Annotated[
+        str,
+        AfterValidator(_nonempty),
+        Field(default="x", description="Label.", kw_only=True),
+    ]
+
+
+class TestNested:
+    def test_help_shows_prefixed_options(self) -> None:
+        app, _ = _make_app(NestedConfig)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "--db-host" in output
+        assert "--db-port" in output
+
+    def test_nested_defaults(self) -> None:
+        app, results = _make_app(NestedConfig)
+        result = runner.invoke(app, ["myapp"])
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, NestedConfig)
+        assert config.db.host == "localhost"
+        assert config.db.port == 5432
+
+    def test_nested_override(self) -> None:
+        app, results = _make_app(NestedConfig)
+        result = runner.invoke(
+            app, ["myapp", "--db-host", "remote", "--db-port", "9000"]
+        )
+        assert result.exit_code == 0, result.output
+        config = results[0]
+        assert isinstance(config, NestedConfig)
+        assert config.db.host == "remote"
+        assert config.db.port == 9000
+
+    def test_nested_numeric_bound_enforced(self) -> None:
+        app, _ = _make_app(NestedConfig)
+        result = runner.invoke(app, ["myapp", "--db-port", "99999"])
+        assert result.exit_code != 0
+
+    def test_outer_validator_still_runs(self) -> None:
+        app, _ = _make_app(NestedConfig)
+        result = runner.invoke(app, ["myapp", "--label", ""])
+        assert result.exit_code != 0
+        assert "must not be empty" in _plain(result.output)
+
+
+# ---------------------------------------------------------------------------
+# Tests: add_command helper
+# ---------------------------------------------------------------------------
+
+
+class TestAddCommand:
+    def test_registers_and_runs(self) -> None:
+        app = typer.Typer()
+        captured: list[BaseModel] = []
+
+        def handler(config: BaseModel) -> None:
+            captured.append(config)
+
+        add_command(app, SimpleModel, handler)
+        result = runner.invoke(app, ["Alice", "--count", "2"])
+        assert result.exit_code == 0, result.output
+        config = captured[0]
+        assert isinstance(config, SimpleModel)
+        assert config.name == "Alice"
+        assert config.count == 2
+
+    def test_custom_name(self) -> None:
+        app = typer.Typer()
+        add_command(app, SimpleModel, lambda _: None, name="greet")
+        registered = app.registered_commands[0]
+        assert registered.name == "greet"
+
+    def test_subpanels_forwarded(self) -> None:
+        app = typer.Typer()
+        add_command(app, PanelModel, lambda _: None, subpanels=True)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "Compute Resources" in output

@@ -87,8 +87,9 @@ The `@pydantic_to_typer(Model)` decorator:
 1. Reads `Model.model_fields` to discover field names, types, descriptions, and defaults
 2. Strips `Annotated` validator metadata to extract the base types Typer understands
 3. Maps `kw_only=False` → `typer.Argument`, `kw_only=True` → `typer.Option`
-4. Rewrites the function's `__signature__` so Typer sees the expanded parameters
-5. At call time, passes the raw CLI values into `Model(...)` so all Pydantic validators run
+4. Flattens nested `BaseModel` fields into prefixed parameters
+5. Rewrites the function's `__signature__` so Typer sees the expanded parameters
+6. At call time, re-nests the raw CLI values and passes them into `Model(...)` so all Pydantic validators run
 
 Your function receives the **validated model instance** — validators, `default_factory`, union types, and everything else works exactly as in Pydantic.
 
@@ -100,11 +101,89 @@ Your function receives the **validated model instance** — validators, `default
 | `kw_only=True` or unset           | `typer.Option` (`--flag`)               |
 | `Field(description=...)`          | `help=...` in the CLI                   |
 | `Field(default=...)`              | Default value shown in `--help`         |
-| `Field(default_factory=...)`      | Factory called once at decoration time  |
+| `Field(default_factory=...)`      | Re-evaluated on every invocation        |
+| `Field(ge=..., le=...)`           | Typer `min` / `max` (validated + shown) |
+| `Literal["a", "b"]`               | CLI choices                             |
+| `Enum`, `tuple[...]`              | Choices / multi-value option            |
+| nested `BaseModel`                | Flattened into `--prefix-field` options |
+| `SecretStr`, `SecretBytes`        | Hidden input (secure prompt if required)|
 | `int \| None`                     | Optional CLI option                     |
 | `default=None`                    | Rendered as `[default: (None)]`         |
 | `list[Path]`                      | Variadic positional argument            |
 | `AfterValidator`, `BeforeValidator` | Run at call time via Pydantic         |
+
+Validators that raise `ValueError` / `AssertionError` surface as Typer
+parameter errors; other exception types propagate unchanged.
+
+## Per-field CLI hints
+
+Customise individual flags with `Field(json_schema_extra=...)`:
+
+```python
+class Config(BaseModel):
+    verbose: Annotated[
+        bool,
+        Field(default=False, json_schema_extra={"cli_short": "-v"}),
+    ]
+    output: Annotated[
+        Path,
+        Field(description="Output path.", json_schema_extra={"cli_name": "--dest"}),
+    ]
+    api_key: Annotated[
+        str,
+        Field(default="", json_schema_extra={"cli_envvar": "MYAPP_API_KEY"}),
+    ]
+```
+
+| Key          | Effect                                              |
+|--------------|-----------------------------------------------------|
+| `cli_short`  | Adds a short flag (e.g. `-v`) alongside the long one |
+| `cli_name`   | Replaces the derived long flag (e.g. `--dest`)      |
+| `cli_envvar` | Reads the value from an environment variable        |
+
+## Nested models
+
+Fields whose type is itself a `BaseModel` are flattened into prefixed options,
+so layered configs map onto the CLI without manual wiring:
+
+```python
+class Database(BaseModel):
+    host: Annotated[str, Field(default="localhost", description="DB host.")]
+    port: Annotated[int, Field(default=5432, ge=1, le=65535, description="DB port.")]
+
+
+class Config(BaseModel):
+    name: Annotated[str, Field(description="App name.", kw_only=False)]
+    db: Database  # -> --db-host, --db-port
+```
+
+```
+$ python example.py myapp --db-host db.internal --db-port 9000
+```
+
+The values are re-nested before the model is constructed, so `Database`'s own
+validators and defaults apply as usual.
+
+## Registering commands without a stub
+
+`add_command` wires a model and a handler onto a Typer app directly, skipping
+the decorate-a-stub-function boilerplate:
+
+```python
+import typer
+
+from typantic import add_command
+
+app = typer.Typer()
+
+
+def run(config: Config) -> None:
+    print(config)
+
+
+add_command(app, Config, run)            # command name defaults to "run"
+add_command(app, Config, run, name="go")  # or set it explicitly
+```
 
 ## Help panels for mixin-composed models
 
