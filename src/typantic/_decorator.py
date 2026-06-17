@@ -427,10 +427,10 @@ def pydantic_to_typer(
     return decorator
 
 
-def add_command(
+def add_command[ModelT: BaseModel](
     app: typer.Typer,
-    model_cls: type[BaseModel],
-    handler: Callable[[BaseModel], Any],
+    model_cls: type[ModelT],
+    handler: Callable[[ModelT], Any],
     *,
     name: str | None = None,
     subpanels: bool = False,
