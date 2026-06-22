@@ -233,11 +233,102 @@ $ python example.py --help
 options group (its defining class declares no `cli_panel`). Arguments are
 never panelled.
 
+## Config files
+
+Some configs are too large or too nested to pass as flags every time. Opt in with
+`config_file=True` and the command can be driven by a YAML/JSON file as well. Two
+options are injected:
+
+- `--generate-config PATH` — write an editable default template, then exit without
+  running;
+- `--config PATH` — load settings from a file as the base; any flags you also pass
+  **override** the file.
+
+```python
+from typing import Annotated
+
+import typer
+from pydantic import BaseModel, Field
+
+from typantic import add_command
+
+
+class Database(BaseModel):
+    host: Annotated[str, Field(description="DB host.")]      # required
+    port: Annotated[int, Field(default=5432, description="DB port.")]
+
+
+class Config(BaseModel):
+    name: Annotated[str, Field(description="App name.")]      # required
+    db: Database                                             # required nested model
+    workers: Annotated[int, Field(default=4, description="Worker count.")]
+    tags: set[str] = {"default"}
+
+
+app = typer.Typer()
+
+
+def run(config: Config) -> None:
+    print(config)
+
+
+add_command(app, Config, run, name="run", config_file=True)
+```
+
+Generate a template — required fields become `<REQUIRED: ...>` placeholders, and
+nested models are expanded so their shape is visible:
+
+```console
+$ myapp run --generate-config run.yaml
+$ cat run.yaml
+name: '<REQUIRED: App name.>'
+db:
+  host: '<REQUIRED: DB host.>'
+  port: 5432
+workers: 4
+tags:
+- default
+```
+
+Fill in the required values and run from the file (or override individual
+settings with flags, which take precedence over the file):
+
+```console
+$ cat run.yaml
+name: my-service
+db:
+  host: db.internal
+  port: 9000
+workers: 8
+tags: [eu, prod]
+
+$ myapp run --config run.yaml                 # run entirely from the file
+$ myapp run --config run.yaml --workers 16    # file as base, --workers overrides
+```
+
+`--help` lists both options under a **Config file** panel:
+
+```
+╭─ Config file ──────────────────────────────────────────────────╮
+│ --config           PATH  Load settings from a YAML/JSON file    │
+│                          (flags passed still override).         │
+│ --generate-config  PATH  Write a default config template to     │
+│                          PATH and exit.                         │
+╰────────────────────────────────────────────────────────────────╯
+```
+
+Because `--config` may supply them, required fields are made optional at the Typer
+layer; Pydantic re-checks requiredness *after* merging file and flags, so a value
+missing from both is still reported as an error — it just no longer renders as
+`[required]` in `--help`. A `--config` document must be a mapping; a bad suffix,
+unparseable content, or a non-mapping top level raises a `ValueError`.
+
 ## Requirements
 
 - Python ≥ 3.12
-- Pydantic ≥ 2.0
+- Pydantic ≥ 2.10
 - Typer ≥ 0.26
+- PyYAML ≥ 6.0
 
 ## License
 

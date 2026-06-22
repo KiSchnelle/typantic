@@ -1,6 +1,6 @@
 [project]
 name = "typantic"
-version = "0.3.0"
+version = "0.4.0"
 description = "Auto-generate Typer CLI interfaces from Pydantic models."
 readme = "README.md"
 license = "MIT"
@@ -18,10 +18,10 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-dependencies = ["pydantic>=2.0", "typer>=0.26"]
+dependencies = ["pydantic>=2.10", "pyyaml>=6.0", "typer>=0.26"]
 
 [dependency-groups]
-dev = ["mypy>=2.1.0", "pytest>=7.0", "ruff>=0.15.16"]
+dev = ["mypy>=2.1.0", "pytest>=7.0", "ruff>=0.15.16", "types-pyyaml>=6.0"]
 
 [project.urls]
 Homepage = "https://github.com/KiSchnelle/typantic"

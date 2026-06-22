@@ -1,17 +1,13 @@
 """Core decorator for converting Pydantic models to Typer CLI interfaces."""
 
 import inspect
-import types
 from collections.abc import Callable
 from functools import wraps
+from pathlib import Path
 from typing import (
     Annotated,
     Any,
-    TypeGuard,
-    Union,
     cast,
-    get_args,
-    get_origin,
     get_type_hints,
 )
 
@@ -20,52 +16,119 @@ import typer
 from pydantic import BaseModel, SecretBytes, SecretStr, ValidationError
 from pydantic.fields import FieldInfo
 
+from typantic._config_file import load_config_file, write_config_template
+from typantic._introspect import extract_base_type as _extract_base_type
+from typantic._introspect import is_model_type as _is_model_type
 
-def _extract_base_type(annotation: object) -> object:
-    """Strip ``Annotated`` validator metadata, keeping the structural type.
+# Python identifiers for the injected config-file parameters (kept distinct from
+# any model field name); the user-facing flags are --config / --generate-config.
+_CTX_PARAM = "_typantic_ctx"
+_CONFIG_PARAM = "_typantic_config"
+_GENERATE_PARAM = "_typantic_generate_config"
+_CONFIG_PANEL = "Config file"
+_EXPLICIT_SOURCES = frozenset({"COMMANDLINE", "ENVIRONMENT", "PROMPT"})
 
-    Recursively walks through ``Annotated``, ``Union``, ``list``, and
-    ``tuple`` wrappers, discarding everything except the base types that
-    Typer can interpret. ``Literal`` annotations are passed through
-    untouched -- Typer renders them as CLI choices.
 
-    Args:
-        annotation: A (possibly nested) type annotation to unwrap.
+def _value_is_explicit(ctx: typer.Context, name: str) -> bool:
+    """Whether a CLI parameter's value came from the user, not its default."""
+    source = ctx.get_parameter_source(name)
+    return source is not None and source.name in _EXPLICIT_SOURCES
 
-    Returns:
-        The base type with all Pydantic validator metadata removed.
 
-    Examples:
-        >>> from typing import Annotated
-        >>> from pydantic import AfterValidator, Field
-        >>> _extract_base_type(Annotated[float, Field(description="x")])
-        <class 'float'>
+def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: object) -> None:
+    """Assign ``value`` at the nested ``path`` in ``data``, creating sub-dicts."""
+    target = data
+    for part in path[:-1]:
+        existing = target.get(part)
+        if not isinstance(existing, dict):
+            existing = {}
+            target[part] = existing
+        target = cast("dict[str, Any]", existing)
+    target[path[-1]] = value
+
+
+def _construct(model_cls: type[BaseModel], data: dict[str, Any]) -> BaseModel:
+    """Build the model from ``data``, reporting errors as Typer parameter errors."""
+    try:
+        return model_cls(**data)
+    except ValidationError as exc:
+        messages: list[str] = []
+        for err in exc.errors():
+            loc = ".".join(str(p) for p in err["loc"])
+            msg = str(err["msg"])
+            messages.append(f"{loc}: {msg}" if loc else msg)
+        raise typer.BadParameter("\n  ".join(messages)) from exc
+
+
+def _collect_flat(
+    mapping: list[tuple[str, tuple[str, ...]]],
+    kwargs: dict[str, object],
+) -> dict[str, Any]:
+    """Re-nest the flat CLI kwargs into the model's input mapping."""
+    data: dict[str, Any] = {}
+    for cli_name, path in mapping:
+        if cli_name in kwargs:
+            _set_nested(data, path, kwargs[cli_name])
+    return data
+
+
+def _collect_with_config(
+    ctx: typer.Context,
+    config: Path | None,
+    mapping: list[tuple[str, tuple[str, ...]]],
+    kwargs: dict[str, object],
+) -> dict[str, Any]:
+    """Merge a ``--config`` file (base) with the CLI flags that override it.
+
+    With no ``--config`` every supplied flag is used; with one, the file is the
+    base and only explicitly-passed flags (not defaults) override it. Relaxed
+    required fields left unset are skipped so Pydantic reports them as missing.
     """
-    if get_origin(annotation) is Annotated:
-        inner = get_args(annotation)[0]
-        return _extract_base_type(inner)
-
-    if get_origin(annotation) in (Union, types.UnionType):
-        cleaned = tuple(_extract_base_type(a) for a in get_args(annotation))
-        return Union[cleaned]  # noqa: UP007
-
-    if get_origin(annotation) is list:
-        args = get_args(annotation)
-        if args:
-            return list[_extract_base_type(args[0])]  # type: ignore[misc]
-
-    if get_origin(annotation) is tuple:
-        args = get_args(annotation)
-        if args:
-            cleaned = tuple(_extract_base_type(a) for a in args)
-            return tuple[cleaned]  # type: ignore[valid-type]
-
-    return annotation
+    data: dict[str, Any] = dict(load_config_file(config)) if config is not None else {}
+    for cli_name, path in mapping:
+        if cli_name in kwargs and _value_is_explicit(ctx, cli_name):
+            _set_nested(data, path, kwargs[cli_name])
+    return data
 
 
-def _is_model_type(tp: object) -> TypeGuard[type[BaseModel]]:
-    """Return ``True`` if ``tp`` is a concrete ``BaseModel`` subclass."""
-    return isinstance(tp, type) and issubclass(tp, BaseModel) and tp is not BaseModel
+def _config_file_params() -> tuple[list[inspect.Parameter], dict[str, object]]:
+    """Build the injected ``--config`` / ``--generate-config`` params and context."""
+    config_ann = Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            help="Load settings from a YAML/JSON file (flags passed still override).",
+            rich_help_panel=_CONFIG_PANEL,
+            show_default="None",
+        ),
+    ]
+    generate_ann = Annotated[
+        Path | None,
+        typer.Option(
+            "--generate-config",
+            help="Write a default config template to PATH and exit.",
+            rich_help_panel=_CONFIG_PANEL,
+            show_default="None",
+        ),
+    ]
+    keyword_only = inspect.Parameter.KEYWORD_ONLY
+    params = [
+        inspect.Parameter(
+            _CONFIG_PARAM, keyword_only, default=None, annotation=config_ann,
+        ),
+        inspect.Parameter(
+            _GENERATE_PARAM, keyword_only, default=None, annotation=generate_ann,
+        ),
+        inspect.Parameter(
+            _CTX_PARAM, keyword_only, default=None, annotation=typer.Context,
+        ),
+    ]
+    annotations: dict[str, object] = {
+        _CONFIG_PARAM: config_ann,
+        _GENERATE_PARAM: generate_ann,
+        _CTX_PARAM: typer.Context,
+    }
+    return params, annotations
 
 
 def _panel_for_field(model_cls: type[BaseModel], field_name: str) -> str | None:
@@ -175,6 +238,7 @@ def _build_params(
     model_cls: type[BaseModel],
     *,
     subpanels: bool,
+    relax: bool = False,
     prefix: tuple[str, ...] = (),
     seen: frozenset[type[BaseModel]] = frozenset(),
 ) -> tuple[
@@ -191,6 +255,9 @@ def _build_params(
     Args:
         model_cls: The model whose fields to expand.
         subpanels: Whether to assign Rich help panels from ``cli_panel``.
+        relax: Whether to make required fields optional at the Typer layer (used
+            by ``config_file`` mode, where a ``--config`` file may supply them);
+            requiredness is then re-checked by Pydantic after merging.
         prefix: The nested path of field names leading to this model.
         seen: Models already being expanded, to break self-referential cycles.
 
@@ -213,6 +280,7 @@ def _build_params(
             sub_params, sub_annotations, sub_mapping = _build_params(
                 base_type,
                 subpanels=subpanels,
+                relax=relax,
                 prefix=path,
                 seen=nested_seen,
             )
@@ -228,6 +296,7 @@ def _build_params(
             field_info=field_info,
             base_type=base_type,
             panel=panel,
+            relax=relax,
         )
         params.append(param)
         annotations[cli_name] = annotated
@@ -242,6 +311,7 @@ def _build_leaf(
     field_info: FieldInfo,
     base_type: object,
     panel: str | None,
+    relax: bool = False,
 ) -> tuple[inspect.Parameter, object]:
     """Build the ``inspect.Parameter`` and annotation for a single leaf field.
 
@@ -250,6 +320,8 @@ def _build_leaf(
         field_info: The Pydantic field metadata.
         base_type: The structural type extracted from the field annotation.
         panel: The Rich help panel title for options, or ``None`` for none.
+        relax: Whether to make a required field optional at the Typer layer (a
+            ``_UNSET`` sentinel default), so it can be supplied via ``--config``.
 
     Returns:
         A ``(parameter, annotation)`` pair for the rewritten signature.
@@ -269,9 +341,16 @@ def _build_leaf(
         min_value = max_value = None
 
     required = field_info.is_required()
+    relaxed_required = required and relax
     default: object
     show_default: bool | str
-    if required:
+    if relaxed_required:
+        # Optional at the Typer layer; whether it was actually supplied is decided
+        # by the parameter source (not the value), and Pydantic re-checks
+        # requiredness after the --config merge.
+        default = None
+        show_default = False
+    elif required:
         default = inspect.Parameter.empty
         show_default = True
     elif field_info.default_factory is not None:
@@ -304,7 +383,7 @@ def _build_leaf(
             rich_help_panel=panel,
             show_default=False if is_secret else show_default,
             hide_input=is_secret,
-            prompt=is_secret and required,
+            prompt=is_secret and required and not relaxed_required,
             min=min_value,
             max=max_value,
             envvar=envvar,
@@ -329,6 +408,7 @@ def pydantic_to_typer(
     model_cls: type[BaseModel],
     *,
     subpanels: bool = False,
+    config_file: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Rewrite a function's signature so Typer sees individual CLI params.
 
@@ -370,6 +450,13 @@ def pydantic_to_typer(
             class that defines its field (useful for models composed from
             mixins). Fields whose defining class declares no ``cli_panel``
             stay in the default options group. Arguments are never panelled.
+        config_file: Add file-driven config support. Two options are injected:
+            ``--config PATH`` loads settings from a YAML/JSON file (used as the
+            base; any explicitly-passed flags override it), and
+            ``--generate-config PATH`` writes an editable default template and
+            exits without running. To let ``--config`` supply them, required
+            fields are made optional at the Typer layer and re-checked by
+            Pydantic after merge (so they no longer render as ``[required]``).
 
     Returns:
         A decorator that transforms a ``func(model)`` signature into one
@@ -389,6 +476,7 @@ def pydantic_to_typer(
         new_params, new_annotations, mapping = _build_params(
             model_cls,
             subpanels=subpanels,
+            relax=config_file,
         )
 
         new_params.sort(
@@ -398,27 +486,24 @@ def pydantic_to_typer(
             ),
         )
 
+        if config_file:
+            extra_params, extra_annotations = _config_file_params()
+            new_params.extend(extra_params)
+            new_annotations.update(extra_annotations)
+
         @wraps(func)
         def wrapper(**kwargs: object) -> object:
-            data: dict[str, Any] = {}
-            for cli_name, path in mapping:
-                if cli_name not in kwargs:
-                    continue
-                target = data
-                for part in path[:-1]:
-                    target = target.setdefault(part, {})
-                target[path[-1]] = kwargs[cli_name]
-
-            try:
-                model = model_cls(**data)
-            except ValidationError as exc:
-                messages: list[str] = []
-                for err in exc.errors():
-                    loc = ".".join(str(p) for p in err["loc"])
-                    msg = str(err["msg"])
-                    messages.append(f"{loc}: {msg}" if loc else msg)
-                raise typer.BadParameter("\n  ".join(messages)) from exc
-            return func(model)
+            if config_file:
+                ctx = cast("typer.Context", kwargs.pop(_CTX_PARAM))
+                generate = cast("Path | None", kwargs.pop(_GENERATE_PARAM))
+                config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
+                if generate is not None:
+                    write_config_template(model_cls, generate)
+                    raise typer.Exit
+                data = _collect_with_config(ctx, config, mapping, kwargs)
+            else:
+                data = _collect_flat(mapping, kwargs)
+            return func(_construct(model_cls, data))
 
         wrapper.__signature__ = inspect.Signature(new_params)  # type: ignore[attr-defined]
         wrapper.__annotations__ = new_annotations
@@ -427,13 +512,14 @@ def pydantic_to_typer(
     return decorator
 
 
-def add_command[ModelT: BaseModel](
+def add_command[ModelT: BaseModel](  # noqa: PLR0913
     app: typer.Typer,
     model_cls: type[ModelT],
     handler: Callable[[ModelT], Any],
     *,
     name: str | None = None,
     subpanels: bool = False,
+    config_file: bool = False,
 ) -> None:
     """Register ``handler`` on ``app`` as a command driven by ``model_cls``.
 
@@ -446,6 +532,8 @@ def add_command[ModelT: BaseModel](
         handler: A function accepting the validated model instance.
         name: The command name. Defaults to ``handler.__name__``.
         subpanels: Forwarded to :func:`pydantic_to_typer`.
+        config_file: Forwarded to :func:`pydantic_to_typer` -- add
+            ``--config`` / ``--generate-config`` support.
 
     Example:
         >>> import typer
@@ -453,5 +541,9 @@ def add_command[ModelT: BaseModel](
         >>> def run(config: MyConfig) -> None: ...
         >>> add_command(app, MyConfig, run)
     """
-    decorated = pydantic_to_typer(model_cls, subpanels=subpanels)(handler)
+    decorated = pydantic_to_typer(
+        model_cls,
+        subpanels=subpanels,
+        config_file=config_file,
+    )(handler)
     app.command(name=name)(decorated)

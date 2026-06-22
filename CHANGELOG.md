@@ -7,11 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-22
+
+### Added
+
+- Opt-in config-file support via `config_file=True` on `pydantic_to_typer` /
+  `add_command`. It injects two options: `--generate-config PATH` writes an
+  editable default template (required fields become `<REQUIRED: ...>`
+  placeholders; nested models and lists of models are expanded) and exits without
+  running; `--config PATH` loads settings from a YAML/JSON file as the base, with
+  any explicitly-passed flags overriding it. To let `--config` supply them,
+  required fields are relaxed to optional at the Typer layer and re-validated by
+  Pydantic after the merge.
+- Public helpers `build_config_template`, `write_config_template`, and
+  `load_config_file` for templating and reading settings files directly. The
+  template serialiser uses Pydantic's JSON serialisation, so nested models, sets,
+  datetimes, paths and enums round-trip, and `default_factory` callables that take
+  the validated-data dict are handled.
+
 ### Changed
 
 - `add_command` is now generic over the model type, so the `handler` callback is
   typed against the concrete model class instead of the base `BaseModel`. Type
   checkers now infer the precise model type passed to the handler.
+- Minimum Pydantic bumped to `>=2.10` (for `default_factory` validated-data
+  introspection); added a `PyYAML>=6.0` dependency for config-file I/O.
 
 ## [0.3.0] - 2026-06-15
 
