@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-23
+
+### Changed
+
+- Packaging metadata only (no code changes from 0.4.0): marked **Beta** (was
+  Alpha), expanded the PyPI classifiers (`Environment :: Console`,
+  `Framework :: Pydantic` / `:: 2`, `Topic` and `Operating System` entries) and
+  keywords, and clarified the README intro.
+
 ## [0.4.0] - 2026-06-22
 
 ### Added
