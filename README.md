@@ -5,10 +5,11 @@
 [![Python](https://img.shields.io/pypi/pyversions/typantic.svg)](https://pypi.org/project/typantic/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Auto-generate [Typer](https://typer.tiangolo.com/) CLI interfaces from [Pydantic](https://docs.pydantic.dev/) models.
+Auto-generate [Typer](https://typer.tiangolo.com/) CLI interfaces from [Pydantic](https://docs.pydantic.dev/) models — a **Pydantic → Typer** bridge.
 
-Define your config **once** as a Pydantic model with validators, and get a
-fully-typed CLI for free — no duplication, no drift.
+Define your config **once** as a Pydantic model with validators and get a typed,
+validated command-line interface for free — no duplication, no drift — plus
+optional YAML/JSON config files (`--config` / `--generate-config`).
 
 ## Installation
 
