@@ -325,7 +325,7 @@ unparseable content, or a non-mapping top level raises a `ValueError`.
 
 ## Requirements
 
-- Python ≥ 3.12
+- Python ≥ 3.12 (tested on 3.12–3.15)
 - Pydantic ≥ 2.10
 - Typer ≥ 0.26
 - PyYAML ≥ 6.0

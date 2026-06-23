@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template serialiser uses Pydantic's JSON serialisation, so nested models, sets,
   datetimes, paths and enums round-trip, and `default_factory` callables that take
   the validated-data dict are handled.
+- Python 3.15 added to the supported versions and the CI test matrix.
 
 ### Changed
 
