@@ -1,7 +1,7 @@
 [project]
 name = "typantic"
 version = "0.4.0"
-description = "Auto-generate Typer CLI interfaces from Pydantic models."
+description = "Auto-generate type-safe Typer CLI interfaces from Pydantic v2 models."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -11,16 +11,25 @@ authors = [
 keywords = [
     "typer",
     "pydantic",
+    "pydantic-v2",
     "cli",
     "pydantic-cli",
     "typer-cli",
     "command-line",
+    "argument-parsing",
     "validation",
     "config",
+    "settings",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Environment :: Console",
+    "Framework :: Pydantic",
+    "Framework :: Pydantic :: 2",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -51,7 +60,7 @@ module-name = "typantic"
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
