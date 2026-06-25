@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `add_command(..., help=...)` to set the command's help text explicitly
   (otherwise the handler's docstring is used).
 
+### Fixed
+
+- Passing both `--config` and `--generate-config` now errors (mutually
+  exclusive) instead of silently generating the template and skipping the run.
+  Applies to both `config_file=True` and `config_file="only"`.
+
 ## [0.4.1] - 2026-06-23
 
 ### Changed
