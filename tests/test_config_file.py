@@ -213,6 +213,22 @@ def test_pure_flags_still_work():
     assert seen == {"name": "bob", "count": 3, "region": "eu"}
 
 
+def test_config_and_generate_config_together_errors(tmp_path: Path):
+    app, seen = _build_app()
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("name: alice\ncount: 9\nregion: us\n")
+    tmpl = tmp_path / "t.yaml"
+
+    result = runner.invoke(
+        app,
+        ["go", "--config", str(cfg), "--generate-config", str(tmpl)],
+    )
+
+    assert result.exit_code == 2  # mutually exclusive, not silently generated
+    assert not tmpl.exists()  # generation did not win
+    assert not seen  # and the command did not run
+
+
 def test_missing_required_after_relax_errors_cleanly():
     app, seen = _build_app()
     result = runner.invoke(app, ["go"])
@@ -286,4 +302,20 @@ def test_file_only_without_config_errors():
     result = runner.invoke(app, ["go"])
     assert result.exit_code == 2
     assert "--config" in _plain(result.output)
+    assert not seen
+
+
+def test_file_only_config_and_generate_together_errors(tmp_path: Path):
+    app, seen = _build_file_only_app()
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("name: alice\ncount: 9\nregion: us\n")
+    tmpl = tmp_path / "t.yaml"
+
+    result = runner.invoke(
+        app,
+        ["go", "--config", str(cfg), "--generate-config", str(tmpl)],
+    )
+
+    assert result.exit_code == 2
+    assert not tmpl.exists()  # did not silently generate
     assert not seen

@@ -507,6 +507,11 @@ def pydantic_to_typer(
                 ctx = cast("typer.Context", kwargs.pop(_CTX_PARAM))
                 generate = cast("Path | None", kwargs.pop(_GENERATE_PARAM))
                 config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
+                if generate is not None and config is not None:
+                    # Without this, generation would silently win and the run be
+                    # skipped; the two are mutually exclusive.
+                    msg = "Pass either --config or --generate-config, not both."
+                    raise typer.BadParameter(msg)
                 if generate is not None:
                     write_config_template(model_cls, generate)
                     typer.echo(f"Wrote config template to {generate}.")
