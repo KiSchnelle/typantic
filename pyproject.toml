@@ -103,5 +103,5 @@ strict = true
 exclude = '(?:^|/)(tests|manual_tests|dist)(?:/|$)'
 
 [tool.pyright]
-ignore = ["manual_tests/**", "dist/**"]
+ignore = ["tests/**", "manual_tests/**", "dist/**"]
 typeCheckingMode = "strict"
