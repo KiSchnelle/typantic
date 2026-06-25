@@ -324,6 +324,16 @@ missing from both is still reported as an error — it just no longer renders as
 `[required]` in `--help`. A `--config` document must be a mapping; a bad suffix,
 unparseable content, or a non-mapping top level raises a `ValueError`.
 
+### File-only commands
+
+Some models can't map onto flat flags at all — nested-model lists, or
+`scalar | (min, max)` ranges. For those, pass `config_file="only"`: the command
+exposes **just** `--config` / `--generate-config`, with no per-field flags.
+
+```python
+add_command(app, TuneConfig, run, config_file="only", help="Tune from a config file.")
+```
+
 ## Requirements
 
 - Python ≥ 3.12 (tested on 3.12–3.15)

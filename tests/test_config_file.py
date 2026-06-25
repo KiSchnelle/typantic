@@ -226,3 +226,56 @@ def test_config_file_off_means_no_config_option():
     result = runner.invoke(app, ["go", "--help"])
     assert "--config" not in result.output
     assert "--generate-config" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# CLI behaviour (config_file="only" -- file-only command)
+# ---------------------------------------------------------------------------
+def _build_file_only_app() -> tuple[typer.Typer, dict[str, object]]:
+    seen: dict[str, object] = {}
+
+    def run(cfg: Simple) -> None:
+        seen.clear()
+        seen.update(cfg.model_dump())
+
+    app = typer.Typer()
+    add_command(
+        app, Simple, run, name="go", config_file="only", help="Run from a file.",
+    )
+
+    @app.command()
+    def other() -> None: ...
+
+    return app, seen
+
+
+def test_file_only_has_no_per_field_flags():
+    app, _ = _build_file_only_app()
+    out = runner.invoke(app, ["go", "--help"]).output
+    assert "--config" in out
+    assert "--generate-config" in out
+    assert "--name" not in out  # no per-field flags are generated
+    assert "--count" not in out
+    assert "--region" not in out
+    assert "Run from a file." in out  # add_command help= is used
+
+
+def test_file_only_generate_then_run(tmp_path: Path):
+    app, seen = _build_file_only_app()
+    path = tmp_path / "c.yaml"
+    gen = runner.invoke(app, ["go", "--generate-config", str(path)])
+    assert gen.exit_code == 0
+    assert not seen  # did not run
+    assert path.exists()
+    path.write_text("name: alice\ncount: 9\nregion: us\n")
+    run_res = runner.invoke(app, ["go", "--config", str(path)])
+    assert run_res.exit_code == 0
+    assert seen == {"name": "alice", "count": 9, "region": "us"}
+
+
+def test_file_only_without_config_errors():
+    app, seen = _build_file_only_app()
+    result = runner.invoke(app, ["go"])
+    assert result.exit_code == 2
+    assert "--config" in result.output
+    assert not seen

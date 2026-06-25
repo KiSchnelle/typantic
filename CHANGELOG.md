@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `config_file="only"` on `pydantic_to_typer` / `add_command` registers a
+  **file-only** command — only `--config` / `--generate-config`, no per-field
+  flags — for settings models that cannot map onto flat flags (nested-model
+  lists, `scalar | (min, max)` ranges).
+- `add_command(..., help=...)` to set the command's help text explicitly
+  (otherwise the handler's docstring is used).
+
 ## [0.4.1] - 2026-06-23
 
 ### Changed

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import (
     Annotated,
     Any,
+    Literal,
     cast,
     get_type_hints,
 )
@@ -408,7 +409,7 @@ def pydantic_to_typer(
     model_cls: type[BaseModel],
     *,
     subpanels: bool = False,
-    config_file: bool = False,
+    config_file: bool | Literal["only"] = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Rewrite a function's signature so Typer sees individual CLI params.
 
@@ -457,6 +458,10 @@ def pydantic_to_typer(
             exits without running. To let ``--config`` supply them, required
             fields are made optional at the Typer layer and re-checked by
             Pydantic after merge (so they no longer render as ``[required]``).
+            Pass ``"only"`` for a **file-only** command: no per-field flags are
+            generated at all (just ``--config`` / ``--generate-config``), for
+            models that cannot map onto flat flags (nested-model lists,
+            ``scalar | (min, max)`` ranges).
 
     Returns:
         A decorator that transforms a ``func(model)`` signature into one
@@ -469,22 +474,27 @@ def pydantic_to_typer(
         ... @pydantic_to_typer(MyConfig, subpanels=True)
         ... def run(config: MyConfig): ...
     """
+    file_only = config_file == "only"
 
     def decorator(
         func: Callable[..., Any],
     ) -> Callable[..., Any]:
-        new_params, new_annotations, mapping = _build_params(
-            model_cls,
-            subpanels=subpanels,
-            relax=config_file,
-        )
-
-        new_params.sort(
-            key=lambda p: (
-                p.kind == inspect.Parameter.KEYWORD_ONLY,
-                p.default is not inspect.Parameter.empty,
-            ),
-        )
+        if file_only:
+            new_params: list[inspect.Parameter] = []
+            new_annotations: dict[str, object] = {}
+            mapping: list[tuple[str, tuple[str, ...]]] = []
+        else:
+            new_params, new_annotations, mapping = _build_params(
+                model_cls,
+                subpanels=subpanels,
+                relax=bool(config_file),
+            )
+            new_params.sort(
+                key=lambda p: (
+                    p.kind == inspect.Parameter.KEYWORD_ONLY,
+                    p.default is not inspect.Parameter.empty,
+                ),
+            )
 
         if config_file:
             extra_params, extra_annotations = _config_file_params()
@@ -500,6 +510,12 @@ def pydantic_to_typer(
                 if generate is not None:
                     write_config_template(model_cls, generate)
                     raise typer.Exit
+                if file_only and config is None:
+                    msg = (
+                        "Provide --config FILE, or --generate-config FILE "
+                        "to create one."
+                    )
+                    raise typer.BadParameter(msg)
                 data = _collect_with_config(ctx, config, mapping, kwargs)
             else:
                 data = _collect_flat(mapping, kwargs)
@@ -519,7 +535,8 @@ def add_command[ModelT: BaseModel](  # noqa: PLR0913
     *,
     name: str | None = None,
     subpanels: bool = False,
-    config_file: bool = False,
+    config_file: bool | Literal["only"] = False,
+    help: str | None = None,  # noqa: A002 - matches Typer's own parameter name
 ) -> None:
     """Register ``handler`` on ``app`` as a command driven by ``model_cls``.
 
@@ -533,7 +550,9 @@ def add_command[ModelT: BaseModel](  # noqa: PLR0913
         name: The command name. Defaults to ``handler.__name__``.
         subpanels: Forwarded to :func:`pydantic_to_typer`.
         config_file: Forwarded to :func:`pydantic_to_typer` -- add
-            ``--config`` / ``--generate-config`` support.
+            ``--config`` / ``--generate-config`` support (``"only"`` for a
+            file-only command with no per-field flags).
+        help: Command help text. Defaults to the handler's docstring.
 
     Example:
         >>> import typer
@@ -546,4 +565,4 @@ def add_command[ModelT: BaseModel](  # noqa: PLR0913
         subpanels=subpanels,
         config_file=config_file,
     )(handler)
-    app.command(name=name)(decorated)
+    app.command(name=name, help=help)(decorated)
