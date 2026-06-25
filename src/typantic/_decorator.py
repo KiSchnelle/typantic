@@ -509,6 +509,7 @@ def pydantic_to_typer(
                 config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
                 if generate is not None:
                     write_config_template(model_cls, generate)
+                    typer.echo(f"Wrote config template to {generate}.")
                     raise typer.Exit
                 if file_only and config is None:
                     msg = (
