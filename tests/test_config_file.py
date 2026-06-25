@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import re
 from enum import StrEnum
 from pathlib import Path
 
@@ -19,6 +20,13 @@ from typantic import (
 )
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI codes so assertions survive Rich coloring (e.g. CI FORCE_COLOR)."""
+    return _ANSI.sub("", text)
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +259,7 @@ def _build_file_only_app() -> tuple[typer.Typer, dict[str, object]]:
 
 def test_file_only_has_no_per_field_flags():
     app, _ = _build_file_only_app()
-    out = runner.invoke(app, ["go", "--help"]).output
+    out = _plain(runner.invoke(app, ["go", "--help"]).output)
     assert "--config" in out
     assert "--generate-config" in out
     assert "--name" not in out  # no per-field flags are generated
@@ -277,5 +285,5 @@ def test_file_only_without_config_errors():
     app, seen = _build_file_only_app()
     result = runner.invoke(app, ["go"])
     assert result.exit_code == 2
-    assert "--config" in result.output
+    assert "--config" in _plain(result.output)
     assert not seen
