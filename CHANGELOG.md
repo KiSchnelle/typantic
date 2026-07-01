@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Numeric `ge` / `le` bounds now map onto Typer's `min` / `max` (range in
+  `--help`, rejection of out-of-range input) for optional numeric fields too
+  (`int | None` / `float | None`). Previously the optional wrapper left the base
+  type as a union, so the bounds were silently dropped at the CLI layer (Pydantic
+  still enforced them on the parsed value).
 - Generated templates now render a required list of non-model values (e.g.
   `list[Path]` / `list[str]`) as a single-element example list
   (`['<REQUIRED: ...>']`) instead of a bare scalar placeholder, so editing the

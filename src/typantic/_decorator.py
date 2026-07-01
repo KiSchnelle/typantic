@@ -1,6 +1,7 @@
 """Core decorator for converting Pydantic models to Typer CLI interfaces."""
 
 import inspect
+import types
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
@@ -8,7 +9,10 @@ from typing import (
     Annotated,
     Any,
     Literal,
+    Union,
     cast,
+    get_args,
+    get_origin,
     get_type_hints,
 )
 
@@ -155,6 +159,22 @@ def _panel_for_field(model_cls: type[BaseModel], field_name: str) -> str | None:
         ):
             panel = klass.__dict__.get("cli_panel")
             return panel if isinstance(panel, str) else None
+    return None
+
+
+def _numeric_type(typer_type: object) -> type | None:
+    """Return ``int``/``float`` if ``typer_type`` is that scalar or an optional one.
+
+    ``extract_base_type`` leaves an ``Optional[int]`` as the union ``int | None``,
+    so a plain identity check misses it; unwrap a ``T | None`` union to recover
+    the numeric member (Typer still applies ``min`` / ``max`` to the option).
+    """
+    if typer_type is int or typer_type is float:
+        return cast("type", typer_type)
+    if get_origin(typer_type) in (Union, types.UnionType):
+        non_none = [arg for arg in get_args(typer_type) if arg is not type(None)]
+        if len(non_none) == 1 and non_none[0] in (int, float):
+            return cast("type", non_none[0])
     return None
 
 
@@ -336,7 +356,7 @@ def _build_leaf(
     if is_secret:
         typer_type = bytes if base_type is SecretBytes else str
 
-    if typer_type is int or typer_type is float:
+    if _numeric_type(typer_type) is not None:
         min_value, max_value = _numeric_bounds(field_info)
     else:
         min_value = max_value = None

@@ -862,6 +862,13 @@ class BoundedModel(BaseModel):
     ]
 
 
+class OptionalBoundedModel(BaseModel):
+    level: Annotated[
+        int | None,
+        Field(default=None, ge=0, le=10, description="Level.", kw_only=True),
+    ]
+
+
 class TestNumericBounds:
     def test_in_range_accepted(self) -> None:
         app, results = _make_app(BoundedModel)
@@ -885,6 +892,16 @@ class TestNumericBounds:
         app, _ = _make_app(BoundedModel)
         output = _plain(runner.invoke(app, ["--help"]).output)
         assert "10" in output
+
+    def test_optional_bounds_enforced_by_typer(self) -> None:
+        # Optional[int] leaves base type as int | None; bounds must still apply.
+        app, _ = _make_app(OptionalBoundedModel)
+        assert runner.invoke(app, ["--level", "20"]).exit_code != 0
+
+    def test_optional_range_shown_in_help(self) -> None:
+        app, _ = _make_app(OptionalBoundedModel)
+        output = " ".join(_plain(runner.invoke(app, ["--help"]).output).split())
+        assert "x<=10" in output or "0<=x<=10" in output
 
 
 # ---------------------------------------------------------------------------
