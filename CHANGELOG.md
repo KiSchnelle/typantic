@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `--schema` flag on any `config_file`-enabled command prints the settings
+  model's JSON Schema (`model_json_schema()`) to stdout and exits. This lets a
+  web front-end build a form from the model by subprocessing the CLI, without
+  importing the model (keeping heavy app dependencies out of the web process).
 - `config_file="only"` on `pydantic_to_typer` / `add_command` registers a
   **file-only** command — only `--config` / `--generate-config`, no per-field
   flags — for settings models that cannot map onto flat flags (nested-model

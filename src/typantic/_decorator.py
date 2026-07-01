@@ -1,6 +1,7 @@
 """Core decorator for converting Pydantic models to Typer CLI interfaces."""
 
 import inspect
+import json
 import types
 from collections.abc import Callable
 from functools import wraps
@@ -30,6 +31,7 @@ from typantic._introspect import is_model_type as _is_model_type
 _CTX_PARAM = "_typantic_ctx"
 _CONFIG_PARAM = "_typantic_config"
 _GENERATE_PARAM = "_typantic_generate_config"
+_SCHEMA_PARAM = "_typantic_schema"
 _CONFIG_PANEL = "Config file"
 _EXPLICIT_SOURCES = frozenset({"COMMANDLINE", "ENVIRONMENT", "PROMPT"})
 
@@ -116,6 +118,14 @@ def _config_file_params() -> tuple[list[inspect.Parameter], dict[str, object]]:
             show_default="None",
         ),
     ]
+    schema_ann = Annotated[
+        bool,
+        typer.Option(
+            "--schema",
+            help="Print the settings model's JSON Schema to stdout and exit.",
+            rich_help_panel=_CONFIG_PANEL,
+        ),
+    ]
     keyword_only = inspect.Parameter.KEYWORD_ONLY
     params = [
         inspect.Parameter(
@@ -125,12 +135,16 @@ def _config_file_params() -> tuple[list[inspect.Parameter], dict[str, object]]:
             _GENERATE_PARAM, keyword_only, default=None, annotation=generate_ann,
         ),
         inspect.Parameter(
+            _SCHEMA_PARAM, keyword_only, default=False, annotation=schema_ann,
+        ),
+        inspect.Parameter(
             _CTX_PARAM, keyword_only, default=None, annotation=typer.Context,
         ),
     ]
     annotations: dict[str, object] = {
         _CONFIG_PARAM: config_ann,
         _GENERATE_PARAM: generate_ann,
+        _SCHEMA_PARAM: schema_ann,
         _CTX_PARAM: typer.Context,
     }
     return params, annotations
@@ -493,11 +507,14 @@ def pydantic_to_typer(
             class that defines its field (useful for models composed from
             mixins). Fields whose defining class declares no ``cli_panel``
             stay in the default options group. Arguments are never panelled.
-        config_file: Add file-driven config support. Two options are injected:
+        config_file: Add file-driven config support. Three options are injected:
             ``--config PATH`` loads settings from a YAML/JSON file (used as the
-            base; any explicitly-passed flags override it), and
+            base; any explicitly-passed flags override it),
             ``--generate-config PATH`` writes an editable default template and
-            exits without running. To let ``--config`` supply them, required
+            exits without running, and ``--schema`` prints the model's JSON
+            Schema to stdout and exits (so a web front-end can build a form from
+            the model by subprocessing the CLI, without importing it). To let
+            ``--config`` supply them, required
             fields are made optional at the Typer layer and re-checked by
             Pydantic after merge (so they no longer render as ``[required]``).
             Pass ``"only"`` for a **file-only** command: no per-field flags are
@@ -550,6 +567,12 @@ def pydantic_to_typer(
                 ctx = cast("typer.Context", kwargs.pop(_CTX_PARAM))
                 generate = cast("Path | None", kwargs.pop(_GENERATE_PARAM))
                 config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
+                schema = cast("bool", kwargs.pop(_SCHEMA_PARAM))
+                if schema:
+                    # The web front-end subprocesses this to build a form from the
+                    # model without importing it (keeping torch out of its process).
+                    typer.echo(json.dumps(model_cls.model_json_schema(), indent=2))
+                    raise typer.Exit
                 if generate is not None and config is not None:
                     # Without this, generation would silently win and the run be
                     # skipped; the two are mutually exclusive.
@@ -599,8 +622,8 @@ def add_command[ModelT: BaseModel](  # noqa: PLR0913
         name: The command name. Defaults to ``handler.__name__``.
         subpanels: Forwarded to :func:`pydantic_to_typer`.
         config_file: Forwarded to :func:`pydantic_to_typer` -- add
-            ``--config`` / ``--generate-config`` support (``"only"`` for a
-            file-only command with no per-field flags).
+            ``--config`` / ``--generate-config`` / ``--schema`` support
+            (``"only"`` for a file-only command with no per-field flags).
         help: Command help text. Defaults to the handler's docstring.
 
     Example:

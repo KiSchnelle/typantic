@@ -279,7 +279,7 @@ def test_missing_required_after_relax_errors_cleanly():
 
 
 def test_config_file_off_means_no_config_option():
-    # Default mode: no --config / --generate-config injected.
+    # Default mode: no --config / --generate-config / --schema injected.
     def run(cfg: Simple) -> None: ...
 
     app = typer.Typer()
@@ -291,6 +291,17 @@ def test_config_file_off_means_no_config_option():
     result = runner.invoke(app, ["go", "--help"])
     assert "--config" not in result.output
     assert "--generate-config" not in result.output
+    assert "--schema" not in result.output
+
+
+def test_schema_prints_json_schema_and_exits():
+    app, seen = _build_app()
+    result = runner.invoke(app, ["go", "--schema"])
+    assert result.exit_code == 0
+    assert not seen  # handler never ran
+    schema = json.loads(result.output)
+    assert schema == Simple.model_json_schema()
+    assert set(schema["properties"]) == {"name", "count", "region"}
 
 
 # ---------------------------------------------------------------------------
@@ -360,3 +371,11 @@ def test_file_only_config_and_generate_together_errors(tmp_path: Path):
     assert result.exit_code == 2
     assert not tmpl.exists()  # did not silently generate
     assert not seen
+
+
+def test_file_only_schema_prints():
+    app, seen = _build_file_only_app()
+    result = runner.invoke(app, ["go", "--schema"])
+    assert result.exit_code == 0
+    assert not seen
+    assert json.loads(result.output) == Simple.model_json_schema()

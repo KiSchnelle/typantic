@@ -237,13 +237,16 @@ never panelled.
 ## Config files
 
 Some configs are too large or too nested to pass as flags every time. Opt in with
-`config_file=True` and the command can be driven by a YAML/JSON file as well. Two
+`config_file=True` and the command can be driven by a YAML/JSON file as well. Three
 options are injected:
 
 - `--generate-config PATH` — write an editable default template, then exit without
   running;
 - `--config PATH` — load settings from a file as the base; any flags you also pass
-  **override** the file.
+  **override** the file;
+- `--schema` — print the settings model's JSON Schema to stdout, then exit (a web
+  front-end can subprocess this to build a form from the model without importing
+  it, keeping heavy app dependencies out of the web process).
 
 ```python
 from typing import Annotated
@@ -311,7 +314,7 @@ $ myapp run --config run.yaml                 # run entirely from the file
 $ myapp run --config run.yaml --workers 16    # file as base, --workers overrides
 ```
 
-`--help` lists both options under a **Config file** panel:
+`--help` lists these options under a **Config file** panel:
 
 ```
 ╭─ Config file ──────────────────────────────────────────────────╮
@@ -319,6 +322,8 @@ $ myapp run --config run.yaml --workers 16    # file as base, --workers override
 │                          (flags passed still override).         │
 │ --generate-config  PATH  Write a default config template to     │
 │                          PATH and exit.                         │
+│ --schema                 Print the settings model's JSON Schema │
+│                          to stdout and exit.                    │
 ╰────────────────────────────────────────────────────────────────╯
 ```
 
@@ -337,6 +342,9 @@ exposes **just** `--config` / `--generate-config`, with no per-field flags.
 ```python
 add_command(app, TuneConfig, run, config_file="only", help="Tune from a config file.")
 ```
+
+File-only commands still expose `--schema`, so a web front-end can build their
+form the same way.
 
 ## Requirements
 
