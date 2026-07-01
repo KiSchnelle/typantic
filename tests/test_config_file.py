@@ -75,6 +75,17 @@ def test_template_required_list_of_models_is_example_list():
     assert mounts[0]["source"].startswith("<REQUIRED")
 
 
+def test_template_required_list_of_scalars_is_example_list():
+    class Paths(BaseModel):
+        files: list[Path]  # required list of scalars
+
+    files = build_config_template(Paths)["files"]
+    assert isinstance(files, list)
+    assert files[0].startswith("<REQUIRED")
+    # The shown shape must reload as a valid list, not a bare scalar string.
+    Paths(files=[Path("a.txt")])
+
+
 def test_template_serialises_enum_tuple_set_datetime():
     t = build_config_template(Cfg)
     assert t["color"] == "red"

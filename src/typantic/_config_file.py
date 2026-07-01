@@ -6,8 +6,9 @@ template), and is usable directly.
 
 :func:`build_config_template` produces a default-value mapping straight from a
 model's fields -- required fields become ``<REQUIRED: ...>`` placeholders (nested
-models and lists of models recurse, so their structure is shown), and every other
-field is serialised the way pydantic would in JSON mode, so nested models, sets,
+models recurse and required lists become a single-element example list, so their
+structure is shown and the shape reloads validly), and every other field is
+serialised the way pydantic would in JSON mode, so nested models, sets,
 datetimes, paths and enums all round-trip.
 """
 
@@ -75,24 +76,28 @@ def _resolve_default(field: FieldInfo) -> object:
 def _required_placeholder(name: str, field: FieldInfo, base_type: object) -> object:
     """Build the template entry for a required field.
 
-    Nested models recurse into their own template and lists of models into a
-    single-element example list, so the user sees the structure to fill in;
-    anything else becomes a ``<REQUIRED: ...>`` string.
+    Nested models recurse into their own template and lists into a single-element
+    example list (a model template for lists of models, else the scalar
+    placeholder) so the shown shape reloads as a list; anything else becomes a
+    ``<REQUIRED: ...>`` string.
     """
+    placeholder = f"<REQUIRED: {field.description or name}>"
     if is_model_type(base_type):
         return build_config_template(base_type)
     if get_origin(base_type) is list:
         args = get_args(base_type)
         if args and is_model_type(args[0]):
             return [build_config_template(args[0])]
-    return f"<REQUIRED: {field.description or name}>"
+        return [placeholder]
+    return placeholder
 
 
 def build_config_template(model_cls: type[BaseModel]) -> dict[str, object]:
     """Build an editable default-config mapping for a settings model.
 
     Required fields (no default) become ``<REQUIRED: ...>`` placeholders (nested
-    models / lists of models recurse); every other field gets its default,
+    models recurse; required lists become a single-element example list); every
+    other field gets its default,
     serialised as pydantic would in JSON mode. Integer defaults render in decimal,
     so an octal mode such as ``0o775`` appears as ``509``.
 

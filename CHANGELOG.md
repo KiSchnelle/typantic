@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated templates now render a required list of non-model values (e.g.
+  `list[Path]` / `list[str]`) as a single-element example list
+  (`['<REQUIRED: ...>']`) instead of a bare scalar placeholder, so editing the
+  template in the shape shown reloads as a valid list instead of raising
+  `ValidationError: Input should be a valid list`.
 - Passing both `--config` and `--generate-config` now errors (mutually
   exclusive) instead of silently generating the template and skipping the run.
   Applies to both `config_file=True` and `config_file="only"`.
