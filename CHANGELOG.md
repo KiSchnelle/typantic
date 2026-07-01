@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A flattened-name collision (a nested field such as `db.host` flattening to
+  `db_host` while a sibling field is literally named `db_host`) now raises a clear
+  typantic error naming both fields and the resulting flag, instead of an opaque
+  `inspect.Signature` "duplicate parameter" `ValueError` at decoration time.
 - Numeric `ge` / `le` bounds now map onto Typer's `min` / `max` (range in
   `--help`, rejection of out-of-range input) for optional numeric fields too
   (`int | None` / `float | None`). Previously the optional wrapper left the base

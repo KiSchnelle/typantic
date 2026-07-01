@@ -7,6 +7,7 @@ from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal, get_args
 
+import pytest
 import typer
 from pydantic import AfterValidator, BaseModel, Field, SecretStr
 from typer.testing import CliRunner
@@ -977,6 +978,31 @@ class TestNested:
         result = runner.invoke(app, ["myapp", "--label", ""])
         assert result.exit_code != 0
         assert "must not be empty" in _plain(result.output)
+
+
+# ---------------------------------------------------------------------------
+# Tests: flattened name collisions
+# ---------------------------------------------------------------------------
+
+
+class _CollisionInner(BaseModel):
+    host: Annotated[str, Field(default="h", kw_only=True)]
+
+
+class CollisionConfig(BaseModel):
+    db: _CollisionInner  # db.host -> db_host
+    db_host: Annotated[str, Field(default="s", kw_only=True)]  # sibling clash
+
+
+class TestNameCollision:
+    def test_collision_raises_named_diagnostic(self) -> None:
+        with pytest.raises(ValueError, match="CLI name collision") as excinfo:
+            _make_app(CollisionConfig)
+        message = str(excinfo.value)
+        # Both colliding fields and the resulting flag are named.
+        assert "db.host" in message
+        assert "db_host" in message
+        assert "--db-host" in message
 
 
 # ---------------------------------------------------------------------------

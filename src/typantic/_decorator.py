@@ -326,6 +326,28 @@ def _build_params(
     return params, annotations, mapping
 
 
+def _check_name_collisions(mapping: list[tuple[str, tuple[str, ...]]]) -> None:
+    """Raise a clear error if two fields flatten to the same parameter name.
+
+    A nested field's CLI name is its path joined by ``_`` (``db.host`` becomes
+    ``db_host``), which can collide with a sibling field literally named
+    ``db_host``. Left unchecked this surfaces as an opaque ``inspect.Signature``
+    ``ValueError`` at decoration time; name the offending fields instead.
+    """
+    seen: dict[str, tuple[str, ...]] = {}
+    for cli_name, path in mapping:
+        if cli_name in seen:
+            first = ".".join(seen[cli_name])
+            second = ".".join(path)
+            flag = "--" + cli_name.replace("_", "-")
+            msg = (
+                f"CLI name collision: fields '{first}' and '{second}' both flatten "
+                f"to parameter '{cli_name}' ({flag}). Rename one of the fields."
+            )
+            raise ValueError(msg)
+        seen[cli_name] = path
+
+
 def _build_leaf(
     *,
     cli_name: str,
@@ -509,6 +531,7 @@ def pydantic_to_typer(
                 subpanels=subpanels,
                 relax=bool(config_file),
             )
+            _check_name_collisions(mapping)
             new_params.sort(
                 key=lambda p: (
                     p.kind == inspect.Parameter.KEYWORD_ONLY,
