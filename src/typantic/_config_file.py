@@ -7,13 +7,14 @@ template), and is usable directly.
 :func:`build_config_template` produces a default-value mapping straight from a
 model's fields -- required fields become ``<REQUIRED: ...>`` placeholders (nested
 models recurse and required lists become a single-element example list, so their
-structure is shown and the shape reloads validly), and every other field is
-serialised the way pydantic would in JSON mode, so nested models, sets,
-datetimes, paths and enums all round-trip.
+structure is shown and the shape reloads validly), factory-defaulted fields
+become a ``<DEFAULT: ...>`` sentinel that :func:`load_config_file` strips (so a
+host/time-sensitive default is recomputed fresh rather than frozen into a shared
+template), and every other field is serialised the way pydantic would in JSON
+mode, so nested models, sets, datetimes, paths and enums all round-trip.
 """
 
 import json
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast, get_args, get_origin, get_type_hints
 
@@ -26,6 +27,12 @@ from typantic._introspect import extract_base_type, is_model_type
 
 _YAML_SUFFIXES = {".yaml", ".yml"}
 _SUFFIXES = _YAML_SUFFIXES | {".json"}
+
+# Placeholder for a field whose default is produced by a ``default_factory``.
+# Such values are host/time-sensitive (a timestamped path, a CPU count) and must
+# not be frozen into a shared template, so the template shows this sentinel and
+# ``load_config_file`` strips it -- letting the factory run fresh on reload.
+_DEFAULT_SENTINEL = "<DEFAULT: computed at runtime>"
 
 
 def load_config_file(path: Path) -> dict[str, Any]:
@@ -58,19 +65,25 @@ def load_config_file(path: Path) -> dict[str, Any]:
         # ValueError (not TypeError) keeps one exception type for any bad config.
         msg = f"Config file {path} must contain a mapping of settings."
         raise ValueError(msg)  # noqa: TRY004
-    return cast("dict[str, Any]", data)
+    return cast("dict[str, Any]", _strip_default_sentinels(data))
 
 
-def _resolve_default(field: FieldInfo) -> object:
-    """Return a non-required field's default, evaluating its factory if any."""
-    factory = field.default_factory
-    if factory is None:
-        return field.default
-    if field.default_factory_takes_validated_data:
-        # No previously-validated fields are available here, so build the default
-        # from an empty mapping (pydantic passes the validated-data dict in).
-        return cast("Callable[[dict[str, Any]], Any]", factory)({})
-    return cast("Callable[[], Any]", factory)()
+def _strip_default_sentinels(data: object) -> object:
+    """Recursively drop mapping keys whose value is the default sentinel.
+
+    A ``<DEFAULT: ...>`` value marks a field whose default is factory-computed and
+    was left unedited in the template; removing the key lets the model's
+    ``default_factory`` run fresh on load instead of replaying a stale value.
+    """
+    if isinstance(data, dict):
+        return {
+            key: _strip_default_sentinels(value)
+            for key, value in cast("dict[str, Any]", data).items()
+            if value != _DEFAULT_SENTINEL
+        }
+    if isinstance(data, list):
+        return [_strip_default_sentinels(item) for item in data]
+    return data
 
 
 def _required_placeholder(name: str, field: FieldInfo, base_type: object) -> object:
@@ -96,10 +109,12 @@ def build_config_template(model_cls: type[BaseModel]) -> dict[str, object]:
     """Build an editable default-config mapping for a settings model.
 
     Required fields (no default) become ``<REQUIRED: ...>`` placeholders (nested
-    models recurse; required lists become a single-element example list); every
-    other field gets its default,
-    serialised as pydantic would in JSON mode. Integer defaults render in decimal,
-    so an octal mode such as ``0o775`` appears as ``509``.
+    models recurse; required lists become a single-element example list);
+    factory-defaulted fields become a ``<DEFAULT: ...>`` sentinel (their value is
+    host/time-sensitive, so it is left for the factory to compute fresh on load);
+    every other field gets its static default, serialised as pydantic would in
+    JSON mode. Integer defaults render in decimal, so an octal mode such as
+    ``0o775`` appears as ``509``.
 
     Args:
         model_cls: The settings model to template.
@@ -113,8 +128,10 @@ def build_config_template(model_cls: type[BaseModel]) -> dict[str, object]:
         if field.is_required():
             base_type = extract_base_type(hints[name])
             template[name] = _required_placeholder(name, field, base_type)
+        elif field.default_factory is not None:
+            template[name] = _DEFAULT_SENTINEL
         else:
-            template[name] = to_jsonable_python(_resolve_default(field))
+            template[name] = to_jsonable_python(field.default)
     return template
 
 

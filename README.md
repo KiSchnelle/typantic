@@ -276,8 +276,12 @@ def run(config: Config) -> None:
 add_command(app, Config, run, name="run", config_file=True)
 ```
 
-Generate a template — required fields become `<REQUIRED: ...>` placeholders, and
-nested models are expanded so their shape is visible:
+Generate a template — required fields become `<REQUIRED: ...>` placeholders,
+nested models are expanded so their shape is visible, and any
+`default_factory` field becomes a `<DEFAULT: computed at runtime>` sentinel
+(rather than a frozen value) so it is recomputed fresh when the file is loaded —
+handy for host/time-sensitive defaults like a timestamped output folder or a CPU
+count that shouldn't be baked into a shared template:
 
 ```console
 $ myapp run --generate-config run.yaml

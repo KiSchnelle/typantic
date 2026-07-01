@@ -94,9 +94,39 @@ def test_template_serialises_enum_tuple_set_datetime():
     assert t["when"] == "2020-01-01T00:00:00Z"
 
 
-def test_template_one_arg_default_factory_does_not_crash():
-    # default_factory taking the validated-data dict must be called with {}.
-    assert build_config_template(Cfg)["cpus"] == 4
+def test_template_factory_default_is_sentinel_not_frozen():
+    # Factory-computed defaults (host/time-sensitive) must not be frozen into the
+    # template; they render as the <DEFAULT: ...> sentinel instead.
+    assert build_config_template(Cfg)["cpus"] == "<DEFAULT: computed at runtime>"
+
+
+def test_load_strips_default_sentinel_so_factory_runs_fresh(tmp_path: Path):
+    class Job(BaseModel):
+        stamp: str = Field(default_factory=lambda: "computed")
+
+    path = tmp_path / "job.yaml"
+    write_config_template(Job, path)
+    # The unedited template carries the sentinel...
+    assert yaml.safe_load(path.read_text())["stamp"].startswith("<DEFAULT")
+    # ...but loading strips it, so the model's factory computes the value.
+    assert "stamp" not in load_config_file(path)
+    assert Job(**load_config_file(path)).stamp == "computed"
+
+
+def test_load_strips_nested_default_sentinel(tmp_path: Path):
+    class Inner(BaseModel):
+        stamp: str = Field(default_factory=lambda: "x")
+
+    class Outer(BaseModel):
+        inner: Inner  # required nested model -> recurses
+        mounts: list[Inner]  # required list of models -> example list
+
+    path = tmp_path / "outer.json"
+    write_config_template(Outer, path)
+    loaded = load_config_file(path)
+    # Sentinels are stripped recursively, in nested mappings and list elements.
+    assert "stamp" not in loaded["inner"]
+    assert "stamp" not in loaded["mounts"][0]
 
 
 def test_template_int_renders_decimal():

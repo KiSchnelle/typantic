@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `add_command(..., help=...)` to set the command's help text explicitly
   (otherwise the handler's docstring is used).
 
+### Changed
+
+- Generated templates no longer freeze `default_factory` values. A
+  factory-defaulted field now renders as a `<DEFAULT: computed at runtime>`
+  sentinel that `load_config_file` strips, so a host/time-sensitive default (a
+  timestamped output folder, a CPU count) is recomputed fresh on load instead of
+  replaying a stale value baked in on the generating host. Static defaults are
+  unchanged.
+
 ### Fixed
 
 - Generated templates now render a required list of non-model values (e.g.
