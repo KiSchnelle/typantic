@@ -213,9 +213,14 @@ class TestHelp:
         assert "Random seed." in output
 
     def test_default_factory_shown_in_help(self) -> None:
+        # The factory is not evaluated for the help sample (a single frozen value
+        # would mislead for time/identity factories); a sentinel is shown instead.
         app, _ = _make_app(FullConfig)
         result = runner.invoke(app, ["--help"])
-        assert "0.5" in _plain(result.output)
+        # Collapse box borders + whitespace: the sample wraps across lines here.
+        output = " ".join(_plain(result.output).replace("│", " ").split())
+        assert "computed at runtime" in output
+        assert "0.5" not in output
 
     def test_bool_flag_shown(self) -> None:
         app, _ = _make_app(FullConfig)
@@ -638,9 +643,10 @@ class TestNoneDefaultHelp:
         assert "(None)" in _plain(result.output)
 
     def test_regular_default_still_rendered(self) -> None:
-        app, _ = _make_app(FullConfig)
+        # A plain (non-factory, non-None) default still renders its value.
+        app, _ = _make_app(SimpleModel)
         result = runner.invoke(app, ["--help"])
-        assert "0.5" in _plain(result.output)
+        assert "[default: 1]" in _plain(result.output)
 
     def test_none_default_still_passes_none(self) -> None:
         app, results = _make_app(SimpleModel)

@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `--help` no longer freezes a `default_factory` sample. A factory-defaulted
+  option previously showed a single evaluation captured at decoration time (e.g.
+  `[default: (/…/run_<frozen-timestamp>)]`), which misled for time/identity
+  factories since each invocation recomputes a different value. It now shows
+  `[default: (computed at runtime)]`. The runtime default is unchanged (the
+  factory is still re-evaluated on every invocation). This also removes an
+  edge-case crash where a validated-data `default_factory` was called with no
+  arguments to build the sample.
 - Generated templates no longer freeze `default_factory` values. A
   factory-defaulted field now renders as a `<DEFAULT: computed at runtime>`
   sentinel that `load_config_file` strips, so a host/time-sensitive default (a

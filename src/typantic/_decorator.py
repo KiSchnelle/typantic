@@ -355,12 +355,12 @@ def _build_leaf(
         default = inspect.Parameter.empty
         show_default = True
     elif field_info.default_factory is not None:
-        factory = field_info.default_factory
         # Pass the factory itself as the default so Click re-evaluates it on
         # every invocation (correct for time/identity-sensitive factories such
-        # as ``datetime.now`` or ``uuid4``), while still showing a sample value.
-        default = factory
-        show_default = str(factory())  # type: ignore[call-arg]
+        # as ``datetime.now`` or ``uuid4``). A single frozen evaluation would be a
+        # misleading help sample for those, so show a sentinel instead.
+        default = field_info.default_factory
+        show_default = "computed at runtime"
     else:
         default = field_info.default
         # Click omits `None` defaults entirely; surface them as

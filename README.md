@@ -102,7 +102,7 @@ Your function receives the **validated model instance** — validators, `default
 | `kw_only=True` or unset           | `typer.Option` (`--flag`)               |
 | `Field(description=...)`          | `help=...` in the CLI                   |
 | `Field(default=...)`              | Default value shown in `--help`         |
-| `Field(default_factory=...)`      | Re-evaluated on every invocation        |
+| `Field(default_factory=...)`      | Re-evaluated per invocation; `--help` shows `[default: (computed at runtime)]` |
 | `Field(ge=..., le=...)`           | Typer `min` / `max` (validated + shown) |
 | `Literal["a", "b"]`               | CLI choices                             |
 | `Enum`, `tuple[...]`              | Choices / multi-value option            |
