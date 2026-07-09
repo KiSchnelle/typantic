@@ -79,7 +79,39 @@ def _collect_flat(
     return data
 
 
+def _unknown_config_keys(
+    model_cls: type[BaseModel],
+    data: dict[str, Any],
+    prefix: str = "",
+) -> list[str]:
+    """Config-file keys matching no field on ``model_cls`` (recursing into models).
+
+    Computed-field names are allowed so a written run-config (which serialises
+    them) still round-trips on reload; anything else is almost certainly a typo
+    that Pydantic's ``extra="ignore"`` would otherwise drop in silence. Only
+    dict values are recursed into, and only for fields whose bare annotation is a
+    concrete model -- optionals and lists of models are left alone rather than
+    risk a false rejection.
+    """
+    hints = get_type_hints(model_cls, include_extras=True)
+    allowed = set(model_cls.model_fields) | set(model_cls.model_computed_fields)
+    unknown: list[str] = []
+    for key, value in data.items():
+        dotted = f"{prefix}{key}"
+        if key not in allowed:
+            unknown.append(dotted)
+            continue
+        if key in model_cls.model_fields and isinstance(value, dict):
+            nested = _extract_base_type(hints[key])
+            if _is_model_type(nested):
+                unknown.extend(
+                    _unknown_config_keys(nested, value, prefix=f"{dotted}."),
+                )
+    return unknown
+
+
 def _collect_with_config(
+    model_cls: type[BaseModel],
     ctx: typer.Context,
     config: Path | None,
     mapping: list[tuple[str, tuple[str, ...]]],
@@ -90,8 +122,17 @@ def _collect_with_config(
     With no ``--config`` every supplied flag is used; with one, the file is the
     base and only explicitly-passed flags (not defaults) override it. Relaxed
     required fields left unset are skipped so Pydantic reports them as missing.
+    An unknown key in the file is rejected up front -- a silently-dropped typo
+    would let a run proceed with the default in place of the intended value.
     """
-    data: dict[str, Any] = dict(load_config_file(config)) if config is not None else {}
+    data: dict[str, Any] = {}
+    if config is not None:
+        data = dict(load_config_file(config))
+        unknown = _unknown_config_keys(model_cls, data)
+        if unknown:
+            listed = ", ".join(sorted(unknown))
+            msg = f"Unknown setting(s) {listed} in config file {config}"
+            raise typer.BadParameter(msg)
     for cli_name, path in mapping:
         if cli_name in kwargs and _value_is_explicit(ctx, cli_name):
             _set_nested(data, path, kwargs[cli_name])
@@ -588,7 +629,7 @@ def pydantic_to_typer(
                         "to create one."
                     )
                     raise typer.BadParameter(msg)
-                data = _collect_with_config(ctx, config, mapping, kwargs)
+                data = _collect_with_config(model_cls, ctx, config, mapping, kwargs)
             else:
                 data = _collect_flat(mapping, kwargs)
             return func(_construct(model_cls, data))

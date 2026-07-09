@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import typer
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from typer.testing import CliRunner
 
 from typantic import (
@@ -252,6 +252,88 @@ def test_pure_flags_still_work():
     result = runner.invoke(app, ["go", "--name", "bob"])
     assert result.exit_code == 0
     assert seen == {"name": "bob", "count": 3, "region": "eu"}
+
+
+def test_unknown_key_in_config_is_rejected(tmp_path: Path):
+    app, seen = _build_app()
+    path = tmp_path / "c.yaml"
+    path.write_text("name: alice\nregionn: us\n")  # regionn: typo for region
+    result = runner.invoke(app, ["go", "--config", str(path)])
+    assert result.exit_code == 2
+    assert "regionn" in _plain(result.output)
+    assert not seen  # not run with region silently left at its default
+
+
+def test_multiple_unknown_keys_are_all_listed(tmp_path: Path):
+    app, seen = _build_app()
+    path = tmp_path / "c.yaml"
+    path.write_text("name: alice\nfoo: 1\nbar: 2\n")
+    result = runner.invoke(app, ["go", "--config", str(path)])
+    assert result.exit_code == 2
+    out = _plain(result.output)
+    assert "foo" in out
+    assert "bar" in out
+    assert not seen
+
+
+class _Computed(BaseModel):
+    factor: int = 2
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def doubled(self) -> int:
+        return self.factor * 2
+
+
+def test_computed_field_name_is_allowed_on_reload(tmp_path: Path):
+    # A written run-config serialises computed fields; reloading it must not trip
+    # the unknown-key check, and the computed value is recomputed, not replayed.
+    seen: dict[str, object] = {}
+
+    def run(cfg: _Computed) -> None:
+        seen.update(cfg.model_dump())
+
+    app = typer.Typer()
+    add_command(app, _Computed, run, name="go", config_file=True)
+
+    @app.command()
+    def other() -> None: ...  # force multi-command mode so "go" is a subcommand
+
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"factor": 5, "doubled": 999}))
+    result = runner.invoke(app, ["go", "--config", str(path)])
+    assert result.exit_code == 0
+    assert seen["factor"] == 5
+    assert seen["doubled"] == 10  # recomputed from factor, the file's 999 dropped
+
+
+class _Inner(BaseModel):
+    x: int = 1
+
+
+class _Outer(BaseModel):
+    inner: _Inner = Field(default_factory=_Inner)
+    label: str = "a"
+
+
+def test_unknown_nested_key_is_rejected(tmp_path: Path):
+    seen: dict[str, object] = {}
+
+    def run(cfg: _Outer) -> None:
+        seen.update(cfg.model_dump())
+
+    app = typer.Typer()
+    add_command(app, _Outer, run, name="go", config_file=True)
+
+    @app.command()
+    def other() -> None: ...  # force multi-command mode so "go" is a subcommand
+
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"inner": {"x": 2, "y": 3}}))  # y: typo
+    result = runner.invoke(app, ["go", "--config", str(path)])
+    assert result.exit_code == 2
+    assert "inner.y" in _plain(result.output)
+    assert not seen
 
 
 def test_config_and_generate_config_together_errors(tmp_path: Path):
