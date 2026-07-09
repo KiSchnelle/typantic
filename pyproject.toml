@@ -48,6 +48,19 @@ Repository = "https://github.com/KiSchnelle/typantic"
 Issues = "https://github.com/KiSchnelle/typantic/issues"
 Changelog = "https://github.com/KiSchnelle/typantic/blob/main/CHANGELOG.md"
 
+[tool.coverage.run]
+source = ["src/typantic"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
+
 [build-system]
 requires = ["uv_build>=0.11.1,<0.12.0"]
 build-backend = "uv_build"
