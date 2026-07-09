@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An unknown key in a `--config` file is now rejected instead of silently
+  dropped. Pydantic's default `extra="ignore"` meant a typo such as `wrokers: 8`
+  was discarded and the field left at its default — an invisible mistake that
+  could waste a long run. The file's keys are now validated against the model up
+  front (recursing into nested models) and any unknown ones raise a clear error.
+  Computed-field names stay allowed, so a written-back config (which serialises
+  them) still round-trips; command-line flags are unaffected.
 - `--help` no longer freezes a `default_factory` sample. A factory-defaulted
   option previously showed a single evaluation captured at decoration time (e.g.
   `[default: (/…/run_<frozen-timestamp>)]`), which misled for time/identity

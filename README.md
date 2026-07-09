@@ -333,6 +333,11 @@ missing from both is still reported as an error — it just no longer renders as
 `[required]` in `--help`. A `--config` document must be a mapping; a bad suffix,
 unparseable content, or a non-mapping top level raises a `ValueError`.
 
+An **unknown key** in the file is rejected up front (recursing into nested
+models), so a typo like `wrokers: 8` fails fast instead of being silently dropped
+and leaving the field at its default. Computed-field names are still accepted, so
+a config written back out (which serialises them) reloads cleanly.
+
 ### File-only commands
 
 Some models can't map onto flat flags at all — nested-model lists, or
