@@ -40,3 +40,6 @@ dmypy.json
 
 # Ruff stuff:
 .ruff_cache/
+# Coverage artifacts
+.coverage
+htmlcov/

@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists, `scalar | (min, max)` ranges).
 - `add_command(..., help=...)` to set the command's help text explicitly
   (otherwise the handler's docstring is used).
+- Test suite now runs under **branch coverage** — `pytest-cov` added as a dev
+  dependency and `[tool.coverage]` configured (`branch = true` plus a shared
+  `exclude_lines` set). Development-only; the published package is unaffected.
 
 ### Changed
 
