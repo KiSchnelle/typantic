@@ -60,6 +60,7 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 100
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
@@ -77,6 +78,7 @@ module-name = "typantic"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=typantic --cov-report=term-missing"
 
 [tool.ruff]
 target-version = "py312"
