@@ -18,6 +18,7 @@ from typantic import (
     load_config_file,
     write_config_template,
 )
+from typantic._decorator import _unknown_config_keys
 
 runner = CliRunner()
 
@@ -314,6 +315,16 @@ class _Inner(BaseModel):
 class _Outer(BaseModel):
     inner: _Inner = Field(default_factory=_Inner)
     label: str = "a"
+
+
+class _HasDictField(BaseModel):
+    meta: dict[str, int] = Field(default_factory=dict)
+
+
+def test_unknown_keys_does_not_recurse_into_non_model_dict_field():
+    # A dict *value* under a real but non-model field (dict[str, int]) is accepted
+    # as-is and not recursed into; its inner keys are left to Pydantic, not flagged.
+    assert _unknown_config_keys(_HasDictField, {"meta": {"anything": 1}}) == []
 
 
 def test_unknown_nested_key_is_rejected(tmp_path: Path):

@@ -2,17 +2,21 @@
 
 import inspect
 import re
+import typing
 from collections.abc import Callable
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal, get_args
 
+import annotated_types
 import pytest
 import typer
 from pydantic import AfterValidator, BaseModel, Field, SecretStr
 from typer.testing import CliRunner
 
 from typantic import add_command, pydantic_to_typer
+from typantic._decorator import _collect_flat, _numeric_bounds, _panel_for_field
+from typantic._introspect import extract_base_type
 
 runner = CliRunner()
 
@@ -1037,3 +1041,61 @@ class TestAddCommand:
         add_command(app, PanelModel, lambda _: None, subpanels=True)
         output = _plain(runner.invoke(app, ["--help"]).output)
         assert "Compute Resources" in output
+
+
+# ---------------------------------------------------------------------------
+# Internal helper edge branches
+# ---------------------------------------------------------------------------
+def test_panel_for_field_returns_none_for_unknown_field() -> None:
+    class M(BaseModel):
+        x: int = 1
+
+    # No class in the MRO defines "nope", so the resolver falls through to None.
+    assert _panel_for_field(M, "nope") is None
+
+
+def test_numeric_bounds_reads_ge_le_from_an_interval() -> None:
+    class M(BaseModel):
+        x: Annotated[int, annotated_types.Interval(ge=0, le=10)]
+
+    # Pydantic keeps the grouped Interval in metadata (rather than splitting it
+    # into separate Ge/Le), so both bounds come from the one constraint.
+    assert _numeric_bounds(M.model_fields["x"]) == (0.0, 10.0)
+
+
+def test_numeric_bounds_interval_with_open_lower_side() -> None:
+    class M(BaseModel):
+        x: Annotated[int, annotated_types.Interval(gt=None, ge=None, lt=None, le=5)]
+
+    # An Interval with ge unset exercises the "only le" side of the branch.
+    assert _numeric_bounds(M.model_fields["x"]) == (None, 5.0)
+
+
+def test_numeric_bounds_interval_with_open_upper_side() -> None:
+    class M(BaseModel):
+        x: Annotated[int, annotated_types.Interval(gt=None, ge=3, lt=None, le=None)]
+
+    # ...and one with le unset exercises the "only ge" side.
+    assert _numeric_bounds(M.model_fields["x"]) == (3.0, None)
+
+
+def test_numeric_bounds_ignores_non_ge_le_constraints() -> None:
+    class M(BaseModel):
+        x: Annotated[int, annotated_types.Gt(0)]
+
+    # A constraint that is neither Ge, Le, nor Interval (here exclusive Gt) is
+    # skipped -- Typer has no exclusive min/max, so it maps to no bound.
+    assert _numeric_bounds(M.model_fields["x"]) == (None, None)
+
+
+def test_collect_flat_skips_cli_names_absent_from_kwargs() -> None:
+    mapping = [("a", ("a",)), ("b", ("b",))]
+    # "b" is not among the supplied kwargs, so it is skipped, not defaulted in.
+    assert _collect_flat(mapping, {"a": 1}) == {"a": 1}
+
+
+def test_extract_base_type_passes_through_parameterless_generics() -> None:
+    # A bare legacy generic (origin set, no args) is returned unchanged rather
+    # than re-wrapped.
+    assert extract_base_type(typing.List) is typing.List  # noqa: UP006
+    assert extract_base_type(typing.Tuple) is typing.Tuple  # noqa: UP006
