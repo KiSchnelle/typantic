@@ -130,6 +130,15 @@ class Project(BaseModel):
     created_at: datetime
 
 
+class ProjectCreate(BaseModel):
+    """A request to create a new project."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Project name.")
+    description: str = Field(default="", description="Optional description.")
+
+
 class JobRecord(BaseModel):
     """The durable record of one launched job.
 

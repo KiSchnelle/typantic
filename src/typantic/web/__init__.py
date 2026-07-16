@@ -5,6 +5,13 @@ base ``import typantic`` never imports this package, so installs that only need
 the CLI bridge stay free of FastAPI and friends.
 """
 
+try:
+    import fastapi as _fastapi  # noqa: F401
+except ModuleNotFoundError as _exc:
+    _msg = "typantic.web requires the [web] extra: pip install 'typantic[web]'"
+    raise ModuleNotFoundError(_msg) from _exc
+
+from typantic.web.api import make_api
 from typantic.web.backends import (
     ApptainerBackend,
     ContainerBackend,
@@ -74,5 +81,6 @@ __all__ = [
     "discover_commands",
     "fetch_schema",
     "load_backends",
+    "make_api",
     "normalize_for_form",
 ]

@@ -150,6 +150,7 @@ ignore = [
     "TRY003",  # long exception messages are fine in tests
     "SLF001",  # accessing private members under test is fine
     "S108",    # hardcoded /tmp paths are fine in tests
+    "S106",    # hardcoded test tokens/passwords are fine
 ]
 
 [tool.ruff.lint.pydocstyle]

@@ -26,7 +26,7 @@ from typantic.web.models import (
     LaunchPreview,
     LaunchRequest,
 )
-from typantic.web.schema import SchemaCache
+from typantic.web.schema import SchemaCache, normalize_for_form
 from typantic.web.store import JobStore
 
 logger = logging.getLogger("typantic.web")
@@ -107,6 +107,19 @@ class Launcher:
     def backend_keys(self) -> list[str]:
         """The keys of the installed launch backends, sorted."""
         return sorted(self._backends)
+
+    def backends_meta(self) -> list[dict[str, object]]:
+        """Each backend's key and its options JSON Schema (for the UI), sorted."""
+        meta: list[dict[str, object]] = []
+        for key in sorted(self._backends):
+            model = getattr(self._backends[key], "options_model", None)
+            schema = (
+                normalize_for_form(model.model_json_schema())
+                if model is not None
+                else None
+            )
+            meta.append({"key": key, "options_schema": schema})
+        return meta
 
     def command(self, key: str) -> CommandMeta:
         """Look up a command by key, raising :class:`UnknownCommandError`."""

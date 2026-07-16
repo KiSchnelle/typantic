@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from pydantic import BaseModel, Field
 
 from typantic.web import launcher as launcher_mod
 from typantic.web.backends.base import Launched, PollResult
@@ -319,6 +320,26 @@ def test_refresh_queued_to_running(wired):
     refreshed = launcher.refresh(record)
     assert refreshed.status is JobStatus.RUNNING
     assert refreshed.finished_at is None
+
+
+def test_backends_meta_no_options(wired):
+    launcher, _, _ = wired
+    assert launcher.backends_meta() == [{"key": "local", "options_schema": None}]
+
+
+def test_backends_meta_with_options(tmp_path, monkeypatch):
+    class Opts(BaseModel):
+        image: str = Field(description="Image.")
+
+    class BoxBackend(FakeBackend):
+        options_model = Opts
+
+    monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
+    launcher = Launcher(JobStore(tmp_path / "jobs"), backends={"box": BoxBackend()})
+    meta = launcher.backends_meta()
+    assert meta[0]["key"] == "box"
+    schema = meta[0]["options_schema"]
+    assert schema["properties"]["image"]["type"] == "string"
 
 
 def test_read_values_helper(tmp_path):
