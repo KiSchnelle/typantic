@@ -25,6 +25,7 @@ from typantic.web.backends import (
     load_backends,
 )
 from typantic.web.discovery import command_catalog, discover_commands
+from typantic.web.endpoint import add_endpoint
 from typantic.web.launcher import (
     JobNotTerminalError,
     Launcher,
@@ -77,6 +78,7 @@ __all__ = [
     "SshBackend",
     "UnknownBackendError",
     "UnknownCommandError",
+    "add_endpoint",
     "command_catalog",
     "default_jobs_dir",
     "discover_commands",
