@@ -53,6 +53,17 @@ web = [
 [project.scripts]
 typantic = "typantic._cli:main"
 
+# Built-in launch backends for `typantic[web]`, discovered by the launcher.
+# Third-party backends register under the same group.
+[project.entry-points."typantic.web_backends"]
+local = "typantic.web.backends.local:LocalBackend"
+ssh = "typantic.web.backends.ssh:SshBackend"
+slurm = "typantic.web.backends.slurm:SlurmBackend"
+pbs = "typantic.web.backends.pbs:PbsBackend"
+docker = "typantic.web.backends.container:docker_backend"
+podman = "typantic.web.backends.container:podman_backend"
+apptainer = "typantic.web.backends.apptainer:ApptainerBackend"
+
 [dependency-groups]
 dev = [
     "mypy>=2.1.0",

@@ -5,6 +5,18 @@ base ``import typantic`` never imports this package, so installs that only need
 the CLI bridge stay free of FastAPI and friends.
 """
 
+from typantic.web.backends import (
+    ApptainerBackend,
+    ContainerBackend,
+    LaunchBackend,
+    Launched,
+    LocalBackend,
+    PbsBackend,
+    PollResult,
+    SlurmBackend,
+    SshBackend,
+    load_backends,
+)
 from typantic.web.discovery import command_catalog, discover_commands
 from typantic.web.models import (
     CommandMeta,
@@ -26,21 +38,31 @@ from typantic.web.schema import (
 from typantic.web.store import JobStore, default_jobs_dir
 
 __all__ = [
+    "ApptainerBackend",
     "CommandMeta",
+    "ContainerBackend",
     "History",
     "JobRecord",
     "JobStatus",
     "JobStore",
+    "LaunchBackend",
     "LaunchPreview",
     "LaunchRequest",
+    "Launched",
+    "LocalBackend",
     "MakeDirRequest",
+    "PbsBackend",
+    "PollResult",
     "Project",
     "ProjectGroup",
     "SchemaCache",
     "SchemaError",
+    "SlurmBackend",
+    "SshBackend",
     "command_catalog",
     "default_jobs_dir",
     "discover_commands",
     "fetch_schema",
+    "load_backends",
     "normalize_for_form",
 ]

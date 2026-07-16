@@ -153,7 +153,6 @@ class JobRecord(BaseModel):
     log_path: str
     pid: int | None = None
     scheduler_id: str | None = None
-    container_id: str | None = None
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime
     finished_at: datetime | None = None
