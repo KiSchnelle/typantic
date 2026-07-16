@@ -538,6 +538,13 @@ def test_serves_spa_when_present(tmp_path, monkeypatch):
     assert "hi" in resp.text
 
 
+def test_no_spa_when_dashboard_disabled(tmp_path, monkeypatch):
+    # dashboard=False never mounts the SPA, even if web_dist exists on disk.
+    launcher = _bare_launcher(tmp_path, monkeypatch)
+    client = TestClient(make_api(launcher, token=None, dashboard=False))
+    assert client.get("/").status_code == 404
+
+
 def test_is_dir_handles_oserror():
     class BadPath:
         def is_dir(self):

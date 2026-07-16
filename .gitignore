@@ -43,3 +43,8 @@ dmypy.json
 # Coverage artifacts
 .coverage
 htmlcov/
+
+# Built SPA (produced by `make frontend`; baked into the wheel, not committed)
+src/typantic/web/web_dist/
+# Frontend deps
+web/node_modules/
