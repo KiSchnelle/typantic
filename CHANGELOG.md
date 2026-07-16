@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Optional `[web]` extra — a generic job launcher, dashboard, and web-form
+  bridge** (`pip install 'typantic[web]'`), under `typantic.web` plus a
+  `typantic web serve` command. The base `import typantic` never imports FastAPI.
+  - `add_endpoint(app, Model, handler)` — the FastAPI mirror of `add_command`: a
+    POST endpoint that validates the body into the model and calls the handler
+    (422 on invalid input), plus a `GET {path}/schema` route with the form-ready
+    JSON Schema.
+  - A **per-user launcher + dashboard** that discovers commands via the
+    `typantic.web_commands` entry-point group, renders a form from each command's
+    `--schema`, launches `<app> <cmd> --config` as a tracked job, tails its log
+    over a WebSocket, and shows a job's output images as thumbnails. It shells
+    out (never imports app code), so heavy app dependencies stay out of the web
+    process.
+  - **Pluggable backends** via the `typantic.web_backends` entry-point group:
+    `local`, `ssh`, `slurm`, `pbs`, `docker`, `podman`, and `apptainer` ship
+    built in; a third-party backend is a pure registry addition.
+  - **SQLite-backed history with projects** (stdlib only): file a job under a
+    project and query history grouped by project plus ungrouped singles.
+  - Runs as the invoking Unix user on a free ephemeral port behind a random
+    token (the Jupyter pattern); the brand is configurable with `--title`.
 - `--schema` flag on any `config_file`-enabled command prints the settings
   model's JSON Schema (`model_json_schema()`) to stdout and exits. This lets a
   web front-end build a form from the model by subprocessing the CLI, without

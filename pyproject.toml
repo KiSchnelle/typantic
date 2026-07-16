@@ -1,7 +1,7 @@
 [project]
 name = "typantic"
 version = "0.4.1"
-description = "Auto-generate type-safe Typer CLI interfaces from Pydantic v2 models."
+description = "Type-safe interfaces from Pydantic v2 models: Typer CLIs, plus an optional FastAPI web launcher + dashboard."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -20,15 +20,29 @@ keywords = [
     "validation",
     "config",
     "settings",
+    "fastapi",
+    "web",
+    "dashboard",
+    "job-launcher",
+    "json-schema",
+    "slurm",
+    "pbs",
+    "docker",
+    "podman",
+    "apptainer",
+    "ssh",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Environment :: Console",
+    "Environment :: Web Environment",
     "Framework :: Pydantic",
     "Framework :: Pydantic :: 2",
+    "Framework :: FastAPI",
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP",
     "Topic :: Utilities",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",

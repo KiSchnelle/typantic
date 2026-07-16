@@ -351,12 +351,75 @@ add_command(app, TuneConfig, run, config_file="only", help="Tune from a config f
 File-only commands still expose `--schema`, so a web front-end can build their
 form the same way.
 
+## Web (`typantic[web]`)
+
+The optional `[web]` extra turns the same settings models into web interfaces —
+the FastAPI counterpart of the Typer bridge. Install it with:
+
+```bash
+pip install 'typantic[web]'
+```
+
+The base `import typantic` never pulls in FastAPI; only `typantic.web` (and
+`typantic web …`) does.
+
+### `add_endpoint` — a web form from a model, in process
+
+The mirror of `add_command`: register a POST endpoint that validates the request
+body into your model and calls a handler, plus a `GET …/schema` route serving the
+form-ready JSON Schema.
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+from typantic.web import add_endpoint
+
+
+class Config(BaseModel):
+    name: str
+    workers: int = 4
+
+
+def run(config: Config) -> dict[str, str]:
+    return {"ran": config.name}
+
+
+app = FastAPI()
+add_endpoint(app, Config, run)     # POST /run  +  GET /run/schema
+```
+
+### `typantic web serve` — a job launcher + dashboard
+
+A per-user launcher that discovers commands your apps register (under the
+`typantic.web_commands` entry-point group), renders a form from each command's
+`--schema`, and launches `<app> <cmd> --config …` as a tracked job — then tails
+its log live and shows any output images as thumbnails. It **shells out** rather
+than importing app code, so an app's heavy dependencies never enter the web
+process.
+
+```bash
+typantic web serve --title "My Lab"
+#   My Lab is running. Open:
+#     http://127.0.0.1:54321/?token=…
+```
+
+It runs as the invoking Unix user on a free ephemeral port behind a random token
+(the Jupyter pattern); forward the port over SSH for a remote host.
+
+- **Pluggable backends** (discovered via the `typantic.web_backends` entry-point
+  group): `local`, `ssh`, `slurm`, `pbs`, `docker`, `podman`, and `apptainer`
+  ship built in; add your own by registering under the group.
+- **History with projects** — an optional SQLite index (stdlib only) groups jobs
+  under a project and answers grouped/ungrouped history queries.
+
 ## Requirements
 
 - Python ≥ 3.12 (tested on 3.12–3.15)
 - Pydantic ≥ 2.10
 - Typer ≥ 0.26
 - PyYAML ≥ 6.0
+- For `[web]`: FastAPI, Uvicorn, WebSockets, Pillow
 
 ## License
 
