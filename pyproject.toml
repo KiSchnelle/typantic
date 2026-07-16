@@ -128,9 +128,17 @@ ignore = [
     "D102",    # no method docstring needed
     "D103",    # no function docstring needed
     "D104",    # no package docstring needed
+    "D107",    # no __init__ docstring needed
     "ANN",     # no type annotations needed
     "PLR2004", # magic values are fine in tests
+    "PLR0913", # many-arg test helpers are fine
     "INP001",  # implicit namespace package is fine
+    "ARG",     # unused args in fakes/stubs are fine
+    "EM101",   # string-literal exceptions are fine in tests
+    "EM102",
+    "TRY003",  # long exception messages are fine in tests
+    "SLF001",  # accessing private members under test is fine
+    "S108",    # hardcoded /tmp paths are fine in tests
 ]
 
 [tool.ruff.lint.pydocstyle]
