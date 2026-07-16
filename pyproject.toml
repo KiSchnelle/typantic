@@ -152,8 +152,9 @@ ignore = [
 "src/typantic/_cli.py" = ["FBT001", "FBT002"]
 "src/typantic/web/cli.py" = ["FBT001", "FBT002", "PLR0913"]
 "src/typantic/web/server.py" = ["PLR0913"]
-# FastAPI's Depends()/Query()/Header() default idiom reads as a function call.
-"src/typantic/web/api.py" = ["B008"]
+# FastAPI's Depends()/Query()/Header() default idiom reads as a function call,
+# and a route may legitimately expose a boolean query flag with a default.
+"src/typantic/web/api.py" = ["B008", "FBT001", "FBT002"]
 "tests/**" = [
     "S101",    # assert is fine in tests
     "D100",    # no module docstring needed

@@ -173,6 +173,13 @@ class JobRecord(BaseModel):
         return self.status in _TERMINAL_STATUSES
 
 
+class JobPage(BaseModel):
+    """A page of jobs plus the total number matching the query."""
+
+    jobs: list[JobRecord]
+    total: int
+
+
 class ProjectGroup(BaseModel):
     """A project together with its jobs, newest first."""
 

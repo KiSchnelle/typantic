@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import Form from "@rjsf/core";
 import type { IChangeEvent } from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
-import { ArrowLeft, Eye, FolderPlus, Rocket, RotateCcw } from "lucide-react";
+import { ArrowLeft, Eye, FolderPlus, Rocket, RotateCcw, X } from "lucide-react";
 import {
   createProject,
   fetchProjects,
@@ -132,6 +132,8 @@ export default function Launch(): ReactNode {
   const [backendOptions, setBackendOptions] = useState<Record<string, unknown>>({});
   const [name, setName] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<LaunchPreview | null>(null);
@@ -231,12 +233,14 @@ export default function Launch(): ReactNode {
     }
   };
 
-  const newProject = () => {
-    const projName = window.prompt("New project name:");
-    if (!projName || !projName.trim()) return;
-    void createProject(projName.trim())
+  const createNewProject = () => {
+    const name = newProjectName.trim();
+    if (!name) return;
+    void createProject(name)
       .then((p) => {
         setProjectId(p.id);
+        setCreatingProject(false);
+        setNewProjectName("");
         void fetchProjects().then(setProjects);
       })
       .catch((e: unknown) => setError(String(e)));
@@ -304,29 +308,68 @@ export default function Launch(): ReactNode {
                 Project{" "}
                 <span className="font-normal text-slate-500">(optional)</span>
               </span>
-              <div className="flex gap-2">
-                <select
-                  className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-slate-100"
-                  value={projectId ?? ""}
-                  onChange={(e) => setProjectId(e.target.value || null)}
-                >
-                  <option value="">No project</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="rjsf-icon-btn"
-                  aria-label="New project"
-                  title="New project"
-                  onClick={newProject}
-                >
-                  <FolderPlus size={15} />
-                </button>
-              </div>
+              {creatingProject ? (
+                <div className="flex gap-2">
+                  <input
+                    autoFocus
+                    className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-slate-100"
+                    placeholder="New project name"
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        createNewProject();
+                      } else if (e.key === "Escape") {
+                        setCreatingProject(false);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="rjsf-add-btn"
+                    disabled={newProjectName.trim() === ""}
+                    onClick={createNewProject}
+                  >
+                    Create
+                  </button>
+                  <button
+                    type="button"
+                    className="rjsf-icon-btn"
+                    aria-label="Cancel new project"
+                    onClick={() => setCreatingProject(false)}
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <select
+                    className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-slate-100"
+                    value={projectId ?? ""}
+                    onChange={(e) => setProjectId(e.target.value || null)}
+                  >
+                    <option value="">No project</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="rjsf-icon-btn"
+                    aria-label="New project"
+                    title="New project"
+                    onClick={() => {
+                      setNewProjectName("");
+                      setCreatingProject(true);
+                    }}
+                  >
+                    <FolderPlus size={15} />
+                  </button>
+                </div>
+              )}
             </label>
 
             <fieldset className="mb-4 rounded-lg border border-slate-800 p-3">

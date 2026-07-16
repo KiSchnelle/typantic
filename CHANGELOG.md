@@ -28,7 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `local`, `ssh`, `slurm`, `pbs`, `docker`, `podman`, and `apptainer` ship
     built in; a third-party backend is a pure registry addition.
   - **SQLite-backed history with projects** (stdlib only): file a job under a
-    project and query history grouped by project plus ungrouped singles.
+    project; browse history grouped by project plus ungrouped singles; and
+    **search, filter** (status / app / backend / project), **sort, and paginate**
+    the jobs list. Deleting a project also deletes its jobs — their logs,
+    configs, and output — cancelling any still running.
   - Runs as the invoking Unix user on a free ephemeral port behind a random
     token (the Jupyter pattern); the brand is configurable with `--title`.
 - `--schema` flag on any `config_file`-enabled command prints the settings

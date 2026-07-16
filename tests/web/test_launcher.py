@@ -251,6 +251,53 @@ def test_delete_missing(wired):
     assert launcher.delete("missing") is False
 
 
+def test_query(wired):
+    launcher, _, _ = wired
+    a = launcher.launch(_request(name="alpha"))
+    launcher.launch(_request(name="beta"))
+    jobs, total = launcher.query()
+    assert total == 2
+    jobs, _ = launcher.query(search="alph")
+    assert [j.id for j in jobs] == [a.id]
+    jobs, total = launcher.query(limit=1)
+    assert len(jobs) == 1
+    assert total == 2
+
+
+def test_delete_project_cancels_active_and_deletes_jobs(wired):
+    launcher, backend, store = wired
+    project = store.create_project("P")
+    running = launcher.launch(_request(project_id=project.id))
+    assert launcher.delete_project(project.id) is True
+    assert running.id in backend.cancelled
+    assert store.load(running.id) is None
+    assert store.get_project(project.id) is None
+    assert launcher.delete_project(project.id) is False
+
+
+def test_delete_project_skips_cancel_for_terminal_job(wired):
+    launcher, backend, store = wired
+    project = store.create_project("P")
+    rec = launcher.launch(_request(project_id=project.id))
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    launcher.get(rec.id)
+    backend.cancelled.clear()
+    launcher.delete_project(project.id)
+    assert backend.cancelled == []
+    assert store.load(rec.id) is None
+
+
+def test_delete_project_unknown_backend(tmp_path, monkeypatch):
+    monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
+    store = JobStore(tmp_path / "jobs")
+    launcher = Launcher(store, backends={"local": FakeBackend()})
+    project = store.create_project("P")
+    rec = launcher.launch(_request(project_id=project.id))
+    launcher._backends.clear()
+    assert launcher.delete_project(project.id) is True
+    assert store.load(rec.id) is None
+
+
 # --- request_for / restart ---
 
 

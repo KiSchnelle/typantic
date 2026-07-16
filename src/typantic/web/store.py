@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from typantic.web.models import (
     History,
     JobRecord,
+    JobStatus,
     Project,
     ProjectGroup,
 )
@@ -76,6 +77,15 @@ _JOB_COLUMNS = (
     "exit_code",
     "record_json",
 )
+
+# Columns a job query may sort on (allowlisted — the value is interpolated into
+# the SQL, so it must never come straight from user input).
+_JOB_SORT_COLUMNS = {
+    "created_at": "created_at",
+    "status": "status",
+    "name": "name",
+    "app": "app",
+}
 
 
 def default_jobs_dir() -> Path:
@@ -181,6 +191,77 @@ class JobStore:
             ).fetchall()
         return [record for row in rows if (record := _record_from_row(row)) is not None]
 
+    def query_jobs(  # noqa: PLR0913 - a filter/sort/page query surface
+        self,
+        *,
+        status: JobStatus | None = None,
+        app: str | None = None,
+        backend: str | None = None,
+        project_id: str | None = None,
+        ungrouped: bool = False,
+        search: str | None = None,
+        sort: str = "created_at",
+        descending: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[JobRecord], int]:
+        """Return a filtered/sorted page of jobs and the total matching count.
+
+        Filters (all optional, ANDed): exact ``status`` / ``app`` / ``backend``,
+        a ``project_id`` (or ``ungrouped`` for jobs filed under no project), and
+        ``search`` — a case-insensitive substring matched against a job's name,
+        command, title, or key. ``sort`` is one of ``created_at`` / ``status`` /
+        ``name`` / ``app`` (anything else falls back to ``created_at``), ordered
+        by ``descending``. ``limit``/``offset`` page the results; the returned
+        count is the total number of matches, ignoring the page.
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status.value)
+        if app is not None:
+            clauses.append("app = ?")
+            params.append(app)
+        if backend is not None:
+            clauses.append("backend = ?")
+            params.append(backend)
+        if ungrouped:
+            clauses.append("project_id IS NULL")
+        elif project_id is not None:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        if search:
+            like = f"%{search}%"
+            clauses.append(
+                "(name LIKE ? OR command LIKE ? OR title LIKE ? OR command_key LIKE ?)",
+            )
+            params.extend([like, like, like, like])
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        column = _JOB_SORT_COLUMNS.get(sort, "created_at")
+        direction = "DESC" if descending else "ASC"
+        # A stable tiebreak keeps ordering deterministic when sorting on a
+        # non-unique column (status/name/app).
+        order = f" ORDER BY {column} {direction}, created_at DESC"
+
+        with self._connect() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM jobs{where}",  # noqa: S608 - where uses ? params
+                params,
+            ).fetchone()[0]
+            select = f"SELECT project_id, record_json FROM jobs{where}{order}"  # noqa: S608
+            if limit is not None:
+                rows = conn.execute(
+                    f"{select} LIMIT ? OFFSET ?",
+                    [*params, limit, offset],
+                ).fetchall()
+            else:
+                rows = conn.execute(select, params).fetchall()
+
+        records = [r for row in rows if (r := _record_from_row(row)) is not None]
+        return records, int(total)
+
     def delete(self, job_id: str) -> bool:
         """Remove a job's folder and metadata row.
 
@@ -239,7 +320,18 @@ class JobStore:
         return Project.model_validate(dict(row)) if row is not None else None
 
     def delete_project(self, project_id: str) -> bool:
-        """Delete a project; member jobs are un-filed (``project_id`` set NULL)."""
+        """Delete a project **and all of its jobs** (their rows and folders).
+
+        Returns ``True`` if the project existed. This does not stop a running
+        job's process — the launcher cancels first (see ``Launcher.delete_project``).
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM jobs WHERE project_id = ?",
+                (project_id,),
+            ).fetchall()
+        for row in rows:
+            self.delete(row["id"])
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             return cursor.rowcount > 0

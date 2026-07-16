@@ -68,6 +68,24 @@ export interface LaunchPreview {
   script: string | null;
 }
 
+export interface JobPage {
+  jobs: JobRecord[];
+  total: number;
+}
+
+export interface JobQuery {
+  status?: JobStatus | "";
+  app?: string;
+  backend?: string;
+  project?: string;
+  ungrouped?: boolean;
+  q?: string;
+  sort?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
 export interface Project {
   id: string;
   name: string;

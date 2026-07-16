@@ -13,15 +13,27 @@ def store(tmp_path):
     return JobStore(tmp_path / "jobs")
 
 
-def _record(job_id="j1", *, project_id=None, status=JobStatus.RUNNING, created_at=None):
+def _record(
+    job_id="j1",
+    *,
+    project_id=None,
+    status=JobStatus.RUNNING,
+    created_at=None,
+    app="app",
+    command="run",
+    title="Run",
+    name=None,
+    backend="local",
+):
     return JobRecord(
         id=job_id,
-        command_key="app/run",
-        app="app",
-        command="run",
-        title="Run",
+        command_key=f"{app}/{command}",
+        app=app,
+        command=command,
+        title=title,
+        name=name,
         project_id=project_id,
-        backend="local",
+        backend=backend,
         job_dir=f"/jobs/{job_id}",
         config_path=f"/jobs/{job_id}/submit_config.json",
         log_path=f"/jobs/{job_id}/job.log",
@@ -140,13 +152,16 @@ def test_projects_crud(store):
     assert store.delete_project(proj.id) is False
 
 
-def test_delete_project_unfiles_jobs(store):
+def test_delete_project_deletes_its_jobs(store):
     proj = store.create_project("P")
+    store.create_job_dir("j1")
     store.save(_record("j1", project_id=proj.id))
-    store.delete_project(proj.id)
-    reloaded = store.load("j1")
-    assert reloaded is not None
-    assert reloaded.project_id is None
+    store.save(_record("j2"))  # ungrouped — must survive
+    assert store.delete_project(proj.id) is True
+    assert store.load("j1") is None
+    assert not store.job_dir("j1").exists()
+    assert store.load("j2") is not None
+    assert store.delete_project(proj.id) is False
 
 
 def test_save_with_unknown_project_raises(store):
@@ -183,3 +198,78 @@ def test_grouped_history_skips_malformed(store):
 
 def test_logger_name():
     assert store_mod.logger.name == "typantic.web"
+
+
+# --- query_jobs ---
+
+
+def test_query_no_filters_newest_first(store):
+    store.save(_record("a", created_at=_dt(1)))
+    store.save(_record("c", created_at=_dt(3)))
+    store.save(_record("b", created_at=_dt(2)))
+    jobs, total = store.query_jobs()
+    assert [j.id for j in jobs] == ["c", "b", "a"]
+    assert total == 3
+
+
+def test_query_filter_status(store):
+    store.save(_record("r", status=JobStatus.RUNNING))
+    store.save(_record("d", status=JobStatus.DONE))
+    jobs, total = store.query_jobs(status=JobStatus.DONE)
+    assert [j.id for j in jobs] == ["d"]
+    assert total == 1
+
+
+def test_query_filter_app_and_backend(store):
+    store.save(_record("x", app="alpha", backend="local"))
+    store.save(_record("y", app="beta", backend="slurm"))
+    assert [j.id for j in store.query_jobs(app="beta")[0]] == ["y"]
+    assert [j.id for j in store.query_jobs(backend="slurm")[0]] == ["y"]
+
+
+def test_query_filter_project_and_ungrouped(store):
+    proj = store.create_project("P")
+    store.save(_record("filed", project_id=proj.id))
+    store.save(_record("solo"))
+    assert [j.id for j in store.query_jobs(project_id=proj.id)[0]] == ["filed"]
+    assert [j.id for j in store.query_jobs(ungrouped=True)[0]] == ["solo"]
+
+
+def test_query_search_across_fields_case_insensitive(store):
+    store.save(_record("a", name="Apoferritin pick"))
+    store.save(_record("b", name="ribosome"))
+    store.save(_record("c", command="segment", title="Segment"))
+    assert [j.id for j in store.query_jobs(search="apo")[0]] == ["a"]
+    assert [j.id for j in store.query_jobs(search="SEG")[0]] == ["c"]
+
+
+def test_query_combined_filters(store):
+    store.save(_record("a", app="x", status=JobStatus.DONE))
+    store.save(_record("b", app="x", status=JobStatus.RUNNING))
+    store.save(_record("c", app="y", status=JobStatus.DONE))
+    jobs, total = store.query_jobs(app="x", status=JobStatus.DONE)
+    assert [j.id for j in jobs] == ["a"]
+    assert total == 1
+
+
+def test_query_sort(store):
+    store.save(_record("a", name="alpha", created_at=_dt(1)))
+    store.save(_record("b", name="bravo", created_at=_dt(2)))
+    assert [j.id for j in store.query_jobs(sort="created_at", descending=False)[0]] == [
+        "a",
+        "b",
+    ]
+    by_name = store.query_jobs(sort="name", descending=True)[0]
+    assert [j.id for j in by_name] == ["b", "a"]
+    # an unknown sort key falls back to created_at (newest first)
+    assert [j.id for j in store.query_jobs(sort="bogus")[0]] == ["b", "a"]
+
+
+def test_query_pagination(store):
+    for i in range(5):
+        store.save(_record(f"j{i}", created_at=_dt(i + 1)))
+    page1, total = store.query_jobs(limit=2, offset=0)
+    assert [j.id for j in page1] == ["j4", "j3"]
+    assert total == 5
+    page2, _ = store.query_jobs(limit=2, offset=2)
+    assert [j.id for j in page2] == ["j2", "j1"]

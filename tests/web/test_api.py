@@ -187,9 +187,45 @@ def test_preview_invalid_backend_options_is_422(env):
 
 def test_list_and_get_job(env):
     record = _launch(env)
-    assert env.client.get("/api/jobs", headers=AUTH).json()[0]["id"] == record["id"]
+    page = env.client.get("/api/jobs", headers=AUTH).json()
+    assert page["total"] == 1
+    assert page["jobs"][0]["id"] == record["id"]
     assert env.client.get(f"/api/jobs/{record['id']}", headers=AUTH).status_code == 200
     assert env.client.get("/api/jobs/missing", headers=AUTH).status_code == 404
+
+
+def test_jobs_query(env):
+    a = _launch(env, name="alpha")
+    _launch(env, name="beta")
+    hits = env.client.get("/api/jobs?q=alph", headers=AUTH).json()
+    assert [j["id"] for j in hits["jobs"]] == [a["id"]]
+    assert env.client.get("/api/jobs?status=running", headers=AUTH).json()["total"] == 2
+    paged = env.client.get("/api/jobs?limit=1", headers=AUTH).json()
+    assert len(paged["jobs"]) == 1
+    assert paged["total"] == 2
+    asc = env.client.get("/api/jobs?sort=name&order=asc", headers=AUTH).json()
+    assert [j["name"] for j in asc["jobs"]] == ["alpha", "beta"]
+    assert env.client.get("/api/jobs?backend=local", headers=AUTH).json()["total"] == 2
+    assert env.client.get("/api/jobs?status=bogus", headers=AUTH).status_code == 422
+
+
+def test_jobs_query_by_project_and_ungrouped(env):
+    project = env.client.post("/api/projects", json={"name": "P"}, headers=AUTH).json()
+    filed = _launch(env, project_id=project["id"])
+    _launch(env)  # ungrouped
+    in_proj = env.client.get(f"/api/jobs?project={project['id']}", headers=AUTH).json()
+    assert [j["id"] for j in in_proj["jobs"]] == [filed["id"]]
+    ungrouped = env.client.get("/api/jobs?ungrouped=true", headers=AUTH).json()
+    assert filed["id"] not in {j["id"] for j in ungrouped["jobs"]}
+
+
+def test_delete_project_deletes_its_jobs(env):
+    project = env.client.post("/api/projects", json={"name": "P"}, headers=AUTH).json()
+    job = _launch(env, project_id=project["id"])
+    pid = project["id"]
+    assert env.client.delete(f"/api/projects/{pid}", headers=AUTH).status_code == 200
+    assert env.client.get(f"/api/jobs/{job['id']}", headers=AUTH).status_code == 404
+    assert env.client.delete(f"/api/projects/{pid}", headers=AUTH).status_code == 404
 
 
 def test_cancel_job(env):

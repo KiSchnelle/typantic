@@ -239,6 +239,51 @@ class Launcher:
         """Refresh every stored job's status, newest first."""
         return [self.refresh(record) for record in self.store.list_records()]
 
+    def query(  # noqa: PLR0913 - a filter/sort/page query surface
+        self,
+        *,
+        status: JobStatus | None = None,
+        app: str | None = None,
+        backend: str | None = None,
+        project_id: str | None = None,
+        ungrouped: bool = False,
+        search: str | None = None,
+        sort: str = "created_at",
+        descending: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[JobRecord], int]:
+        """Query stored jobs (filter/sort/page) and refresh the returned page.
+
+        Filtering is on the *stored* status; a non-terminal job's live status is
+        reconciled by the refresh here and by the periodic poll, so a
+        status-filtered page can briefly include a just-finished job.
+        """
+        records, total = self.store.query_jobs(
+            status=status,
+            app=app,
+            backend=backend,
+            project_id=project_id,
+            ungrouped=ungrouped,
+            search=search,
+            sort=sort,
+            descending=descending,
+            limit=limit,
+            offset=offset,
+        )
+        return [self.refresh(record) for record in records], total
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project and all its jobs, cancelling any still active."""
+        jobs, _ = self.store.query_jobs(project_id=project_id)
+        for record in jobs:
+            if not record.is_terminal:
+                backend = self._backends.get(record.backend)
+                if backend is not None:
+                    backend.cancel(record)
+            self._poll_cache.pop(record.id, None)
+        return self.store.delete_project(project_id)
+
     def get(self, job_id: str) -> JobRecord | None:
         """Return the current (refreshed) record for ``job_id``."""
         record = self.store.load(job_id)

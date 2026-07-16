@@ -38,7 +38,9 @@ from typantic.web.launcher import (
 from typantic.web.models import (
     CommandMeta,
     History,
+    JobPage,
     JobRecord,
+    JobStatus,
     LaunchPreview,
     LaunchRequest,
     MakeDirRequest,
@@ -134,8 +136,31 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/jobs", dependencies=guard)
-    def list_jobs() -> list[JobRecord]:
-        return launcher.refresh_all()
+    def list_jobs(  # noqa: PLR0913 - filter/sort/page query params
+        status: Annotated[JobStatus | None, Query()] = None,
+        app_name: Annotated[str | None, Query(alias="app")] = None,
+        backend: Annotated[str | None, Query()] = None,
+        project: Annotated[str | None, Query()] = None,
+        ungrouped: Annotated[bool, Query()] = False,
+        q: Annotated[str | None, Query()] = None,
+        sort: Annotated[str, Query()] = "created_at",
+        order: Annotated[str, Query()] = "desc",
+        limit: Annotated[int | None, Query(ge=1, le=1000)] = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> JobPage:
+        jobs, total = launcher.query(
+            status=status,
+            app=app_name,
+            backend=backend,
+            project_id=project,
+            ungrouped=ungrouped,
+            search=q,
+            sort=sort,
+            descending=order != "asc",
+            limit=limit,
+            offset=offset,
+        )
+        return JobPage(jobs=jobs, total=total)
 
     @app.get("/api/jobs/{job_id}", dependencies=guard)
     def get_job(job_id: str) -> JobRecord:
@@ -219,7 +244,8 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
 
     @app.delete("/api/projects/{project_id}", dependencies=guard)
     def delete_project(project_id: str) -> dict[str, str]:
-        if not launcher.store.delete_project(project_id):
+        # Deletes the project AND all its jobs (cancelling any still running).
+        if not launcher.delete_project(project_id):
             raise HTTPException(status_code=404, detail="No such project.")
         return {"deleted": project_id}
 

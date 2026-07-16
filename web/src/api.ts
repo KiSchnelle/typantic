@@ -6,6 +6,8 @@ import type {
   FsListing,
   History,
   JobImage,
+  JobPage,
+  JobQuery,
   JobRecord,
   JsonSchema,
   LaunchPreview,
@@ -50,8 +52,15 @@ export function fetchSchema(key: string): Promise<JsonSchema> {
   return getJson(`/api/commands/${key}/schema`);
 }
 
-export function fetchJobs(): Promise<JobRecord[]> {
-  return getJson("/api/jobs");
+export function fetchJobs(query: JobQuery = {}): Promise<JobPage> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== "" && value !== false) {
+      params.set(key, String(value));
+    }
+  }
+  const qs = params.toString();
+  return getJson(`/api/jobs${qs ? `?${qs}` : ""}`);
 }
 
 export function fetchHistory(): Promise<History> {
