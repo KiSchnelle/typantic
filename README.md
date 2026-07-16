@@ -363,6 +363,17 @@ pip install 'typantic[web]'
 The base `import typantic` never pulls in FastAPI; only `typantic.web` (and
 `typantic web …`) does.
 
+![typantic web — the command catalog](https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-launch.png)
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-form.png" width="49%" alt="A form derived from a settings model, with a schema-driven backend options subform" />
+  <img src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-job.png" width="49%" alt="A job's live log tail and output-image gallery" />
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-jobs.png" width="49%" alt="The jobs list" />
+  <img src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-projects.png" width="49%" alt="Projects with grouped job history" />
+</p>
+
 ### `add_endpoint` — a web form from a model, in process
 
 The mirror of `add_command`: register a POST endpoint that validates the request
