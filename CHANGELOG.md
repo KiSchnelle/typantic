@@ -74,8 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamped output folder, a CPU count) is recomputed fresh on load instead of
   replaying a stale value baked in on the generating host. Static defaults are
   unchanged.
-- Bumped dev dependency `mypy` to 2.3.0. Development-only; the published package
-  is unaffected.
+- Raised minimum dependency versions to track what we test against: `typer`
+  ≥ 0.27 (runtime) and, for development/build only, `ruff` ≥ 0.15.22,
+  `mypy` ≥ 2.3.0, and `uv_build` ≥ 0.11.29.
 
 ### Fixed
 

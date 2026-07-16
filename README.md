@@ -509,7 +509,7 @@ click **Launch** — the dashboard writes your values to a config file, runs
 
 - Python ≥ 3.12 (tested on 3.12–3.15)
 - Pydantic ≥ 2.10
-- Typer ≥ 0.26
+- Typer ≥ 0.27
 - PyYAML ≥ 6.0
 - For `[web]`: FastAPI, Uvicorn, WebSockets, Pillow
 
