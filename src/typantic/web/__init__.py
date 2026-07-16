@@ -18,6 +18,12 @@ from typantic.web.backends import (
     load_backends,
 )
 from typantic.web.discovery import command_catalog, discover_commands
+from typantic.web.launcher import (
+    JobNotTerminalError,
+    Launcher,
+    UnknownBackendError,
+    UnknownCommandError,
+)
 from typantic.web.models import (
     CommandMeta,
     History,
@@ -42,6 +48,7 @@ __all__ = [
     "CommandMeta",
     "ContainerBackend",
     "History",
+    "JobNotTerminalError",
     "JobRecord",
     "JobStatus",
     "JobStore",
@@ -49,6 +56,7 @@ __all__ = [
     "LaunchPreview",
     "LaunchRequest",
     "Launched",
+    "Launcher",
     "LocalBackend",
     "MakeDirRequest",
     "PbsBackend",
@@ -59,6 +67,8 @@ __all__ = [
     "SchemaError",
     "SlurmBackend",
     "SshBackend",
+    "UnknownBackendError",
+    "UnknownCommandError",
     "command_catalog",
     "default_jobs_dir",
     "discover_commands",
