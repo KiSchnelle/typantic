@@ -21,3 +21,14 @@ updates:
     groups:
       python:
         patterns: ["*"]
+
+  # Keep the dashboard's npm deps (web/package.json + package-lock.json) current.
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend:
+        patterns: ["*"]

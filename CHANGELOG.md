@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-16
+
 ### Added
 
 - **Optional `[web]` extra — a generic job launcher, dashboard, and web-form

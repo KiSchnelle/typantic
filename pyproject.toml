@@ -1,6 +1,6 @@
 [project]
 name = "typantic"
-version = "0.4.1"
+version = "0.5.0"
 description = "Type-safe interfaces from Pydantic v2 models: Typer CLIs, plus an optional FastAPI web launcher + dashboard."
 readme = "README.md"
 license = "MIT"
