@@ -14,6 +14,12 @@ from typantic.web.models import (
     MakeDirRequest,
     Project,
 )
+from typantic.web.schema import (
+    SchemaCache,
+    SchemaError,
+    fetch_schema,
+    normalize_for_form,
+)
 
 __all__ = [
     "CommandMeta",
@@ -23,4 +29,8 @@ __all__ = [
     "LaunchRequest",
     "MakeDirRequest",
     "Project",
+    "SchemaCache",
+    "SchemaError",
+    "fetch_schema",
+    "normalize_for_form",
 ]
