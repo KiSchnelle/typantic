@@ -144,6 +144,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# A runnable demo app: a deferred Pillow import and non-crypto randomness are
+# fine, and it is a standalone project (not part of the typantic package).
+"examples/**" = ["PLC0415", "S311", "INP001"]
 # Typer commands legitimately use boolean flag options with defaults, and a
 # serve command maps a settings model's worth of options onto flags.
 "src/typantic/_cli.py" = ["FBT001", "FBT002"]

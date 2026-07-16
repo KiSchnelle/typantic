@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test suite now runs under **branch coverage** — `pytest-cov` added as a dev
   dependency and `[tool.coverage]` configured (`branch = true` plus a shared
   `exclude_lines` set). Development-only; the published package is unaffected.
+- A runnable `typantic[web]` example app (`examples/typantic_demo`) whose two
+  settings models become both a Typer CLI and a web form. Repo-only (not shipped
+  in the wheel).
 
 ### Changed
 
