@@ -374,11 +374,21 @@ The base `import typantic` never pulls in FastAPI; only `typantic.web` (and
   <img src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-projects.png" width="49%" alt="Projects with grouped job history" />
 </p>
 
-### `add_endpoint` — a web form from a model, in process
+There are **two ways** to put a settings model on the web — pick the one that
+matches what you need:
 
-The mirror of `add_command`: register a POST endpoint that validates the request
-body into your model and calls a handler, plus a `GET …/schema` route serving the
-form-ready JSON Schema.
+| You want… | Use | What it gives you |
+|---|---|---|
+| one form + endpoint inside a FastAPI app you already run | [`add_endpoint`](#add_endpoint--one-web-form-for-a-model) | a `POST` that validates the body into your model and calls your handler, in-process |
+| a ready-made dashboard that runs your commands as tracked jobs | [`typantic web serve`](#typantic-web-serve--a-dashboard-for-your-commands) | a form per command, live log tail, output-image gallery, and searchable history |
+
+### `add_endpoint` — one web form for a model
+
+The mirror of `add_command`, but for [FastAPI](https://fastapi.tiangolo.com/):
+register a `POST` endpoint that validates the request body into your model and
+calls a handler, plus a `GET …/schema` route serving the form-ready JSON Schema.
+The handler runs **in your own process** — reach for this when you just want one
+form on an app you already have.
 
 ```python
 from fastapi import FastAPI
@@ -400,29 +410,100 @@ app = FastAPI()
 add_endpoint(app, Config, run)     # POST /run  +  GET /run/schema
 ```
 
-### `typantic web serve` — a job launcher + dashboard
+### `typantic web serve` — a dashboard for your commands
 
-A per-user launcher that discovers commands your apps register (under the
-`typantic.web_commands` entry-point group), renders a form from each command's
-`--schema`, and launches `<app> <cmd> --config …` as a tracked job — then tails
-its log live and shows any output images as thumbnails. It **shells out** rather
-than importing app code, so an app's heavy dependencies never enter the web
-process.
+`typantic web serve` is a ready-made **dashboard** that finds your commands,
+shows a form for each, and launches them as tracked background jobs — streaming
+the log and showing any output images. It **runs your CLI** (it never imports
+your code), so heavy dependencies stay out of the web process.
+
+Getting a command to show up takes three small steps. (There's a complete,
+runnable version in [`examples/typantic_demo`](examples/typantic_demo).)
+
+**1. Make it a config-file CLI command.** Any command registered with
+`add_command(..., config_file=True)` gets the `--schema` and `--config` flags the
+dashboard drives:
+
+```python
+# myapp/cli.py
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from pydantic import BaseModel, Field
+
+from typantic import add_command
+
+
+class DetectConfig(BaseModel):
+    images: Annotated[Path, Field(description="Folder of images to process.")]
+    threshold: Annotated[float, Field(default=0.5, description="Detection threshold.")]
+
+
+def detect(config: DetectConfig) -> None:
+    ...  # do the work; write any output files into the current directory
+
+
+app = typer.Typer()
+add_command(app, DetectConfig, detect, name="detect", config_file=True)
+
+
+def main() -> None:
+    app()
+```
+
+**2. Advertise it** to the dashboard by listing your commands (as plain data —
+nothing heavy is imported at discovery time) under the `typantic.web_commands`
+entry-point group:
+
+```python
+# myapp/web_meta.py
+WEB_COMMANDS = [
+    {
+        "app": "myapp",          # your console-script name
+        "command": "detect",
+        "argv": ["detect"],       # the tokens after `myapp` that select it
+        "title": "Detect objects",
+        "description": "Run detection over a folder of images.",
+        "default_backend": "local",
+    },
+]
+```
+
+```toml
+# pyproject.toml
+[project.scripts]
+myapp = "myapp.cli:main"
+
+[project.entry-points."typantic.web_commands"]
+myapp = "myapp.web_meta:WEB_COMMANDS"
+```
+
+**3. Install and serve** — in the same environment:
 
 ```bash
-typantic web serve --title "My Lab"
-#   My Lab is running. Open:
+pip install . 'typantic[web]'
+typantic web serve
+#   typantic web is running. Open:
 #     http://127.0.0.1:54321/?token=…
 ```
 
-It runs as the invoking Unix user on a free ephemeral port behind a random token
-(the Jupyter pattern); forward the port over SSH for a remote host.
+Open the printed URL: **"Detect objects"** is in the catalog. Fill the form and
+click **Launch** — the dashboard writes your values to a config file, runs
+`myapp detect --config …` as a background job, and streams its log. That's it.
 
-- **Pluggable backends** (discovered via the `typantic.web_backends` entry-point
-  group): `local`, `ssh`, `slurm`, `pbs`, `docker`, `podman`, and `apptainer`
-  ship built in; add your own by registering under the group.
-- **History with projects** — an optional SQLite index (stdlib only) groups jobs
-  under a project and answers grouped/ungrouped history queries.
+**A few things worth knowing:**
+
+- **It runs as you, on your machine**, on a free port with a token in the URL —
+  just open the URL it prints. On a remote server, forward the port over SSH (the
+  command prints the exact `ssh -L …` line). Set the page's brand with `--title`.
+- **Backends decide *where* a job runs**, chosen per launch in the form.
+  `local` (a subprocess on this machine) is the default and needs no setup;
+  `slurm` / `pbs` submit to an HPC cluster, `docker` / `podman` / `apptainer`
+  run in a container, and `ssh` runs on another host. You can register your own
+  under the `typantic.web_backends` entry-point group.
+- **Projects & history** — file jobs under a project, then search, filter, sort,
+  and page through the history (a stdlib SQLite index; nothing to set up).
 
 ## Requirements
 
