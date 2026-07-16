@@ -163,3 +163,17 @@ class JobRecord(BaseModel):
     def is_terminal(self) -> bool:
         """Whether the job has reached a final state (no more polling needed)."""
         return self.status in _TERMINAL_STATUSES
+
+
+class ProjectGroup(BaseModel):
+    """A project together with its jobs, newest first."""
+
+    project: Project
+    jobs: list[JobRecord]
+
+
+class History(BaseModel):
+    """Job history: jobs grouped by project, plus ungrouped single jobs."""
+
+    projects: list[ProjectGroup]
+    ungrouped: list[JobRecord]
