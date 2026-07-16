@@ -40,6 +40,25 @@ def _root(
     """Pydantic-driven CLI and web interfaces."""
 
 
+@app.command(
+    "web",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    add_help_option=False,
+)
+def web(ctx: typer.Context) -> None:
+    """Run the web launcher/dashboard (requires the [web] extra)."""
+    try:
+        from typantic.web.cli import app as web_app  # noqa: PLC0415
+    except ModuleNotFoundError:
+        typer.echo(
+            "The web interface requires the [web] extra: "
+            "pip install 'typantic[web]'",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    web_app(args=ctx.args, prog_name="typantic web")
+
+
 def main() -> None:
     """Run the ``typantic`` console script."""
     app()

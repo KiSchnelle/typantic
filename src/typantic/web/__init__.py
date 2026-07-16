@@ -48,6 +48,7 @@ from typantic.web.schema import (
     fetch_schema,
     normalize_for_form,
 )
+from typantic.web.server import serve
 from typantic.web.store import JobStore, default_jobs_dir
 
 __all__ = [
@@ -83,4 +84,5 @@ __all__ = [
     "load_backends",
     "make_api",
     "normalize_for_form",
+    "serve",
 ]

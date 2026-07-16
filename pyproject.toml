@@ -130,8 +130,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Typer commands legitimately use boolean flag options with defaults.
+# Typer commands legitimately use boolean flag options with defaults, and a
+# serve command maps a settings model's worth of options onto flags.
 "src/typantic/_cli.py" = ["FBT001", "FBT002"]
+"src/typantic/web/cli.py" = ["FBT001", "FBT002", "PLR0913"]
+"src/typantic/web/server.py" = ["PLR0913"]
+# FastAPI's Depends()/Query()/Header() default idiom reads as a function call.
+"src/typantic/web/api.py" = ["B008"]
 "tests/**" = [
     "S101",    # assert is fine in tests
     "D100",    # no module docstring needed
