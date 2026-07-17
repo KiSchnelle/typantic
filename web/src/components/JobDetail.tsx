@@ -341,7 +341,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
           <span className="shrink-0 text-xs font-semibold text-slate-400">Log</span>
           {job && (
             <span
-              className="truncate font-mono text-[11px] text-slate-600"
+              className="min-w-0 truncate font-mono text-[11px] text-slate-600"
               title={job.log_path}
             >
               {job.log_path}

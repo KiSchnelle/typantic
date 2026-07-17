@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A long log path no longer makes the job detail page scroll sideways. The path
+  in the log toolbar is a flex item, whose `min-width` defaults to its content
+  width, so the truncation never engaged and the row stretched the page past the
+  viewport (cutting off the last column of the output-image grid). The path now
+  shrinks and ellipsises, with the full path still on hover. Only reachable with
+  a jobs dir deep enough to overflow, which is why the default `~/.typantic/jobs`
+  never showed it.
+
 ## [0.5.0] - 2026-07-16
 
 ### Added
