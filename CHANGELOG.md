@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-17
+
 ### Added
 
 - `set`, `frozenset` and variadic `tuple[X, ...]` fields are now supported: they
