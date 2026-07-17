@@ -6,8 +6,10 @@ token in a localhost URL is the credential; the user reaches it over an SSH
 tunnel.
 """
 
+import ipaddress
 import secrets
 import socket
+from urllib.parse import quote
 
 from typantic.web.api import make_api
 from typantic.web.launcher import Launcher
@@ -15,9 +17,18 @@ from typantic.web.launcher import Launcher
 
 def find_free_port(host: str) -> int:
     """Pick a free ephemeral port on ``host`` (the Jupyter pattern)."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    family = socket.AF_INET6 if _is_ipv6(host) else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
         probe.bind((host, 0))
         return int(probe.getsockname()[1])
+
+
+def _is_ipv6(host: str) -> bool:
+    """Whether ``host`` is an IPv6 literal (``::1``, ``fe80::1`` …)."""
+    try:
+        return isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address)
+    except ValueError:
+        return False  # a hostname, not a literal
 
 
 def resolve_token(token: str | None, *, disable: bool) -> str | None:
@@ -28,9 +39,15 @@ def resolve_token(token: str | None, *, disable: bool) -> str | None:
 
 
 def dashboard_url(host: str, port: int, token: str | None) -> str:
-    """Build the localhost URL a user opens, embedding the token when set."""
-    base = f"http://{host}:{port}/"
-    return f"{base}?token={token}" if token else base
+    """Build the localhost URL a user opens, embedding the token when set.
+
+    The token is percent-encoded (an explicit ``--token`` may hold ``+``, ``&`` or
+    ``#``, which would otherwise silently truncate or corrupt the query), and an
+    IPv6 literal host is bracketed so the port stays readable as a port.
+    """
+    netloc = f"[{host}]" if _is_ipv6(host) else host
+    base = f"http://{netloc}:{port}/"
+    return f"{base}?token={quote(token, safe='')}" if token else base
 
 
 def serve(

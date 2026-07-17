@@ -38,7 +38,7 @@ class FakeRunner:
         )
 
 
-def _record(job_dir, *, scheduler_id=None):
+def _record(job_dir, *, scheduler_id=None, status=JobStatus.QUEUED):
     return JobRecord(
         id="j",
         command_key="a/b",
@@ -50,6 +50,7 @@ def _record(job_dir, *, scheduler_id=None):
         config_path=str(job_dir / "c.json"),
         log_path=str(job_dir / "job.log"),
         scheduler_id=scheduler_id,
+        status=status,
         created_at=datetime.now(UTC),
     )
 
@@ -128,11 +129,14 @@ def test_slurm_poll_without_id_is_failed(tmp_path):
 @pytest.mark.parametrize(
     ("sacct", "status", "exit_code"),
     [
-        ("RUNNING|0:0", JobStatus.RUNNING, 0),
+        # sacct prints "0:0" for a job that has not finished, so a non-terminal
+        # state must report no exit code at all -- PollResult documents exit_code
+        # as set "once finished", and the dashboard renders a 0 as "exit 0".
+        ("RUNNING|0:0", JobStatus.RUNNING, None),
+        ("PENDING|0:0", JobStatus.QUEUED, None),
         ("COMPLETED|0:0", JobStatus.DONE, 0),
         ("FAILED|1:0", JobStatus.FAILED, 1),
         ("CANCELLED by 1001|0:0", JobStatus.CANCELLED, 0),
-        ("PENDING|0:0", JobStatus.QUEUED, 0),
         ("WEIRD|x:0", JobStatus.QUEUED, None),
         ("", JobStatus.QUEUED, None),
     ],
@@ -143,6 +147,27 @@ def test_slurm_poll_states(tmp_path, sacct, status, exit_code):
     result = SlurmBackend(runner).poll(_record(tmp_path, scheduler_id="1"))
     assert result.status is status
     assert result.exit_code == exit_code
+
+
+def test_slurm_poll_keeps_last_known_status_when_the_query_fails(tmp_path):
+    # A failed query says nothing about the job. Reading its empty stdout as
+    # "not in the queue" reported a dead cluster as QUEUED forever.
+    runner = FakeRunner()
+    runner.set("sacct", stdout="", returncode=127, stderr="sacct: not found")
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    result = SlurmBackend(runner).poll(record)
+    assert result.status is JobStatus.RUNNING
+
+
+def test_slurm_poll_survives_a_missing_scheduler_tool(tmp_path):
+    # Every listed job is refreshed on read, so an exception escaping poll()
+    # would 500 the whole jobs list rather than degrade one row.
+    def raising(argv):
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    result = SlurmBackend(raising).poll(record)
+    assert result.status is JobStatus.RUNNING
 
 
 def test_slurm_cancel(tmp_path):
@@ -287,3 +312,12 @@ def test_first_nonempty_line():
     assert first_nonempty_line("\n  \nfirst\nsecond") == "first"
     assert first_nonempty_line("") is None
     assert first_nonempty_line("  \n\t") is None
+
+
+def test_slurm_unparsable_exit_code_is_none(tmp_path):
+    # sacct can print a non-numeric ExitCode field; it must not crash the poll.
+    runner = FakeRunner()
+    runner.set("sacct", stdout="COMPLETED|weird")
+    result = SlurmBackend(runner).poll(_record(tmp_path, scheduler_id="1"))
+    assert result.status is JobStatus.DONE
+    assert result.exit_code is None

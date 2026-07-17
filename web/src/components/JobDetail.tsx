@@ -8,6 +8,8 @@ import {
   fetchJob,
   fetchJobRequest,
   imageSrc,
+  isEndFrame,
+  logChunk,
   openLogSocket,
   restartJob,
   thumbSrc,
@@ -128,17 +130,6 @@ function LogAction({
   );
 }
 
-// Each WS frame is a JSON envelope: {"log": "..."} for output, {"end": {...}} at
-// the end. Wrapping the log means a log line can't be mistaken for the end frame.
-function logChunk(data: string): string {
-  try {
-    const frame = JSON.parse(data) as { log?: unknown };
-    return typeof frame.log === "string" ? frame.log : "";
-  } catch {
-    return "";
-  }
-}
-
 // The backend options actually set on a job (unset fields are hidden so the panel
 // shows only what was requested, not a wall of nulls/empties).
 function usedOptions(opts: Record<string, unknown>): [string, unknown][] {
@@ -161,9 +152,17 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   const [showRestart, setShowRestart] = useState(false);
   const [wrap, setWrap] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
   // Only auto-scroll the log when the user is already at the bottom.
   const stick = useRef(true);
+
+  // Every job action goes through here: a rejected Clone/Cancel/Delete/Restart
+  // used to be an unhandled rejection, so the button just did nothing at all.
+  const run = (action: Promise<unknown>): void => {
+    setActionError(null);
+    void action.catch((e: unknown) => setActionError(String(e)));
+  };
 
   useEffect(() => {
     let active = true;
@@ -189,14 +188,49 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
     };
   }, [id]);
 
+  // Tail the log. The server closes the socket when the job ends, so a close is
+  // only worth retrying while the job is still live — without this a dropped
+  // connection left the log silently frozen with no hint anything was wrong.
   useEffect(() => {
     setLog("");
-    const ws = openLogSocket(id);
-    ws.onmessage = (ev: MessageEvent<string>) => {
-      const chunk = logChunk(ev.data);
-      if (chunk) setLog((prev) => prev + chunk);
+    let active = true;
+    let socket: WebSocket | null = null;
+    let retry: number | undefined;
+    let attempt = 0;
+    let ended = false;
+
+    const connect = () => {
+      if (!active) return;
+      const ws = openLogSocket(id);
+      socket = ws;
+      ws.onmessage = (ev: MessageEvent<string>) => {
+        const chunk = logChunk(ev.data);
+        if (chunk) {
+          attempt = 0; // a delivered frame proves the link is healthy again
+          setLog((prev) => prev + chunk);
+        }
+        if (isEndFrame(ev.data)) ended = true;
+      };
+      ws.onclose = () => {
+        if (!active || ended) return;
+        // Back off 1s, 2s, 4s … capped, so a server restart is ridden out
+        // without hammering it.
+        const delay = Math.min(1000 * 2 ** attempt, 15_000);
+        attempt += 1;
+        retry = window.setTimeout(connect, delay);
+      };
     };
-    return () => ws.close();
+    connect();
+
+    return () => {
+      active = false;
+      if (retry) window.clearTimeout(retry);
+      // Drop onclose first: closing on unmount must not schedule a reconnect.
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
+    };
   }, [id, runEpoch]);
 
   useEffect(() => {
@@ -283,7 +317,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
           <div className="ml-auto flex gap-2">
             <Button
               onClick={() => {
-                void fetchJobRequest(id).then(cloneFrom);
+                run(fetchJobRequest(id).then(cloneFrom));
               }}
             >
               Clone
@@ -296,7 +330,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
               <Button
                 variant="danger"
                 onClick={() => {
-                  void cancelJob(id).then(setJob);
+                  run(cancelJob(id).then(setJob));
                 }}
               >
                 Cancel
@@ -305,13 +339,22 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
             <Button
               onClick={() => {
                 if (confirmDeleteJob()) {
-                  void deleteJob(id).then(closeJob);
+                  run(deleteJob(id).then(closeJob));
                 }
               }}
             >
               Delete
             </Button>
           </div>
+        </div>
+      )}
+
+      {actionError && (
+        <div
+          role="alert"
+          className="mb-4 rounded-lg border border-red-900 bg-red-950/40 px-4 py-2 text-sm text-red-200"
+        >
+          {actionError}
         </div>
       )}
 
@@ -429,7 +472,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
                 className="rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-left transition-colors hover:border-cyan-700 hover:bg-slate-800"
                 onClick={() => {
                   setShowRestart(false);
-                  void fetchJobRequest(id).then((req) => editForRestart(id, req));
+                  run(fetchJobRequest(id).then((req) => editForRestart(id, req)));
                 }}
               >
                 <div className="flex items-center gap-2 font-medium text-slate-100">
@@ -445,10 +488,12 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
                 className="rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-left transition-colors hover:border-red-700 hover:bg-slate-800"
                 onClick={() => {
                   setShowRestart(false);
-                  void restartJob(id).then((j) => {
-                    setJob(j);
-                    setRunEpoch((e) => e + 1);
-                  });
+                  run(
+                    restartJob(id).then((j) => {
+                      setJob(j);
+                      setRunEpoch((e) => e + 1);
+                    }),
+                  );
                 }}
               >
                 <div className="font-medium text-red-200">Restart as-is</div>

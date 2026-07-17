@@ -129,7 +129,7 @@ def thumbnail(source: Path, width: int) -> Path | None:
     can't be written, so the caller falls back to the full-resolution original.
     """
     # Deferred so importing typantic.web doesn't pull in Pillow until needed.
-    from PIL import Image  # noqa: PLC0415
+    from PIL import Image, ImageOps  # noqa: PLC0415
 
     try:
         mtime = source.stat().st_mtime_ns
@@ -146,7 +146,22 @@ def thumbnail(source: Path, width: int) -> Path | None:
         try:
             with Image.open(source) as img:
                 img.draft("RGB", (width, width))
-                rgb = img.convert("RGB")
+                # A browser shows the full-size image already rotated by its EXIF
+                # tag and composited over the page. Match both, or the thumbnail
+                # disagrees with the image it links to: convert("RGB") alone drops
+                # alpha and keeps the colour beneath it, turning a transparent PNG
+                # (black under a clear background) into a solid black tile.
+                upright = ImageOps.exif_transpose(img) or img
+                if upright.mode in ("RGBA", "LA", "PA") or "transparency" in (
+                    upright.info
+                ):
+                    canvas = Image.new("RGBA", upright.size, (255, 255, 255, 255))
+                    rgb = Image.alpha_composite(
+                        canvas,
+                        upright.convert("RGBA"),
+                    ).convert("RGB")
+                else:
+                    rgb = upright.convert("RGB")
                 rgb.thumbnail((width, width), Image.Resampling.LANCZOS)
                 rgb.save(tmp, "WEBP", quality=80, method=4)
             Path(tmp).replace(cached)

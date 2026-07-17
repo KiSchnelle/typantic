@@ -109,6 +109,9 @@ class ProcessBackend:
                 ["/bin/sh", "-c", script],
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                # Without this the job inherits the server's stdin and a command
+                # that reads it would consume the operator's terminal input.
+                stdin=subprocess.DEVNULL,
                 cwd=job_dir,
                 start_new_session=True,
             )

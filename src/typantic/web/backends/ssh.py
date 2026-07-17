@@ -23,7 +23,13 @@ class SshOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    host: str = Field(description="Remote host to ssh into.")
+    host: str = Field(
+        description="Remote host to ssh into.",
+        # A leading '-' would be read by ssh as an option rather than a
+        # destination (e.g. -oProxyCommand=…), turning a host field into an
+        # argument-injection point.
+        pattern=r"^[^-]",
+    )
     user: str | None = Field(default=None, description="SSH user (else ssh config).")
     port: int | None = Field(default=None, ge=1, le=65535, description="SSH port.")
     identity: str | None = Field(default=None, description="Path to an identity key.")

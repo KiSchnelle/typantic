@@ -66,6 +66,28 @@ jobs:
               raise SystemExit("typantic.web imported without the [web] extra")
           PY
 
+  # The [web] extra must install and work on its own. The dev group happens to
+  # pull the same packages, so the test suite never proves the extra itself is
+  # complete — only this does.
+  web-extra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - run: uv sync --frozen --no-dev --extra web
+      - name: typantic[web] imports and serves
+        run: |
+          uv run --no-sync python - <<'PY'
+          from typantic.web import Launcher, JobStore, make_api, serve  # noqa: F401
+
+          app = make_api(Launcher(JobStore()), dashboard=False)
+          routes = {getattr(r, "path", None) for r in app.routes}
+          assert "/api/jobs" in routes, routes
+          print("typantic[web] OK:", len(routes), "routes")
+          PY
+
   # The dashboard SPA must type-check and build.
   frontend:
     runs-on: ubuntu-latest

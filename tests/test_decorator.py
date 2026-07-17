@@ -1,5 +1,7 @@
 """Tests for the pydantic_to_typer decorator."""
 
+import datetime
+import decimal
 import inspect
 import re
 import typing
@@ -11,11 +13,26 @@ from typing import Annotated, ClassVar, Literal, get_args
 import annotated_types
 import pytest
 import typer
-from pydantic import AfterValidator, BaseModel, Field, SecretStr
+from pydantic import (
+    AfterValidator,
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretBytes,
+    SecretStr,
+)
+from pydantic.alias_generators import to_camel
 from typer.testing import CliRunner
 
 from typantic import add_command, pydantic_to_typer
-from typantic._decorator import _collect_flat, _numeric_bounds, _panel_for_field
+from typantic._decorator import (
+    _collect_flat,
+    _factory_takes_data,
+    _Leaf,
+    _numeric_bounds,
+    _panel_for_field,
+)
 from typantic._introspect import extract_base_type
 
 runner = CliRunner()
@@ -132,6 +149,23 @@ def _make_app(
         results.append(config)
 
     _ = cmd  # registered via decorator; silence unused-function warnings
+
+    return app, results
+
+
+def _make_app_config(
+    model_cls: type[BaseModel],
+) -> tuple[typer.Typer, list[BaseModel]]:
+    """Return (app, captured_results_list) for a ``config_file=True`` command."""
+    app = typer.Typer()
+    results: list[BaseModel] = []
+
+    @app.command()
+    @pydantic_to_typer(model_cls, config_file=True)
+    def cmd(config: BaseModel) -> None:
+        results.append(config)
+
+    _ = cmd
 
     return app, results
 
@@ -1089,9 +1123,25 @@ def test_numeric_bounds_ignores_non_ge_le_constraints() -> None:
 
 
 def test_collect_flat_skips_cli_names_absent_from_kwargs() -> None:
-    mapping = [("a", ("a",)), ("b", ("b",))]
+    mapping = [_Leaf("a", ("a",), ("a",), ()), _Leaf("b", ("b",), ("b",), ())]
     # "b" is not among the supplied kwargs, so it is skipped, not defaulted in.
-    assert _collect_flat(mapping, {"a": 1}) == {"a": 1}
+    assert _collect_flat(mapping, {"a": 1}, set()) == {"a": 1}
+
+
+def test_collect_flat_keys_values_by_input_key_not_field_name() -> None:
+    # The flag follows the field name; the value is re-nested under the alias, so
+    # an aliased model actually receives it.
+    mapping = [_Leaf("threshold", ("thr",), ("threshold",), ())]
+    assert _collect_flat(mapping, {"threshold": 0.9}, set()) == {"thr": 0.9}
+
+
+def test_collect_flat_drops_deferred_none_so_pydantic_runs_the_factory() -> None:
+    # A validated-data default_factory cannot run at the Click layer, so its
+    # untouched None is dropped rather than passed through as a real value.
+    mapping = [_Leaf("b", ("b",), ("b",), ())]
+    assert _collect_flat(mapping, {"b": None}, {"b"}) == {}
+    # An explicitly-supplied value still wins.
+    assert _collect_flat(mapping, {"b": 7}, {"b"}) == {"b": 7}
 
 
 def test_extract_base_type_passes_through_parameterless_generics() -> None:
@@ -1099,3 +1149,474 @@ def test_extract_base_type_passes_through_parameterless_generics() -> None:
     # than re-wrapped.
     assert extract_base_type(typing.List) is typing.List  # noqa: UP006
     assert extract_base_type(typing.Tuple) is typing.Tuple  # noqa: UP006
+
+
+# ---------------------------------------------------------------------------
+# Tests: field aliases
+#
+# Pydantic populates by alias, not by field name. Keying the model kwargs off
+# the field name made an aliased field either unrunnable (required) or silently
+# defaulted (optional) -- the CLI accepted the flag and threw the value away.
+# ---------------------------------------------------------------------------
+
+
+class TestAliases:
+    def test_defaulted_alias_receives_the_passed_value(self) -> None:
+        class Cfg(BaseModel):
+            threshold: Annotated[
+                float,
+                Field(default=0.5, alias="thr", kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--threshold", "0.9"])
+        assert result.exit_code == 0
+        # Not 0.5: the value must not be silently discarded.
+        assert seen[0].threshold == 0.9
+
+    def test_required_alias_is_runnable(self) -> None:
+        class Cfg(BaseModel):
+            real: Annotated[int, Field(alias="aka", kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--real", "5"])
+        assert result.exit_code == 0
+        assert seen[0].real == 5
+
+    def test_validation_alias_is_used_over_the_serialisation_alias(self) -> None:
+        class Cfg(BaseModel):
+            out: Annotated[
+                str,
+                Field(
+                    default="d",
+                    validation_alias="v_in",
+                    serialization_alias="s_out",
+                    kw_only=True,
+                ),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--out", "x"])
+        assert result.exit_code == 0
+        assert seen[0].out == "x"
+
+    def test_alias_generator_maps_every_field(self) -> None:
+        class Cfg(BaseModel):
+            model_config = ConfigDict(alias_generator=to_camel)
+
+            output_dir: Annotated[str, Field(default="d", kw_only=True)]
+            max_workers: Annotated[int, Field(default=1, kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--output-dir", "x", "--max-workers", "8"])
+        assert result.exit_code == 0
+        assert (seen[0].output_dir, seen[0].max_workers) == ("x", 8)
+
+    def test_populate_by_name_keeps_the_field_name(self) -> None:
+        class Cfg(BaseModel):
+            model_config = ConfigDict(populate_by_name=True)
+
+            threshold: Annotated[
+                float,
+                Field(default=0.5, alias="thr", kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--threshold", "0.9"])
+        assert result.exit_code == 0
+        assert seen[0].threshold == 0.9
+
+    def test_nested_aliased_field_receives_the_passed_value(self) -> None:
+        class Inner(BaseModel):
+            host: Annotated[str, Field(default="localhost", alias="h", kw_only=True)]
+
+        class Cfg(BaseModel):
+            db: Annotated[Inner, Field(default_factory=Inner, alias="database")]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--db-host", "prod"])
+        assert result.exit_code == 0
+        assert seen[0].db.host == "prod"
+
+    def test_alias_choices_is_rejected_at_decoration_with_a_clear_error(self) -> None:
+        class Cfg(BaseModel):
+            x: Annotated[
+                int,
+                Field(default=1, validation_alias=AliasChoices("a", "b"), kw_only=True),
+            ]
+
+        with pytest.raises(ValueError, match="AliasChoices"):
+            pydantic_to_typer(Cfg)(lambda config: config)
+
+    def test_alias_choices_is_allowed_when_populate_by_name(self) -> None:
+        # The field name is a valid input key here, so the alias is never needed.
+        class Cfg(BaseModel):
+            model_config = ConfigDict(populate_by_name=True)
+
+            x: Annotated[
+                int,
+                Field(default=1, validation_alias=AliasChoices("a", "b"), kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--x", "5"])
+        assert result.exit_code == 0
+        assert seen[0].x == 5
+
+
+# ---------------------------------------------------------------------------
+# Tests: nested-model defaults
+# ---------------------------------------------------------------------------
+
+
+class _Database(BaseModel):
+    host: Annotated[str, Field(default="localhost", kw_only=True)]
+    port: Annotated[int, Field(default=5432, kw_only=True)]
+
+
+class TestNestedDefaults:
+    def test_outer_default_instance_wins_over_the_inner_class_defaults(self) -> None:
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database,
+                Field(default=_Database(host="prod", port=9999), kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0
+        # Not localhost:5432 -- the field's own default must not be discarded.
+        assert (seen[0].db.host, seen[0].db.port) == ("prod", 9999)
+
+    def test_help_advertises_the_outer_default(self) -> None:
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database,
+                Field(default=_Database(host="prod", port=9999), kw_only=True),
+            ]
+
+        app, _ = _make_app(Cfg)
+        output = _plain(runner.invoke(app, ["--help"]).output)
+        assert "prod" in output
+        assert "localhost" not in output
+
+    def test_overriding_one_leaf_keeps_the_others_from_the_outer_default(self) -> None:
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database,
+                Field(default=_Database(host="prod", port=9999), kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--db-host", "staging"])
+        assert result.exit_code == 0
+        assert (seen[0].db.host, seen[0].db.port) == ("staging", 9999)
+
+    def test_a_required_nested_field_still_uses_the_inner_defaults(self) -> None:
+        class Cfg(BaseModel):
+            db: _Database
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0
+        assert (seen[0].db.host, seen[0].db.port) == ("localhost", 5432)
+
+    def test_default_factory_instance_also_seeds_the_leaves(self) -> None:
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database,
+                Field(default_factory=lambda: _Database(host="made"), kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0
+        assert seen[0].db.host == "made"
+
+
+# ---------------------------------------------------------------------------
+# Tests: secrets, numeric bounds, flag collisions, --config errors
+# ---------------------------------------------------------------------------
+
+
+class TestSecrets:
+    def test_secret_bytes_is_settable(self) -> None:
+        class Cfg(BaseModel):
+            token: Annotated[
+                SecretBytes,
+                Field(default=SecretBytes(b"x"), kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--token", "hunter2"])
+        assert result.exit_code == 0
+        assert seen[0].token.get_secret_value() == b"hunter2"
+
+    def test_optional_secret_is_settable(self) -> None:
+        class Cfg(BaseModel):
+            token: Annotated[SecretStr | None, Field(default=None, kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--token", "hunter2"])
+        assert result.exit_code == 0
+        assert seen[0].token is not None
+        assert seen[0].token.get_secret_value() == "hunter2"
+
+    def test_optional_secret_defaults_to_none(self) -> None:
+        class Cfg(BaseModel):
+            token: Annotated[SecretStr | None, Field(default=None, kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, []).exit_code == 0
+        assert seen[0].token is None
+
+    def test_secret_value_is_not_echoed_in_help(self) -> None:
+        class Cfg(BaseModel):
+            token: Annotated[
+                SecretStr,
+                Field(default=SecretStr("swordfish"), kw_only=True),
+            ]
+
+        app, _ = _make_app(Cfg)
+        assert "swordfish" not in _plain(runner.invoke(app, ["--help"]).output)
+
+
+class TestNumericBoundPrecision:
+    def test_int_bounds_keep_full_precision(self) -> None:
+        # Above 2**53 a float cannot hold the bound exactly, and rounding it the
+        # wrong way rejects the only value Pydantic would accept.
+        big = 2**53 + 1
+
+        class Cfg(BaseModel):
+            n: Annotated[int, Field(default=big, ge=big, le=big, kw_only=True)]
+
+        assert _numeric_bounds(Cfg.model_fields["n"]) == (big, big)
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--n", str(big)])
+        assert result.exit_code == 0
+        assert seen[0].n == big
+
+    def test_decimal_bounds_are_passed_to_click(self) -> None:
+        class Cfg(BaseModel):
+            d: Annotated[
+                decimal.Decimal,
+                Field(default=decimal.Decimal("1.5"), ge=decimal.Decimal("1.0")),
+            ]
+
+        assert _numeric_bounds(Cfg.model_fields["d"]) == (1.0, None)
+
+    def test_non_numeric_bound_is_ignored(self) -> None:
+        # A Ge on a non-numeric (e.g. a date) has no Click min/max equivalent.
+        class Cfg(BaseModel):
+            when: Annotated[
+                datetime.date,
+                Field(default=datetime.date(2026, 1, 1), ge=datetime.date(2020, 1, 1)),
+            ]
+
+        assert _numeric_bounds(Cfg.model_fields["when"]) == (None, None)
+
+
+class TestFlagCollisions:
+    def test_two_fields_claiming_one_flag_is_rejected(self) -> None:
+        class Cfg(BaseModel):
+            first: Annotated[
+                str,
+                Field(default="a", kw_only=True, json_schema_extra={"cli_name": "--o"}),
+            ]
+            second: Annotated[
+                str,
+                Field(default="b", kw_only=True, json_schema_extra={"cli_name": "--o"}),
+            ]
+
+        with pytest.raises(ValueError, match="CLI flag collision"):
+            pydantic_to_typer(Cfg)(lambda config: config)
+
+    def test_two_fields_sharing_a_short_flag_is_rejected(self) -> None:
+        class Cfg(BaseModel):
+            alpha: Annotated[
+                str,
+                Field(default="a", kw_only=True, json_schema_extra={"cli_short": "-x"}),
+            ]
+            beta: Annotated[
+                str,
+                Field(default="b", kw_only=True, json_schema_extra={"cli_short": "-x"}),
+            ]
+
+        with pytest.raises(ValueError, match="CLI flag collision"):
+            pydantic_to_typer(Cfg)(lambda config: config)
+
+    def test_distinct_flags_are_accepted(self) -> None:
+        class Cfg(BaseModel):
+            alpha: Annotated[
+                str,
+                Field(default="a", kw_only=True, json_schema_extra={"cli_short": "-a"}),
+            ]
+            beta: Annotated[
+                str,
+                Field(default="b", kw_only=True, json_schema_extra={"cli_short": "-b"}),
+            ]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["-a", "x", "-b", "y"]).exit_code == 0
+        assert (seen[0].alpha, seen[0].beta) == ("x", "y")
+
+    def test_an_argument_claims_no_flag(self) -> None:
+        # Two positional arguments share no flag, so they must not collide.
+        class Cfg(BaseModel):
+            src: Annotated[str, Field(kw_only=False)]
+            dst: Annotated[str, Field(kw_only=False)]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["a", "b"]).exit_code == 0
+        assert (seen[0].src, seen[0].dst) == ("a", "b")
+
+
+class TestConfigFileErrors:
+    def test_missing_config_file_is_a_parameter_error(self, tmp_path: Path) -> None:
+        # Not a raw FileNotFoundError traceback.
+        app, _ = _make_app_config(SimpleModel)
+        result = runner.invoke(app, ["--config", str(tmp_path / "nope.yaml")])
+        assert result.exit_code == 2
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Invalid value" in _plain(result.output)
+
+    def test_unsupported_suffix_is_a_parameter_error(self, tmp_path: Path) -> None:
+        bad = tmp_path / "cfg.txt"
+        bad.write_text("name: x")
+        app, _ = _make_app_config(SimpleModel)
+        result = runner.invoke(app, ["--config", str(bad)])
+        assert result.exit_code == 2
+        assert "Unsupported config file type" in _plain(result.output)
+
+
+def test_bool_constraint_is_not_a_numeric_bound() -> None:
+    # bool is an int subclass; a bool constraint is not a Click min/max.
+    class M(BaseModel):
+        flag: Annotated[bool, Field(default=False, ge=False)]
+
+    assert _numeric_bounds(M.model_fields["flag"]) == (None, None)
+
+
+def test_factory_without_an_introspectable_signature_is_not_data_taking() -> None:
+    # A C builtin (dict) has no signature; it must not be mistaken for a
+    # validated-data factory and have its value dropped.
+    assert _factory_takes_data(dict) is False
+
+    class M(BaseModel):
+        tags: Annotated[list[str], Field(default_factory=list, kw_only=True)]
+
+    app, seen = _make_app(M)
+    assert runner.invoke(app, []).exit_code == 0
+    assert seen[0].tags == []
+
+
+def test_one_arg_callable_with_a_default_is_not_data_taking() -> None:
+    # Pydantic requires the single parameter to have no default, so a callable
+    # like this is an ordinary zero-arg factory as far as the CLI is concerned.
+    assert _factory_takes_data(lambda data=None: data) is False
+
+
+
+class TestValidatedDataFactory:
+    # Pydantic 2.10+ lets a default_factory take the validated data. Click calls
+    # a default with no arguments, so handing it such a factory raised TypeError
+    # on every invocation.
+
+    @staticmethod
+    def _model() -> type[BaseModel]:
+        class Cfg(BaseModel):
+            a: Annotated[int, Field(default=2, kw_only=True)]
+            b: Annotated[
+                int,
+                Field(default_factory=lambda data: data["a"] * 10, kw_only=True),
+            ]
+
+        return Cfg
+
+    def test_factory_runs_inside_pydantic(self) -> None:
+        app, seen = _make_app(self._model())
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0
+        assert seen[0].b == 20
+
+    def test_factory_sees_other_flags(self) -> None:
+        app, seen = _make_app(self._model())
+        assert runner.invoke(app, ["--a", "3"]).exit_code == 0
+        assert seen[0].b == 30
+
+    def test_an_explicit_value_still_wins(self) -> None:
+        app, seen = _make_app(self._model())
+        assert runner.invoke(app, ["--b", "7"]).exit_code == 0
+        assert seen[0].b == 7
+
+    def test_help_shows_the_runtime_sentinel(self) -> None:
+        app, _ = _make_app(self._model())
+        output = " ".join(_plain(runner.invoke(app, ["--help"]).output).split())
+        assert "computed at runtime" in output
+
+
+def test_float_bounds_are_passed_through() -> None:
+    class Cfg(BaseModel):
+        ratio: Annotated[float, Field(default=0.5, ge=0.0, le=1.0, kw_only=True)]
+
+    assert _numeric_bounds(Cfg.model_fields["ratio"]) == (0.0, 1.0)
+
+
+def test_nested_default_seeds_a_deeper_level() -> None:
+    # The parent instance's value is threaded down through every level, so a
+    # two-deep nested default is honoured too.
+    class Leaf(BaseModel):
+        v: Annotated[str, Field(default="leaf-default", kw_only=True)]
+
+    class Mid(BaseModel):
+        leaf: Annotated[Leaf, Field(default=Leaf(v="mid-says"), kw_only=True)]
+
+    class Cfg(BaseModel):
+        mid: Annotated[Mid, Field(default=Mid(leaf=Leaf(v="top-says")), kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    assert runner.invoke(app, []).exit_code == 0
+    # The outermost default wins over both inner ones.
+    assert seen[0].mid.leaf.v == "top-says"
+
+
+def test_nested_factory_returning_a_non_model_falls_back() -> None:
+    # A factory that does not produce an instance leaves the class's own field
+    # defaults in place rather than seeding from a non-model.
+    class Inner(BaseModel):
+        x: Annotated[int, Field(default=1, kw_only=True)]
+
+    class Cfg(BaseModel):
+        inner: Annotated[Inner, Field(default_factory=dict, kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    assert runner.invoke(app, []).exit_code == 0
+    assert seen[0].inner.x == 1
+
+
+def test_set_and_variadic_tuple_map_to_a_repeatable_flag() -> None:
+    # Typer renders only list among the collections, so these map to list[X] and
+    # Pydantic coerces the result back to the declared type.
+    assert extract_base_type(set[str]) == list[str]
+    assert extract_base_type(frozenset[int]) == list[int]
+    assert extract_base_type(tuple[str, ...]) == list[str]
+    # A fixed tuple keeps its shape (Typer renders it as a multi-value option).
+    assert extract_base_type(tuple[int, int]) == tuple[int, int]
+
+
+def test_set_field_round_trips_through_the_cli() -> None:
+    class Cfg(BaseModel):
+        tags: Annotated[set[str], Field(default={"a"}, kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    assert runner.invoke(app, ["--tags", "x", "--tags", "y"]).exit_code == 0
+    assert seen[0].tags == {"x", "y"}
+
+
+def test_variadic_tuple_field_round_trips_through_the_cli() -> None:
+    class Cfg(BaseModel):
+        parts: Annotated[tuple[str, ...], Field(default=("a",), kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    assert runner.invoke(app, ["--parts", "x", "--parts", "y"]).exit_code == 0
+    assert seen[0].parts == ("x", "y")

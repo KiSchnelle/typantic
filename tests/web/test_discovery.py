@@ -1,3 +1,4 @@
+import logging
 import types
 
 from typantic.web import discovery as disc
@@ -57,12 +58,15 @@ def test_discover_skips_malformed_command(monkeypatch):
     assert keys == ["xapp/run"]
 
 
-def test_command_catalog_groups_by_app(monkeypatch):
+def test_duplicate_keys_are_dropped(monkeypatch, caplog):
+    # Two apps registering the same app/command key would both show in the
+    # catalog while every lookup resolved to only one of them.
     entries = [
-        _entry("e", lambda: [_cmd("app1", "a"), _cmd("app1", "b"), _cmd("app2", "c")]),
+        _entry("one", lambda: [_cmd("app1", "run")]),
+        _entry("two", lambda: [_cmd("app1", "run")]),
     ]
     _patch_entries(monkeypatch, entries)
-    catalog = disc.command_catalog()
-    assert set(catalog) == {"app1", "app2"}
-    assert [m.command for m in catalog["app1"]] == ["a", "b"]
-    assert [m.command for m in catalog["app2"]] == ["c"]
+    with caplog.at_level(logging.WARNING):
+        found = disc.discover_commands()
+    assert [m.key for m in found] == ["app1/run"]
+    assert "duplicate command" in caplog.text

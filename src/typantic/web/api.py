@@ -8,8 +8,9 @@ serves both.
 """
 
 import asyncio
-import os
-from collections.abc import Sequence
+import codecs
+import contextlib
+from collections.abc import Iterator, Sequence
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
@@ -28,12 +29,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from typantic.web import gallery
+from typantic.web import filesystem, gallery
+from typantic.web.backends.scheduler import SchedulerError
+from typantic.web.filesystem import FileSystemError
 from typantic.web.launcher import (
     JobNotTerminalError,
     Launcher,
     UnknownBackendError,
     UnknownCommandError,
+    UnknownProjectError,
 )
 from typantic.web.models import (
     CommandMeta,
@@ -52,6 +56,31 @@ from typantic.web.security import token_ok
 
 _SPA_DIR = Path(__file__).parent / "web_dist"
 _WS_POLICY_VIOLATION = 1008
+
+# Domain error -> HTTP status. Kept in one place so every route that can raise
+# them answers the same way; they used to be hand-mapped per route, and had drifted.
+_ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
+    (UnknownCommandError, 404),
+    (UnknownBackendError, 400),
+    (UnknownProjectError, 400),
+    (JobNotTerminalError, 409),
+    (SchemaError, 502),
+    (SchedulerError, 502),
+    (FileSystemError, 400),
+    (ValidationError, 422),
+)
+
+
+@contextlib.contextmanager
+def _domain_errors() -> Iterator[None]:
+    """Translate the launcher's domain errors into HTTP responses."""
+    try:
+        yield
+    except tuple(exc for exc, _ in _ERROR_STATUS) as exc:
+        status = next(
+            code for kind, code in _ERROR_STATUS if isinstance(exc, kind)
+        )
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 
 def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure is trivial
@@ -106,34 +135,18 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
 
     @app.get("/api/commands/{app_name}/{command}/schema", dependencies=guard)
     def command_schema(app_name: str, command: str) -> dict[str, object]:
-        try:
+        with _domain_errors():
             return launcher.schema_for(f"{app_name}/{command}")
-        except UnknownCommandError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except SchemaError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/api/launch", dependencies=guard)
     def launch(request: LaunchRequest) -> JobRecord:
-        try:
+        with _domain_errors():
             return launcher.launch(request)
-        except UnknownCommandError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except UnknownBackendError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/preview", dependencies=guard)
     def preview(request: LaunchRequest) -> LaunchPreview:
-        try:
+        with _domain_errors():
             return launcher.preview(request)
-        except UnknownCommandError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except UnknownBackendError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/jobs", dependencies=guard)
     def list_jobs(  # noqa: PLR0913 - filter/sort/page query params
@@ -191,12 +204,8 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
 
     @app.post("/api/jobs/{job_id}/restart", dependencies=guard)
     def restart_job(job_id: str, request: LaunchRequest | None = None) -> JobRecord:
-        try:
+        with _domain_errors():
             record = launcher.restart(job_id, request)
-        except JobNotTerminalError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except (UnknownCommandError, UnknownBackendError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if record is None:
             raise HTTPException(status_code=404, detail="No such job.")
         return record
@@ -255,11 +264,12 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
 
     @app.get("/api/fs", dependencies=guard)
     def browse(path: Annotated[str | None, Query()] = None) -> dict[str, object]:
-        return _browse_directory(path)
+        return filesystem.browse_directory(path)
 
     @app.post("/api/fs/mkdir", dependencies=guard)
     def make_dir(request: MakeDirRequest) -> dict[str, object]:
-        return _make_directory(request.path, request.name)
+        with _domain_errors():
+            return filesystem.make_directory(request.path, request.name)
 
     @app.websocket("/ws/jobs/{job_id}/log")
     async def stream_log(websocket: WebSocket, job_id: str) -> None:
@@ -282,85 +292,32 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
     return app
 
 
-def _is_dir(path: Path) -> bool:
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
+_LOG_CHUNK_BYTES = 1 << 20
+"""Most bytes read (and framed) per tail step, so a huge log streams in pieces."""
 
 
-_BROWSE_ENTRY_CAP = 50000
-"""Payload ceiling for one directory listing (the picker virtualises the list)."""
+def _read_log_from(
+    path: Path,
+    offset: int,
+    decoder: codecs.IncrementalDecoder,
+) -> tuple[str, int]:
+    """Read up to one chunk of the log from ``offset``.
 
+    Bounded so a multi-gigabyte log is streamed rather than loaded whole: reading
+    to EOF would hold the entire file (and a second copy through the JSON frame)
+    in memory at once. ``decoder`` carries any partial UTF-8 sequence across the
+    chunk boundary, which decoding each chunk independently would corrupt.
 
-def _browse_directory(path: str | None) -> dict[str, object]:
-    """List a directory for the path picker (falls back to home on a bad path)."""
-    raw = Path(path).expanduser() if path else Path.home()
-    if raw.is_file():
-        raw = raw.parent
-    if not _is_dir(raw):
-        raw = Path.home()
-    base = raw.resolve()
-
-    listed: list[tuple[bool, str]] = []
-    error: str | None = None
-    try:
-        with os.scandir(base) as scan:
-            for entry in scan:
-                try:
-                    is_dir = entry.is_dir()
-                except OSError:
-                    is_dir = False
-                listed.append((is_dir, entry.name))
-    except OSError as exc:
-        error = str(exc)
-
-    listed.sort(key=lambda item: (not item[0], item[1].lower()))
-    entries = [
-        {"name": name, "is_dir": is_dir} for is_dir, name in listed[:_BROWSE_ENTRY_CAP]
-    ]
-    parent = str(base.parent) if base.parent != base else None
-    return {
-        "path": str(base),
-        "parent": parent,
-        "entries": entries,
-        "error": error,
-        "total": len(listed),
-        "truncated": len(listed) > _BROWSE_ENTRY_CAP,
-    }
-
-
-# Reserved / traversal-prone names, plus separators, that must never be a single
-# new-folder component. Rejecting these keeps ``parent / name`` inside ``parent``.
-_INVALID_DIR_NAMES = frozenset({"", ".", ".."})
-_INVALID_DIR_CHARS = frozenset({"/", "\\", "\x00"})
-
-
-def _make_directory(path: str, name: str) -> dict[str, object]:
-    """Create one folder ``name`` under ``path`` and return its (empty) listing."""
-    clean = name.strip()
-    if clean in _INVALID_DIR_NAMES or _INVALID_DIR_CHARS & set(clean):
-        raise HTTPException(status_code=400, detail="Invalid folder name.")
-    parent = Path(path).expanduser()
-    if not _is_dir(parent):
-        raise HTTPException(status_code=400, detail="Parent folder does not exist.")
-    target = parent / clean
-    try:
-        target.mkdir(parents=False, exist_ok=True)
-    except OSError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _browse_directory(str(target))
-
-
-def _read_log_from(path: Path, offset: int) -> tuple[str, int]:
-    """Read the log from ``offset``; return the new text and the next offset."""
+    Returns:
+        The decoded text and the offset to resume from.
+    """
     try:
         with path.open("rb") as handle:
             handle.seek(offset)
-            data = handle.read()
+            data = handle.read(_LOG_CHUNK_BYTES)
     except OSError:
         return "", offset
-    return data.decode("utf-8", "replace"), offset + len(data)
+    return decoder.decode(data), offset + len(data)
 
 
 async def _tail_log(
@@ -375,18 +332,20 @@ async def _tail_log(
 
     Every frame is a JSON envelope (``{"log": …}`` / ``{"end": …}``), so a log
     line can never be mistaken for the end signal.
+
+    This is the only async path in the app -- every route is a sync ``def`` that
+    runs in a threadpool -- so its blocking work (reading the log, and a
+    ``launcher.get`` that may shell out to a scheduler) is handed to a thread.
+    Run inline, one slow ``sacct`` would stall the event loop for every client.
     """
     offset = 0
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
     try:
         while True:
-            text, offset = _read_log_from(log_path, offset)
-            if text:
-                await websocket.send_json({"log": text})
-            record = launcher.get(job_id)
+            offset = await _drain(websocket, log_path, offset, decoder)
+            record = await asyncio.to_thread(launcher.get, job_id)
             if record is None or record.is_terminal:
-                tail, _ = _read_log_from(log_path, offset)
-                if tail:
-                    await websocket.send_json({"log": tail})
+                await _drain(websocket, log_path, offset, decoder)
                 status = record.status if record is not None else "unknown"
                 await websocket.send_json({"end": {"status": status}})
                 break
@@ -394,3 +353,24 @@ async def _tail_log(
     except WebSocketDisconnect:
         return
     await websocket.close()
+
+
+async def _drain(
+    websocket: WebSocket,
+    log_path: Path,
+    offset: int,
+    decoder: codecs.IncrementalDecoder,
+) -> int:
+    """Send every chunk appended since ``offset``; return the new offset."""
+    while True:
+        text, new_offset = await asyncio.to_thread(
+            _read_log_from,
+            log_path,
+            offset,
+            decoder,
+        )
+        if text:
+            await websocket.send_json({"log": text})
+        if new_offset == offset:
+            return offset
+        offset = new_offset

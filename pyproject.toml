@@ -4,6 +4,9 @@ version = "0.5.0"
 description = "Type-safe interfaces from Pydantic v2 models: Typer CLIs, plus an optional FastAPI web launcher + dashboard."
 readme = "README.md"
 license = "MIT"
+# Ship the licence text itself, not just the SPDX expression: MIT asks that the
+# notice travel with the code, and uv_build includes no licence file by default.
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 authors = [
     { name = "Kilian Schnelle", email = "kilian.schnelle@kischnelle.dev" },
@@ -106,11 +109,14 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 fail_under = 100
+# Deliberately minimal. Every pattern here is a hole in the 100% gate, so only
+# ones that earn their keep are listed: the bare `...` bodies of the Protocol in
+# web/backends/base.py, plus coverage.py's own escape hatch (which the project
+# does not currently use anywhere). `if TYPE_CHECKING:` and `raise
+# NotImplementedError` matched nothing, and `@abstractmethod` was redundant --
+# its docstring-only bodies are counted and covered without it.
 exclude_lines = [
     "pragma: no cover",
-    "if TYPE_CHECKING:",
-    "raise NotImplementedError",
-    "@(abc\\.)?abstractmethod",
     "^\\s*\\.\\.\\.$",
 ]
 

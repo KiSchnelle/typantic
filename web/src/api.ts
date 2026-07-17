@@ -155,3 +155,25 @@ export function openLogSocket(id: string): WebSocket {
   const q = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
   return new WebSocket(`${proto}://${window.location.host}/ws/jobs/${id}/log${q}`);
 }
+
+// Each frame on the log socket is a JSON envelope: {"log": "..."} for output,
+// {"end": {...}} once the job is terminal. Wrapping the log in an envelope means
+// a log line can never be mistaken for the end signal.
+export function logChunk(data: string): string {
+  try {
+    const frame = JSON.parse(data) as { log?: unknown };
+    return typeof frame.log === "string" ? frame.log : "";
+  } catch {
+    return "";
+  }
+}
+
+// The server closes the socket after the {"end": ...} frame; that close is
+// expected and must not trigger a reconnect.
+export function isEndFrame(data: string): boolean {
+  try {
+    return (JSON.parse(data) as { end?: unknown }).end !== undefined;
+  } catch {
+    return false;
+  }
+}

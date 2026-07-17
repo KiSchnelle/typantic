@@ -10,6 +10,7 @@ from typantic.web.launcher import (
     Launcher,
     UnknownBackendError,
     UnknownCommandError,
+    UnknownProjectError,
 )
 from typantic.web.models import CommandMeta, JobStatus, LaunchRequest
 from typantic.web.store import JobStore
@@ -58,10 +59,9 @@ def _request(**over):
 # --- discovery / lookup ---
 
 
-def test_commands_and_backend_keys(wired):
+def test_commands(wired):
     launcher, _, _ = wired
     assert [m.key for m in launcher.commands] == ["app/run"]
-    assert launcher.backend_keys == ["local"]
 
 
 def test_unknown_command(wired):
@@ -134,13 +134,16 @@ def test_refresh_updates_status(wired):
     assert refreshed.exit_code == 0
 
 
-def test_refresh_external_cancel_keeps_no_finish_time(wired):
+def test_refresh_external_cancel_stamps_the_finish_time(wired):
+    # A job cancelled outside the dashboard (scancel, kill) reaches CANCELLED
+    # through refresh, and is just as finished as one that failed -- it must not
+    # be left showing no finish time at all.
     launcher, backend, _ = wired
     record = launcher.launch(_request())
     backend.poll_result = PollResult(status=JobStatus.CANCELLED)
     refreshed = launcher.refresh(record)
     assert refreshed.status is JobStatus.CANCELLED
-    assert refreshed.finished_at is None
+    assert refreshed.finished_at is not None
 
 
 def test_refresh_no_change_returns_same(wired):
@@ -178,12 +181,10 @@ def test_poll_cache_reuses_within_ttl(wired):
     assert backend.poll_count == 1  # second refresh hit the TTL cache
 
 
-def test_refresh_all_and_get(wired):
+def test_get_refreshes_from_the_backend(wired):
     launcher, backend, _ = wired
     r1 = launcher.launch(_request())
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
-    refreshed = launcher.refresh_all()
-    assert refreshed[0].status is JobStatus.DONE
     assert launcher.get(r1.id).status is JobStatus.DONE
     assert launcher.get("missing") is None
 
@@ -400,3 +401,48 @@ def test_read_values_helper(tmp_path):
     ok = tmp_path / "ok.json"
     ok.write_text('{"a": 1}')
     assert launcher_mod._read_values(str(ok)) == {"a": 1}
+
+
+def test_launch_with_an_unknown_project_starts_nothing(wired):
+    # project_id is a foreign key, so an unknown one used to fail at save() --
+    # after the process was already spawned, leaving it running and untracked.
+    launcher, backend, store = wired
+    with pytest.raises(UnknownProjectError):
+        launcher.launch(_request(project_id="does-not-exist"))
+    assert backend.launched == []
+    assert store.query_jobs()[1] == 0
+    assert [p for p in store.root.iterdir() if p.is_dir()] == []
+
+
+def test_launch_into_a_real_project_is_filed_under_it(wired):
+    launcher, _, store = wired
+    project = store.create_project("screen A")
+    record = launcher.launch(_request(project_id=project.id))
+    assert record.project_id == project.id
+
+
+def test_launch_cleans_up_the_job_dir_when_the_backend_raises(wired):
+    launcher, backend, store = wired
+
+    def boom(*args, **kwargs):
+        msg = "no scheduler here"
+        raise RuntimeError(msg)
+
+    backend.launch = boom
+    with pytest.raises(RuntimeError):
+        launcher.launch(_request())
+    # No row and no orphaned folder left behind.
+    assert store.query_jobs()[1] == 0
+    assert [p for p in store.root.iterdir() if p.is_dir()] == []
+
+
+def test_cancel_keeps_the_real_outcome_of_a_just_finished_job(wired):
+    # cancel() read the stale stored row, so a job that had already finished was
+    # recorded CANCELLED forever.
+    launcher, backend, _ = wired
+    record = launcher.launch(_request())
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    cancelled = launcher.cancel(record.id)
+    assert cancelled is not None
+    assert cancelled.status is JobStatus.DONE
+    assert cancelled.exit_code == 0

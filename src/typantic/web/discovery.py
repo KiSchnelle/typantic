@@ -45,7 +45,27 @@ def discover_commands() -> list[CommandMeta]:
             continue
         commands.extend(_parse_entry(entry.name, raw))
     commands.sort(key=lambda meta: (meta.app, meta.command))
-    return commands
+    return _deduplicate(commands)
+
+
+def _deduplicate(commands: list[CommandMeta]) -> list[CommandMeta]:
+    """Keep the first command per key, warning about any it shadows.
+
+    The key is what everything downstream looks a command up by, so a duplicate
+    would show twice in the catalog while every lookup resolved to just one of
+    them -- clicking either would launch the same command.
+    """
+    seen: dict[str, CommandMeta] = {}
+    for meta in commands:
+        if meta.key in seen:
+            logger.warning(
+                "Ignoring duplicate command %r (already provided by another entry "
+                "point); commands must have a unique app/command key.",
+                meta.key,
+            )
+            continue
+        seen[meta.key] = meta
+    return list(seen.values())
 
 
 def _parse_entry(entry_name: str, raw: object) -> list[CommandMeta]:
@@ -64,10 +84,3 @@ def _parse_entry(entry_name: str, raw: object) -> list[CommandMeta]:
             logger.warning("Skipping malformed command from %r: %r", entry_name, item)
     return parsed
 
-
-def command_catalog() -> dict[str, list[CommandMeta]]:
-    """Group the discovered commands by app label (for the UI catalog)."""
-    catalog: dict[str, list[CommandMeta]] = {}
-    for meta in discover_commands():
-        catalog.setdefault(meta.app, []).append(meta)
-    return catalog

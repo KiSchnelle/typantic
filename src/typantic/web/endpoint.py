@@ -8,6 +8,7 @@ handler *in process*, so it is the simple case for a small app that wants a web
 form over the same settings model it already defined.
 """
 
+import inspect
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -31,14 +32,23 @@ def add_endpoint[ModelT: BaseModel](
         app: The FastAPI app to register the routes on.
         model_cls: The Pydantic settings model; the POST body is validated into it.
         handler: Called with the validated model instance; its return is the
-            response body.
+            response body. An ``async def`` handler is awaited.
         name: Route name (defaults to the handler's ``__name__``).
         path: Route path (defaults to ``/{name}``).
     """
-    route = path or f"/{name or handler.__name__}"
+    route_name = name or handler.__name__
+    route = path or f"/{route_name}"
 
-    def run(payload: Any) -> Any:  # noqa: ANN401 - body type is set on __annotations__
-        return handler(payload)
+    run: Callable[..., Any]
+    if inspect.iscoroutinefunction(handler):
+        # Calling an async handler from a sync route would return the coroutine
+        # itself, which FastAPI cannot serialise -- a 500 instead of a result.
+        async def run(payload: Any) -> Any:  # noqa: ANN401 - set on __annotations__
+            return await handler(payload)
+    else:
+
+        def run(payload: Any) -> Any:  # noqa: ANN401 - set on __annotations__
+            return handler(payload)
 
     # FastAPI reads the annotation to treat the body as ``model_cls`` (and to
     # validate it, returning 422 on failure). Set it dynamically since the model
@@ -49,5 +59,5 @@ def add_endpoint[ModelT: BaseModel](
         normalized = normalize_for_form(model_cls.model_json_schema())
         return cast("dict[str, object]", normalized)
 
-    app.post(route)(run)
-    app.get(f"{route}/schema")(schema)
+    app.post(route, name=route_name)(run)
+    app.get(f"{route}/schema", name=f"{route_name}_schema")(schema)

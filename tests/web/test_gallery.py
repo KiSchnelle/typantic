@@ -194,3 +194,33 @@ def test_thumbnail_corrupt_image(tmp_path, monkeypatch):
 def test_thumbnail_missing_source(tmp_path, monkeypatch):
     monkeypatch.setattr(gallery, "_THUMB_CACHE", tmp_path / "cache")
     assert gallery.thumbnail(tmp_path / "ghost.png", 32) is None
+
+
+def test_transparent_png_thumbnails_onto_white_not_black(tmp_path):
+    # convert("RGB") alone drops alpha and keeps the colour beneath it, so a
+    # transparent PNG (black under a clear background) came out a black tile --
+    # disagreeing with the full-size view the browser composites over the page.
+    src = tmp_path / "plot.png"
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    img.putpixel((32, 32), (255, 0, 0, 255))
+    img.save(src)
+
+    thumb = gallery.thumbnail(src, 32)
+    assert thumb is not None
+    assert Image.open(thumb).convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_thumbnail_applies_exif_orientation(tmp_path):
+    # The browser rotates the full-size image by its EXIF tag; the thumbnail must
+    # match or the grid shows it sideways.
+    src = tmp_path / "photo.jpg"
+    # A wide image tagged "rotate 90" is upright-portrait once transposed.
+    img = Image.new("RGB", (64, 32), (10, 20, 30))
+    exif = img.getexif()
+    exif[274] = 6  # Orientation: rotate 90 CW
+    img.save(src, exif=exif)
+
+    thumb = gallery.thumbnail(src, 64)
+    assert thumb is not None
+    w, h = Image.open(thumb).size
+    assert h > w  # transposed; without exif_transpose this would still be wide

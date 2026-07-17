@@ -9,17 +9,19 @@ dependencies never enter the web process.
 
 import json
 import logging
+import shutil
 import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 
 from typantic.web.backends import LaunchBackend, PollResult, load_backends
 from typantic.web.discovery import discover_commands
 from typantic.web.models import (
+    TERMINAL_STATUSES,
     CommandMeta,
     JobRecord,
     JobStatus,
@@ -45,9 +47,19 @@ def _clean_form_values(values: dict[str, Any]) -> dict[str, Any]:
     RJSF cannot leave an optional array field *unset* — an untouched array
     submits ``[]``, never omitted. Dropping empty lists lets the settings model
     fall back to its real default rather than pinning the field to ``[]``.
+
+    Nested objects are recursed into: an array one level down is submitted the
+    same way, and stripping only the top level made a nested field behave
+    differently from an identical top-level one for no reason the user could see.
+
+    Known limit: an empty array is therefore always read as "untouched", so a
+    field whose default is non-empty cannot be *cleared* from the form. The
+    submission carries no way to tell the two apart; ``--config`` can express it.
     """
     return {
-        key: value
+        key: _clean_form_values(cast("dict[str, Any]", value))
+        if isinstance(value, dict)
+        else value
         for key, value in values.items()
         if not (isinstance(value, list) and not value)
     }
@@ -68,6 +80,10 @@ class UnknownCommandError(ValueError):
 
 class UnknownBackendError(ValueError):
     """Raised when a launch names a backend that is not installed."""
+
+
+class UnknownProjectError(ValueError):
+    """Raised when a launch files a job under a project that does not exist."""
 
 
 class JobNotTerminalError(RuntimeError):
@@ -102,11 +118,6 @@ class Launcher:
     def commands(self) -> list[CommandMeta]:
         """The discovered launchable commands."""
         return self._commands
-
-    @property
-    def backend_keys(self) -> list[str]:
-        """The keys of the installed launch backends, sorted."""
-        return sorted(self._backends)
 
     def backends_meta(self) -> list[dict[str, object]]:
         """Each backend's key and its options JSON Schema (for the UI), sorted."""
@@ -158,27 +169,47 @@ class Launcher:
         return LaunchPreview(config=config, argv=argv, script=script)
 
     def launch(self, request: LaunchRequest) -> JobRecord:
-        """Launch ``request`` and return the persisted job record."""
+        """Launch ``request`` and return the persisted job record.
+
+        Everything that can be rejected is rejected *before* anything is started:
+        a process spawned ahead of a failing insert would keep running with no
+        record to find, cancel, or clean up by.
+
+        Raises:
+            UnknownCommandError: If the command is not installed.
+            UnknownBackendError: If the backend is not installed.
+            UnknownProjectError: If ``project_id`` names no existing project.
+        """
         meta = self.command(request.command_key)
         backend = self._backend(request.backend)
+        self._check_project(request.project_id)
 
         created_at = datetime.now(UTC)
         job_id = f"{created_at:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
         job_dir = self.store.create_job_dir(job_id)
 
-        config_path = self.store.config_path(job_id)
-        config_path.write_text(json.dumps(_clean_form_values(request.values), indent=2))
-        # The full request so the job can later be cloned or restarted.
-        self.store.request_path(job_id).write_text(request.model_dump_json(indent=2))
-        log_path = self.store.log_path(job_id)
+        try:
+            config_path = self.store.config_path(job_id)
+            config_path.write_text(
+                json.dumps(_clean_form_values(request.values), indent=2),
+            )
+            # The full request so the job can later be cloned or restarted.
+            self.store.request_path(job_id).write_text(request.model_dump_json(indent=2))
+            log_path = self.store.log_path(job_id)
 
-        argv = meta.invocation("--config", str(config_path))
-        launched = backend.launch(
-            argv,
-            job_dir=job_dir,
-            log_path=log_path,
-            backend_options=request.backend_options,
-        )
+            argv = meta.invocation("--config", str(config_path))
+            launched = backend.launch(
+                argv,
+                job_dir=job_dir,
+                log_path=log_path,
+                backend_options=request.backend_options,
+            )
+        except Exception:
+            # Nothing is running yet (or the backend failed to start it), so the
+            # half-built folder is ours to remove rather than leave orphaned.
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
+
         record = JobRecord(
             id=job_id,
             command_key=meta.key,
@@ -200,6 +231,16 @@ class Launcher:
         logger.info("Launched %s as job %s (%s)", meta.key, job_id, request.backend)
         return record
 
+    def _check_project(self, project_id: str | None) -> None:
+        """Reject an unknown project before a job is started for it.
+
+        ``jobs.project_id`` is a foreign key, so an unknown one fails at ``save``
+        -- by which point the process is already running and untracked.
+        """
+        if project_id is not None and self.store.get_project(project_id) is None:
+            msg = f"Unknown project {project_id!r}."
+            raise UnknownProjectError(msg)
+
     def _poll(self, record: JobRecord) -> PollResult:
         """Poll the backend, reusing a recent result within the TTL window."""
         now = time.monotonic()
@@ -218,9 +259,12 @@ class Launcher:
         if result.status == record.status and result.exit_code == record.exit_code:
             return record
         # refresh only runs on non-terminal records, so finished_at is None here.
+        # Every terminal state gets stamped, CANCELLED included: a job cancelled
+        # outside the dashboard (scancel, kill) reaches it through this path too,
+        # and would otherwise show a finish time of "never".
         finished_at = (
             datetime.now(UTC)
-            if result.status in {JobStatus.DONE, JobStatus.FAILED}
+            if result.status in TERMINAL_STATUSES
             else record.finished_at
         )
         record = record.model_copy(
@@ -234,10 +278,6 @@ class Launcher:
             self._poll_cache.pop(record.id, None)
         self.store.save(record)
         return record
-
-    def refresh_all(self) -> list[JobRecord]:
-        """Refresh every stored job's status, newest first."""
-        return [self.refresh(record) for record in self.store.list_records()]
 
     def query(  # noqa: PLR0913 - a filter/sort/page query surface
         self,
@@ -290,8 +330,13 @@ class Launcher:
         return self.refresh(record) if record is not None else None
 
     def cancel(self, job_id: str) -> JobRecord | None:
-        """Cancel a job and mark it cancelled; ``None`` if it does not exist."""
-        record = self.store.load(job_id)
+        """Cancel a job and mark it cancelled; ``None`` if it does not exist.
+
+        The live status is resolved first: a job that has already finished must
+        keep its real outcome rather than be recorded CANCELLED forever because
+        the stored row had not caught up yet.
+        """
+        record = self.get(job_id)
         if record is None:
             return None
         if record.is_terminal:
@@ -363,7 +408,6 @@ class Launcher:
             raise JobNotTerminalError(msg)
 
         meta = self.command(record.command_key)
-        self._poll_cache.pop(job_id, None)
 
         if request is None:
             new_request = self._request_from_record(record)
@@ -371,6 +415,12 @@ class Launcher:
             new_request = request.model_copy(
                 update={"command_key": record.command_key},
             )
+        # Validate everything before touching the job's stored settings: a
+        # rejected restart must leave the job exactly as it was.
+        backend = self._backend(new_request.backend)
+        self._check_project(new_request.project_id)
+
+        if request is not None:
             self.store.config_path(job_id).write_text(
                 json.dumps(_clean_form_values(new_request.values), indent=2),
             )
@@ -378,7 +428,7 @@ class Launcher:
                 new_request.model_dump_json(indent=2),
             )
 
-        backend = self._backend(new_request.backend)
+        self._poll_cache.pop(job_id, None)
         argv = meta.invocation("--config", record.config_path)
         launched = backend.launch(
             argv,

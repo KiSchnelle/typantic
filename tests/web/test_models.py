@@ -67,9 +67,13 @@ def test_make_dir_request():
         MakeDirRequest(path="/data", name="new", extra=1)
 
 
-def test_launch_preview_optional_script():
-    p = LaunchPreview(config="{}", argv=["myapp", "run"])
-    assert p.script is None
+def test_launch_preview_requires_a_script():
+    # Every backend renders one (a submit script, or the wrapped shell command),
+    # so a null script is a case that cannot occur and must not be modelled.
+    with pytest.raises(ValidationError):
+        LaunchPreview(config="{}", argv=["myapp", "run"])
+    p = LaunchPreview(config="{}", argv=["myapp", "run"], script="myapp run")
+    assert p.script == "myapp run"
 
 
 def test_project():

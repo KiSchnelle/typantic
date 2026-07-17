@@ -4,17 +4,18 @@ import inspect
 import json
 import types
 from collections.abc import Callable
+from decimal import Decimal
 from functools import wraps
 from pathlib import Path
 from typing import (
     Annotated,
     Any,
     Literal,
+    NamedTuple,
     Union,
     cast,
     get_args,
     get_origin,
-    get_type_hints,
 )
 
 import annotated_types
@@ -22,9 +23,36 @@ import typer
 from pydantic import BaseModel, SecretBytes, SecretStr, ValidationError
 from pydantic.fields import FieldInfo
 
-from typantic._config_file import load_config_file, write_config_template
+from typantic._config_file import (
+    load_config_file,
+    unknown_config_keys,
+    write_config_template,
+)
 from typantic._introspect import extract_base_type as _extract_base_type
+from typantic._introspect import field_input_key as _field_input_key
 from typantic._introspect import is_model_type as _is_model_type
+from typantic._introspect import model_hints as _model_hints
+
+
+class _Missing:
+    """Sentinel type for "no value supplied" (distinct from a ``None`` default)."""
+
+
+_MISSING = _Missing()
+
+
+class _Leaf(NamedTuple):
+    """One flattened CLI parameter and the names it is known by.
+
+    The flag the user types follows the field *names* (``name_path``), while the
+    value is re-nested under the field's *input keys* (``key_path``) -- its
+    aliases, where the model needs them. The two differ only for aliased models.
+    """
+
+    cli_name: str
+    key_path: tuple[str, ...]
+    name_path: tuple[str, ...]
+    flags: tuple[str, ...]
 
 # Python identifiers for the injected config-file parameters (kept distinct from
 # any model field name); the user-facing flags are --config / --generate-config.
@@ -68,53 +96,29 @@ def _construct(model_cls: type[BaseModel], data: dict[str, Any]) -> BaseModel:
 
 
 def _collect_flat(
-    mapping: list[tuple[str, tuple[str, ...]]],
+    mapping: list[_Leaf],
     kwargs: dict[str, object],
+    deferred: set[str],
 ) -> dict[str, Any]:
-    """Re-nest the flat CLI kwargs into the model's input mapping."""
-    data: dict[str, Any] = {}
-    for cli_name, path in mapping:
-        if cli_name in kwargs:
-            _set_nested(data, path, kwargs[cli_name])
-    return data
+    """Re-nest the flat CLI kwargs into the model's input mapping.
 
-
-def _unknown_config_keys(
-    model_cls: type[BaseModel],
-    data: dict[str, Any],
-    prefix: str = "",
-) -> list[str]:
-    """Config-file keys matching no field on ``model_cls`` (recursing into models).
-
-    Computed-field names are allowed so a written run-config (which serialises
-    them) still round-trips on reload; anything else is almost certainly a typo
-    that Pydantic's ``extra="ignore"`` would otherwise drop in silence. Only
-    dict values are recursed into, and only for fields whose bare annotation is a
-    concrete model -- optionals and lists of models are left alone rather than
-    risk a false rejection.
+    A ``deferred`` parameter still holding ``None`` was never supplied, so its key
+    is omitted and Pydantic runs its validated-data ``default_factory`` instead.
     """
-    hints = get_type_hints(model_cls, include_extras=True)
-    allowed = set(model_cls.model_fields) | set(model_cls.model_computed_fields)
-    unknown: list[str] = []
-    for key, value in data.items():
-        dotted = f"{prefix}{key}"
-        if key not in allowed:
-            unknown.append(dotted)
-            continue
-        if key in model_cls.model_fields and isinstance(value, dict):
-            nested = _extract_base_type(hints[key])
-            if _is_model_type(nested):
-                unknown.extend(
-                    _unknown_config_keys(nested, value, prefix=f"{dotted}."),
-                )
-    return unknown
+    data: dict[str, Any] = {}
+    for cli_name, key_path, _, _flags in mapping:
+        if cli_name in kwargs:
+            if cli_name in deferred and kwargs[cli_name] is None:
+                continue
+            _set_nested(data, key_path, kwargs[cli_name])
+    return data
 
 
 def _collect_with_config(
     model_cls: type[BaseModel],
     ctx: typer.Context,
     config: Path | None,
-    mapping: list[tuple[str, tuple[str, ...]]],
+    mapping: list[_Leaf],
     kwargs: dict[str, object],
 ) -> dict[str, Any]:
     """Merge a ``--config`` file (base) with the CLI flags that override it.
@@ -127,15 +131,20 @@ def _collect_with_config(
     """
     data: dict[str, Any] = {}
     if config is not None:
-        data = dict(load_config_file(config))
-        unknown = _unknown_config_keys(model_cls, data)
+        try:
+            data = dict(load_config_file(config))
+        except (OSError, ValueError) as exc:
+            # A missing or malformed file is a bad --config value, not a crash:
+            # report it the way every other parameter error is reported.
+            raise typer.BadParameter(str(exc)) from exc
+        unknown = unknown_config_keys(model_cls, data)
         if unknown:
             listed = ", ".join(sorted(unknown))
             msg = f"Unknown setting(s) {listed} in config file {config}"
             raise typer.BadParameter(msg)
-    for cli_name, path in mapping:
+    for cli_name, key_path, _, _flags in mapping:
         if cli_name in kwargs and _value_is_explicit(ctx, cli_name):
-            _set_nested(data, path, kwargs[cli_name])
+            _set_nested(data, key_path, kwargs[cli_name])
     return data
 
 
@@ -240,6 +249,10 @@ def _numeric_bounds(field_info: FieldInfo) -> tuple[float | None, float | None]:
     Typer's inclusive ``min`` / ``max``. Exclusive ``gt`` / ``lt`` bounds are
     left for Pydantic to enforce, since Typer has no exclusive equivalent.
 
+    An ``int`` bound is kept as an ``int``: above 2**53 a float cannot represent
+    it exactly, and rounding the bound the wrong way makes Click reject a value
+    Pydantic would accept (or vice versa).
+
     Args:
         field_info: The Pydantic field metadata.
 
@@ -250,15 +263,55 @@ def _numeric_bounds(field_info: FieldInfo) -> tuple[float | None, float | None]:
     high: float | None = None
     for meta in field_info.metadata:
         if isinstance(meta, annotated_types.Ge):
-            low = float(meta.ge)  # type: ignore[arg-type]
+            low = _as_bound(meta.ge)
         elif isinstance(meta, annotated_types.Le):
-            high = float(meta.le)  # type: ignore[arg-type]
+            high = _as_bound(meta.le)
         elif isinstance(meta, annotated_types.Interval):
             if meta.ge is not None:
-                low = float(meta.ge)  # type: ignore[arg-type]
+                low = _as_bound(meta.ge)
             if meta.le is not None:
-                high = float(meta.le)  # type: ignore[arg-type]
+                high = _as_bound(meta.le)
     return low, high
+
+
+def _as_bound(value: object) -> float | None:
+    """Coerce a constraint to a Click bound, keeping ``int`` precision intact."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value
+    if isinstance(value, Decimal):
+        # A Decimal bound is exact; float() is the only thing Click understands,
+        # and Pydantic still enforces the exact bound after parsing.
+        return float(value)
+    return None
+
+
+def _factory_takes_data(factory: Callable[..., Any]) -> bool:
+    """Whether ``factory`` is a Pydantic 2.10+ factory taking the validated data.
+
+    Such a factory needs the model's other fields, so it can only run inside
+    Pydantic -- Click would call it with no arguments and raise ``TypeError``.
+
+    The test mirrors Pydantic's own ``takes_validated_data_argument``: exactly one
+    positional parameter with no default. Matching it exactly matters -- a looser
+    test would mistake an ordinary one-argument callable (say a class with a
+    single ``__init__`` field) for a data-taking factory and drop its value.
+    """
+    try:
+        parameters = list(inspect.signature(factory).parameters.values())
+    except (TypeError, ValueError):  # builtins with no introspectable signature
+        return False
+    if len(parameters) != 1:
+        return False
+    only = parameters[0]
+    return (
+        only.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        and only.default is inspect.Parameter.empty
+    )
 
 
 def _cli_extra(field_info: FieldInfo) -> dict[str, str]:
@@ -287,22 +340,35 @@ def _cli_extra(field_info: FieldInfo) -> dict[str, str]:
     return out
 
 
-def _option_decls(cli_name: str, extra: dict[str, str]) -> list[str]:
+def _option_decls(
+    cli_name: str,
+    extra: dict[str, str],
+    *,
+    is_flag: bool = False,
+) -> list[str]:
     """Build the ``param_decls`` for a Typer option from CLI hints.
 
     Returns an empty list when no hints are given, letting Typer derive the
     ``--flag`` from the parameter name. When a short flag is requested the long
     flag must be stated explicitly, so it is always included alongside it.
 
+    Declaring anything explicitly suppresses Click's automatic
+    ``--flag / --no-flag`` pair for a boolean, which would leave a ``True``
+    default impossible to turn off -- so a boolean's long flag always carries its
+    ``/--no-`` counterpart.
+
     Args:
         cli_name: The (possibly nested) flattened parameter name.
         extra: The parsed CLI hints from :func:`_cli_extra`.
+        is_flag: Whether the field is a boolean (needing the off switch).
 
     Returns:
         The positional declarations to pass to ``typer.Option``.
     """
     long = extra.get("cli_name") or "--" + cli_name.replace("_", "-")
     short = extra.get("cli_short")
+    if is_flag and (short or "cli_name" in extra):
+        long = f"{long}/--no-{long.removeprefix('--')}"
     if short:
         return [long, short]
     if "cli_name" in extra:
@@ -310,17 +376,20 @@ def _option_decls(cli_name: str, extra: dict[str, str]) -> list[str]:
     return []
 
 
-def _build_params(
+def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one axis
     model_cls: type[BaseModel],
     *,
     subpanels: bool,
     relax: bool = False,
     prefix: tuple[str, ...] = (),
+    key_prefix: tuple[str, ...] = (),
     seen: frozenset[type[BaseModel]] = frozenset(),
+    defaults: BaseModel | None = None,
 ) -> tuple[
     list[inspect.Parameter],
     dict[str, object],
-    list[tuple[str, tuple[str, ...]]],
+    list[_Leaf],
+    set[str],
 ]:
     """Expand a model's fields into Typer parameters.
 
@@ -328,98 +397,217 @@ def _build_params(
     ``db: Database`` field with a ``host`` field becomes a ``--db-host`` option,
     and the values are re-nested before the model is constructed.
 
+    The flag a user types always follows the *field name*, while the value is
+    re-nested under the field's *input key* (its alias, when the model is not
+    ``populate_by_name``) -- so an aliased model keeps a readable flag and still
+    receives the value. See :func:`typantic._introspect.field_input_key`.
+
     Args:
         model_cls: The model whose fields to expand.
         subpanels: Whether to assign Rich help panels from ``cli_panel``.
         relax: Whether to make required fields optional at the Typer layer (used
             by ``config_file`` mode, where a ``--config`` file may supply them);
             requiredness is then re-checked by Pydantic after merging.
-        prefix: The nested path of field names leading to this model.
+        prefix: The nested path of field *names* leading to this model (the flag).
+        key_prefix: The nested path of field *input keys* (the model's kwargs).
         seen: Models already being expanded, to break self-referential cycles.
+        defaults: The instance a parent field defaulted to, whose values seed
+            this model's parameter defaults. ``None`` uses the class's own field
+            defaults.
 
     Returns:
-        A ``(parameters, annotations, mapping)`` tuple, where ``mapping`` pairs
-        each flattened parameter name with its nested path into the model.
+        A ``(parameters, annotations, mapping, deferred)`` tuple: ``mapping``
+        pairs each flattened parameter name with its nested input-key path, and
+        ``deferred`` names the parameters whose ``None`` must be dropped so
+        Pydantic can run their validated-data ``default_factory``.
     """
     params: list[inspect.Parameter] = []
     annotations: dict[str, object] = {}
-    mapping: list[tuple[str, tuple[str, ...]]] = []
+    mapping: list[_Leaf] = []
+    deferred: set[str] = set()
 
-    resolved_hints = get_type_hints(model_cls, include_extras=True)
+    resolved_hints = _model_hints(model_cls)
     nested_seen = seen | {model_cls}
 
     for name, field_info in model_cls.model_fields.items():
         base_type = _extract_base_type(resolved_hints[name])
         path = (*prefix, name)
+        key_path = (*key_prefix, _field_input_key(model_cls, name, field_info))
+        # A parent default instance supplies this field's value; otherwise fall
+        # back to the field's own default.
+        override = getattr(defaults, name) if defaults is not None else _MISSING
 
         if _is_model_type(base_type) and base_type not in nested_seen:
-            sub_params, sub_annotations, sub_mapping = _build_params(
+            sub = _build_params(
                 base_type,
                 subpanels=subpanels,
                 relax=relax,
                 prefix=path,
+                key_prefix=key_path,
                 seen=nested_seen,
+                defaults=_nested_default(field_info, override),
             )
-            params.extend(sub_params)
-            annotations.update(sub_annotations)
-            mapping.extend(sub_mapping)
+            params.extend(sub[0])
+            annotations.update(sub[1])
+            mapping.extend(sub[2])
+            deferred |= sub[3]
             continue
 
         cli_name = "_".join(path)
         panel = _panel_for_field(model_cls, name) if subpanels else None
-        param, annotated = _build_leaf(
+        param, annotated, flags = _build_leaf(
             cli_name=cli_name,
             field_info=field_info,
             base_type=base_type,
             panel=panel,
             relax=relax,
+            default_override=override,
         )
         params.append(param)
         annotations[cli_name] = annotated
-        mapping.append((cli_name, path))
+        mapping.append(_Leaf(cli_name, key_path, path, flags))
+        if (
+            override is _MISSING
+            and not field_info.is_required()
+            and field_info.default_factory is not None
+            and _factory_takes_data(field_info.default_factory)
+        ):
+            deferred.add(cli_name)
 
-    return params, annotations, mapping
+    return params, annotations, mapping, deferred
 
 
-def _check_name_collisions(mapping: list[tuple[str, tuple[str, ...]]]) -> None:
-    """Raise a clear error if two fields flatten to the same parameter name.
+def _nested_default(field_info: FieldInfo, override: object) -> BaseModel | None:
+    """The model instance a nested field defaults to, if it has one.
+
+    A ``db: Database = Database(host="prod")`` default must win over
+    ``Database``'s own field defaults -- otherwise the CLI silently advertises
+    (and submits) ``host="localhost"``. A parent ``override`` takes precedence,
+    since it is already the resolved value for this field.
+
+    A ``default_factory`` is evaluated once here, so its instance seeds the
+    flattened options too. The flattened form has to show *some* value, and the
+    factory's is the true one; the alternative -- ignoring it -- is what silently
+    substituted the inner class's defaults.
+    """
+    if override is not _MISSING:
+        # Reached only for a concrete nested model, so a parent's default instance
+        # always holds a real instance here.
+        return cast("BaseModel", override)
+    default = field_info.get_default(call_default_factory=False)
+    if isinstance(default, BaseModel):
+        return default
+    factory = field_info.default_factory
+    if factory is not None and not _factory_takes_data(factory):
+        made = cast("Callable[[], object]", factory)()
+        if isinstance(made, BaseModel):
+            return made
+    return None
+
+
+def _check_name_collisions(mapping: list[_Leaf]) -> None:
+    """Raise a clear error if two fields claim the same parameter name or flag.
 
     A nested field's CLI name is its path joined by ``_`` (``db.host`` becomes
     ``db_host``), which can collide with a sibling field literally named
     ``db_host``. Left unchecked this surfaces as an opaque ``inspect.Signature``
     ``ValueError`` at decoration time; name the offending fields instead.
+
+    Two fields can also claim the same *flag* through ``cli_name`` / ``cli_short``
+    even when their parameter names differ. Click keeps only the last such option,
+    so the other field would silently stop being settable -- name them too.
     """
     seen: dict[str, tuple[str, ...]] = {}
-    for cli_name, path in mapping:
+    flags: dict[str, tuple[str, ...]] = {}
+    for cli_name, _, name_path, declared in mapping:
         if cli_name in seen:
             first = ".".join(seen[cli_name])
-            second = ".".join(path)
+            second = ".".join(name_path)
             flag = "--" + cli_name.replace("_", "-")
             msg = (
                 f"CLI name collision: fields '{first}' and '{second}' both flatten "
                 f"to parameter '{cli_name}' ({flag}). Rename one of the fields."
             )
             raise ValueError(msg)
-        seen[cli_name] = path
+        seen[cli_name] = name_path
+
+        for flag in declared:
+            if flag in flags:
+                first = ".".join(flags[flag])
+                second = ".".join(name_path)
+                msg = (
+                    f"CLI flag collision: fields '{first}' and '{second}' both "
+                    f"declare '{flag}'. Change one field's cli_name/cli_short."
+                )
+                raise ValueError(msg)
+            flags[flag] = name_path
 
 
-def _build_leaf(
+def _declared_flags(
+    cli_name: str,
+    decls: list[str],
+    *,
+    is_argument: bool,
+) -> tuple[str, ...]:
+    """The flags a leaf claims, including the long flag Typer derives implicitly.
+
+    An argument is positional and claims none. A boolean's ``--x/--no-x`` decl
+    covers two flags, so it is split -- otherwise ``--no-x`` could silently
+    collide with a sibling's flag.
+    """
+    if is_argument:
+        return ()
+    # No explicit decls: Typer derives the long flag from the parameter name.
+    flags = decls or ["--" + cli_name.replace("_", "-")]
+    return tuple(part for decl in flags for part in decl.split("/"))
+
+
+def _secret_type(base_type: object) -> type | None:
+    """Return the secret scalar in ``base_type``, unwrapping a ``T | None`` union.
+
+    ``extract_base_type`` leaves an ``Optional[SecretStr]`` as the union
+    ``SecretStr | None``, so a plain identity check misses it and the raw
+    ``SecretStr`` reaches Typer, which cannot render it.
+    """
+    for candidate in _union_members(base_type):
+        if candidate is SecretStr or candidate is SecretBytes:
+            return cast("type", candidate)
+    return None
+
+
+def _union_members(typer_type: object) -> tuple[object, ...]:
+    """``typer_type`` itself, or the non-``None`` members of a ``T | None`` union."""
+    if get_origin(typer_type) in (Union, types.UnionType):
+        return tuple(arg for arg in get_args(typer_type) if arg is not type(None))
+    return (typer_type,)
+
+
+def _is_bool(typer_type: object) -> bool:
+    """Whether Click will render this as a boolean flag (optional bools included)."""
+    return _union_members(typer_type) == (bool,)
+
+
+def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
     *,
     cli_name: str,
     field_info: FieldInfo,
     base_type: object,
     panel: str | None,
     relax: bool = False,
-) -> tuple[inspect.Parameter, object]:
-    """Build the ``inspect.Parameter`` and annotation for a single leaf field.
+    default_override: object = _MISSING,
+) -> tuple[inspect.Parameter, object, tuple[str, ...]]:
+    """Build the ``inspect.Parameter``, annotation and flags for one leaf field.
 
     Args:
         cli_name: The flattened parameter name (nested path joined by ``_``).
         field_info: The Pydantic field metadata.
         base_type: The structural type extracted from the field annotation.
         panel: The Rich help panel title for options, or ``None`` for none.
-        relax: Whether to make a required field optional at the Typer layer (a
-            ``_UNSET`` sentinel default), so it can be supplied via ``--config``.
+        relax: Whether to make a required field optional at the Typer layer, so it
+            can be supplied via ``--config``.
+        default_override: A value from a parent field's default instance, which
+            wins over the field's own default (and makes it optional). ``_MISSING``
+            when the field's own default applies.
 
     Returns:
         A ``(parameter, annotation)`` pair for the rewritten signature.
@@ -428,17 +616,20 @@ def _build_leaf(
     extra = _cli_extra(field_info)
     envvar = extra.get("cli_envvar")
 
-    is_secret = base_type is SecretStr or base_type is SecretBytes
+    secret = _secret_type(base_type)
+    is_secret = secret is not None
     typer_type: object = base_type
     if is_secret:
-        typer_type = bytes if base_type is SecretBytes else str
+        # Typer renders neither SecretStr nor bytes; a secret is entered as text.
+        typer_type = str
 
     if _numeric_type(typer_type) is not None:
         min_value, max_value = _numeric_bounds(field_info)
     else:
         min_value = max_value = None
 
-    required = field_info.is_required()
+    overridden = default_override is not _MISSING
+    required = field_info.is_required() and not overridden
     relaxed_required = required and relax
     default: object
     show_default: bool | str
@@ -451,6 +642,20 @@ def _build_leaf(
     elif required:
         default = inspect.Parameter.empty
         show_default = True
+    elif overridden:
+        # A parent field's default instance supplies this value; it wins over the
+        # nested class's own field default.
+        default = default_override
+        show_default = "None" if default is None else True
+    elif field_info.default_factory is not None and _factory_takes_data(
+        field_info.default_factory,
+    ):
+        # A factory taking the validated data cannot run at the Click layer -- it
+        # needs the model's other fields. Default to None and drop the key when it
+        # is still None, so Pydantic runs the factory itself; handing Click the
+        # callable would make it call a 1-arg factory with none (TypeError).
+        default = None
+        show_default = "computed at runtime"
     elif field_info.default_factory is not None:
         # Pass the factory itself as the default so Click re-evaluates it on
         # every invocation (correct for time/identity-sensitive factories such
@@ -465,6 +670,7 @@ def _build_leaf(
         show_default = "None" if default is None else True
 
     is_argument = field_info.kw_only is False
+    decls = _option_decls(cli_name, extra, is_flag=_is_bool(typer_type))
     typer_meta: typer.models.ArgumentInfo | typer.models.OptionInfo
     if is_argument:
         typer_meta = typer.Argument(
@@ -476,7 +682,7 @@ def _build_leaf(
         )
     else:
         typer_meta = typer.Option(
-            *_option_decls(cli_name, extra),
+            *decls,
             help=help_text,
             rich_help_panel=panel,
             show_default=False if is_secret else show_default,
@@ -499,7 +705,8 @@ def _build_leaf(
         default=default,
         annotation=annotated,
     )
-    return parameter, annotated
+    flags = _declared_flags(cli_name, decls, is_argument=is_argument)
+    return parameter, annotated, flags
 
 
 def pydantic_to_typer(
@@ -518,8 +725,13 @@ def pydantic_to_typer(
         - ``Field(description=...)``  ->  ``help=...``
         - ``Field(default=...)``  ->  Typer default value
         - ``Field(default_factory=...)``  ->  the factory is passed through to
-          Click as a callable default, so it runs once per invocation (and a
-          sample value is shown in ``--help``)
+          Click as a callable default, so it runs once per invocation;
+          ``--help`` shows ``[default: (computed at runtime)]`` rather than a
+          frozen sample. A factory taking the validated data (pydantic 2.10+)
+          is left for Pydantic to run instead
+        - ``Field(alias=...)`` / ``validation_alias`` / ``alias_generator``  ->
+          the flag still follows the field *name*; the value is submitted under
+          the alias, so an aliased model works unchanged
         - ``Field(ge=..., le=...)``  ->  Typer ``min`` / ``max`` (exclusive
           ``gt`` / ``lt`` are left to Pydantic)
         - ``SecretStr`` / ``SecretBytes``  ->  hidden input (and a secure
@@ -582,9 +794,10 @@ def pydantic_to_typer(
         if file_only:
             new_params: list[inspect.Parameter] = []
             new_annotations: dict[str, object] = {}
-            mapping: list[tuple[str, tuple[str, ...]]] = []
+            mapping: list[_Leaf] = []
+            deferred: set[str] = set()
         else:
-            new_params, new_annotations, mapping = _build_params(
+            new_params, new_annotations, mapping, deferred = _build_params(
                 model_cls,
                 subpanels=subpanels,
                 relax=bool(config_file),
@@ -631,7 +844,7 @@ def pydantic_to_typer(
                     raise typer.BadParameter(msg)
                 data = _collect_with_config(model_cls, ctx, config, mapping, kwargs)
             else:
-                data = _collect_flat(mapping, kwargs)
+                data = _collect_flat(mapping, kwargs, deferred)
             return func(_construct(model_cls, data))
 
         wrapper.__signature__ = inspect.Signature(new_params)  # type: ignore[attr-defined]

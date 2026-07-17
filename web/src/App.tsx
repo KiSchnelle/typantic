@@ -41,26 +41,30 @@ export default function App(): ReactNode {
     };
   }, [setTitle, setBackends]);
 
-  // Load the command catalog. It does not change during a session, so a periodic
-  // refetch would churn the store and disrupt a half-filled form — while
-  // disconnected we retry on a timer; once connected we stop.
+  // Poll the command catalog: it doubles as the liveness check behind the
+  // "connected" dot, so it has to keep running — stopping on first success left
+  // the dot stuck green even after the server went away. The catalog rarely
+  // changes, so the store is only written when it actually differs, which is what
+  // would otherwise churn a half-filled form.
   useEffect(() => {
     let active = true;
-    let timer: number | undefined;
     const load = () =>
       fetchCommands()
         .then((c) => {
           if (!active) return;
-          setCommands(c);
+          const previous = useStore.getState().commands;
+          const changed =
+            c.length !== previous.length ||
+            c.some((cmd, i) => cmd.key !== previous[i]?.key);
+          if (changed) setCommands(c);
           setConnected(true);
-          if (timer) window.clearInterval(timer);
         })
         .catch(() => active && setConnected(false));
     load();
-    timer = window.setInterval(load, 5000);
+    const timer = window.setInterval(load, 5000);
     return () => {
       active = false;
-      if (timer) window.clearInterval(timer);
+      window.clearInterval(timer);
     };
   }, [setCommands]);
 

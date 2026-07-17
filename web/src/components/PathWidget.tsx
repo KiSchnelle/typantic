@@ -77,8 +77,12 @@ function DirBrowser({
   const [viewportH, setViewportH] = useState(480);
   // null = not creating; a string is the in-progress new-folder name.
   const [newName, setNewName] = useState<string | null>(null);
+  // Only the newest listing request may write state: browsing on through a slow
+  // directory would otherwise let its late reply replace the one now on screen.
+  const request = useRef(0);
 
   const load = (path?: string, opts?: { refresh?: boolean }) => {
+    const ticket = ++request.current;
     if (!opts?.refresh && path !== undefined) {
       const cached = dirCache.get(path);
       if (cached) {
@@ -92,10 +96,11 @@ function DirBrowser({
         dirCache.set(data.path, data);
         if (path !== undefined) dirCache.set(path, data);
         rememberDir(data.path);
+        if (ticket !== request.current) return;
         setListing(data);
         setLoadError(null);
       })
-      .catch((e: unknown) => setLoadError(String(e)));
+      .catch((e: unknown) => ticket === request.current && setLoadError(String(e)));
   };
 
   const submitNewFolder = () => {

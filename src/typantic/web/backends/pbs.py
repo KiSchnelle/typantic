@@ -4,6 +4,7 @@ Targets PBS Pro (``qstat -x`` keeps finished jobs in the listing). The submit
 script mirrors the Slurm backend's, translated to ``#PBS`` directives.
 """
 
+import shlex
 from pathlib import Path
 
 from typantic.web.backends.base import PollResult
@@ -46,6 +47,13 @@ class PbsBackend(SchedulerBackend):
             lines.append(f"#PBS -l walltime={_walltime(params.time_minutes)}")
         lines.extend(f"#PBS {extra}" for extra in params.extra)
         return lines
+
+    def _preamble(self, *, job_dir: Path) -> list[str]:
+        # PBS starts a job in the user's home, so a command's relative output
+        # would land there instead of the job folder the gallery scans. There is
+        # no PBS equivalent of Slurm's --chdir, so cd explicitly (parity with the
+        # local backend's cwd).
+        return ["", f"cd {shlex.quote(str(job_dir))} || exit 1"]
 
     def _submit_command(self, script_path: Path) -> list[str]:
         return ["qsub", str(script_path)]

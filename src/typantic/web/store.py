@@ -88,6 +88,17 @@ _JOB_SORT_COLUMNS = {
 }
 
 
+def _escape_like(term: str) -> str:
+    """Escape a search term so LIKE matches it literally.
+
+    ``%`` and ``_`` are LIKE wildcards, and job names routinely contain
+    underscores -- unescaped, a search for ``job_1`` also matches ``job11``.
+    """
+    for char in ("\\", "%", "_"):
+        term = term.replace(char, f"\\{char}")
+    return term
+
+
 def default_jobs_dir() -> Path:
     """The per-user jobs root (``$TYPANTIC_WEB_JOBS_DIR`` or ``~/.typantic/jobs``)."""
     override = os.environ.get(_ENV_JOBS_DIR)
@@ -209,8 +220,9 @@ class JobStore:
 
         Filters (all optional, ANDed): exact ``status`` / ``app`` / ``backend``,
         a ``project_id`` (or ``ungrouped`` for jobs filed under no project), and
-        ``search`` — a case-insensitive substring matched against a job's name,
-        command, title, or key. ``sort`` is one of ``created_at`` / ``status`` /
+        ``search`` — a literal substring matched against a job's name, command,
+        title, or key, case-insensitively for ASCII (SQLite's ``LIKE`` folds no
+        other alphabet). ``sort`` is one of ``created_at`` / ``status`` /
         ``name`` / ``app`` (anything else falls back to ``created_at``), ordered
         by ``descending``. ``limit``/``offset`` page the results; the returned
         count is the total number of matches, ignoring the page.
@@ -232,9 +244,10 @@ class JobStore:
             clauses.append("project_id = ?")
             params.append(project_id)
         if search:
-            like = f"%{search}%"
+            like = f"%{_escape_like(search)}%"
             clauses.append(
-                "(name LIKE ? OR command LIKE ? OR title LIKE ? OR command_key LIKE ?)",
+                "(name LIKE ? ESCAPE '\\' OR command LIKE ? ESCAPE '\\' "
+                "OR title LIKE ? ESCAPE '\\' OR command_key LIKE ? ESCAPE '\\')",
             )
             params.extend([like, like, like, like])
 
@@ -251,13 +264,12 @@ class JobStore:
                 params,
             ).fetchone()[0]
             select = f"SELECT project_id, record_json FROM jobs{where}{order}"  # noqa: S608
-            if limit is not None:
-                rows = conn.execute(
-                    f"{select} LIMIT ? OFFSET ?",
-                    [*params, limit, offset],
-                ).fetchall()
-            else:
-                rows = conn.execute(select, params).fetchall()
+            # A negative LIMIT means "no limit" in SQLite, so the offset still
+            # applies when only an offset was asked for.
+            rows = conn.execute(
+                f"{select} LIMIT ? OFFSET ?",
+                [*params, -1 if limit is None else limit, offset],
+            ).fetchall()
 
         records = [r for row in rows if (r := _record_from_row(row)) is not None]
         return records, int(total)

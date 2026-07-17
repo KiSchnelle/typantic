@@ -65,7 +65,9 @@ export interface JobRecord {
 export interface LaunchPreview {
   config: string;
   argv: string[];
-  script: string | null;
+  // Always present: schedulers render a submit script, the process backends the
+  // wrapped shell command.
+  script: string;
 }
 
 export interface JobPage {

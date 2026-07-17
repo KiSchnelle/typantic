@@ -5,6 +5,7 @@ import json
 import re
 from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
 import pytest
 import typer
@@ -18,7 +19,7 @@ from typantic import (
     load_config_file,
     write_config_template,
 )
-from typantic._decorator import _unknown_config_keys
+from typantic._config_file import unknown_config_keys
 
 runner = CliRunner()
 
@@ -324,7 +325,7 @@ class _HasDictField(BaseModel):
 def test_unknown_keys_does_not_recurse_into_non_model_dict_field():
     # A dict *value* under a real but non-model field (dict[str, int]) is accepted
     # as-is and not recursed into; its inner keys are left to Pydantic, not flagged.
-    assert _unknown_config_keys(_HasDictField, {"meta": {"anything": 1}}) == []
+    assert unknown_config_keys(_HasDictField, {"meta": {"anything": 1}}) == []
 
 
 def test_unknown_nested_key_is_rejected(tmp_path: Path):
@@ -472,3 +473,42 @@ def test_file_only_schema_prints():
     assert result.exit_code == 0
     assert not seen
     assert json.loads(result.output) == Simple.model_json_schema()
+
+
+def test_template_uses_input_keys_so_it_reloads(tmp_path: Path) -> None:
+    # The template is fed straight back through Model(**data), so its keys must
+    # be the ones the model accepts -- the alias, not the field name.
+    class Cfg(BaseModel):
+        threshold: Annotated[float, Field(default=0.5, alias="thr")]
+
+    template = build_config_template(Cfg)
+    assert list(template) == ["thr"]
+    assert Cfg(**template).threshold == 0.5
+
+
+def test_template_of_a_self_referential_model_terminates() -> None:
+    # Without a cycle guard this recursed until the stack ran out.
+    class Node(BaseModel):
+        name: str
+        children: list["Node"]
+
+    Node.model_rebuild()
+    template = build_config_template(Node)
+    assert "<REQUIRED" in str(template["name"])
+    # The cycle is cut with a placeholder rather than expanded forever.
+    assert template["children"] == ["<REQUIRED: children>"]
+
+
+def test_template_of_a_directly_self_referential_model_terminates() -> None:
+    class Loop(BaseModel):
+        nested: "Loop | None" = None
+        via_required: "Inner"
+
+    class Inner(BaseModel):
+        back: "Loop"
+
+    Loop.model_rebuild()
+    Inner.model_rebuild()
+    template = build_config_template(Loop)
+    # Inner expands once, and its way back to Loop stops at the placeholder.
+    assert template["via_required"]["back"] == "<REQUIRED: back>"

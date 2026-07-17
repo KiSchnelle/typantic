@@ -8,7 +8,7 @@ from typantic.web.backends.scheduler import (
     SchedulerParams,
     first_nonempty_line,
 )
-from typantic.web.models import JobStatus
+from typantic.web.models import TERMINAL_STATUSES, JobStatus
 
 # sacct State -> our normalised status. Unrecognised states fall through to
 # QUEUED rather than being guessed terminal.
@@ -81,9 +81,13 @@ class SlurmBackend(SchedulerBackend):
             # Not yet in the accounting DB (just submitted): still queued.
             return PollResult(status=JobStatus.QUEUED)
         state, _, exit_field = line.partition("|")
+        status = _map_state(state.strip())
+        # sacct prints "0:0" for a job that has not finished; reporting that as
+        # exit_code=0 would render a live job as "exit 0" in the dashboard.
+        terminal = status in TERMINAL_STATUSES
         return PollResult(
-            status=_map_state(state.strip()),
-            exit_code=_parse_exit_code(exit_field),
+            status=status,
+            exit_code=_parse_exit_code(exit_field) if terminal else None,
         )
 
     def _cancel_command(self, job_id: str) -> list[str]:

@@ -66,7 +66,8 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-_TERMINAL_STATUSES = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED})
+TERMINAL_STATUSES = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED})
+"""The states a job never leaves (mirrored by the dashboard's own list)."""
 
 
 class LaunchRequest(BaseModel):
@@ -110,13 +111,14 @@ class LaunchPreview(BaseModel):
     """A dry-run of a launch: the config that would be written, and the argv/script.
 
     ``config`` is exactly the ``submit_config.json`` content that would be
-    launched via ``--config``; ``script`` is a rendered submit wrapper, if the
-    backend uses one (schedulers), else ``None``.
+    launched via ``--config``; ``script`` is what the backend would actually run
+    -- a rendered submit script for the schedulers, the wrapped shell command for
+    the process family. Every backend renders one, so it is always present.
     """
 
     config: str
     argv: list[str]
-    script: str | None = None
+    script: str
 
 
 class Project(BaseModel):
@@ -170,7 +172,7 @@ class JobRecord(BaseModel):
     @property
     def is_terminal(self) -> bool:
         """Whether the job has reached a final state (no more polling needed)."""
-        return self.status in _TERMINAL_STATUSES
+        return self.status in TERMINAL_STATUSES
 
 
 class JobPage(BaseModel):

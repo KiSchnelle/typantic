@@ -7,8 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `set`, `frozenset` and variadic `tuple[X, ...]` fields are now supported: they
+  map to a repeatable flag and Pydantic coerces the collected values back to the
+  declared type. Previously any such field raised `RuntimeError: Type not yet
+  supported` when the command ran — including the `tags: set[str]` field in the
+  README's own config-file example.
+- `ProcessBackend`, `SchedulerBackend`, `SchedulerError` and `SchedulerParams`
+  are re-exported from `typantic.web`. They are the documented subclassing
+  points for a custom backend, but only the concrete backends were exported.
+
 ### Fixed
 
+- **Aliased fields no longer discard the value you pass.** Pydantic populates by
+  alias, not by field name, so `Field(alias=...)` / `validation_alias` /
+  `alias_generator` (e.g. `to_camel`) silently dropped the CLI value and used the
+  default instead — `--threshold 0.9` exited 0 with `threshold` still `0.5`. A
+  *required* aliased field was worse: the flag was advertised, passing it still
+  failed as missing, and the command could not be run at all. The flag still
+  follows the field name; the value is now submitted under the alias. This also
+  applies to `--generate-config`, which wrote a template that `--config` could
+  not load back. An `AliasChoices`/`AliasPath` validation alias cannot map onto
+  one flag and is now reported at decoration time instead of failing silently.
+- **A nested model's field default is no longer thrown away.** With
+  `db: Database = Database(host="prod")`, the CLI substituted `Database`'s own
+  field defaults — submitting (and advertising in `--help`) `host="localhost"`.
+  The outer default now seeds the flattened options at every depth.
+- `SecretBytes` fields and optional secrets (`SecretStr | None`) no longer crash
+  the app at import with `RuntimeError: Type not yet supported`. `SecretBytes` is
+  a documented feature that could never have worked; the optional form failed
+  because the secret check did not look inside a `T | None` union.
+- A `default_factory` that takes the validated data (Pydantic 2.10+) no longer
+  raises `TypeError` on every invocation. Click calls a default with no
+  arguments, so such a factory is now left for Pydantic to run.
+- `cli_short`/`cli_name` on a boolean no longer deletes its `--no-x` switch,
+  which left a field defaulting to `True` impossible to turn off.
+- Two fields declaring the same flag through `cli_name`/`cli_short` are now
+  reported at decoration time. Click keeps only the last, so the other field
+  silently stopped being settable.
+- Integer `ge`/`le` bounds keep their precision. Above 2**53 a float cannot hold
+  the bound exactly, and rounding it could reject the only valid value.
+- `--config` with a missing or malformed file now reports a parameter error
+  instead of printing a raw `FileNotFoundError`/`ValueError` traceback.
+- `--generate-config` on a self-referential model no longer recurses until the
+  stack runs out.
+- Model annotations are read as Pydantic resolved them, so a model defined in a
+  local scope under `from __future__ import annotations` no longer raises
+  `NameError` for a class Pydantic itself handles.
+
+#### `typantic[web]`
+
+- **The live log no longer stalls the whole dashboard.** The log-tail WebSocket
+  was the only async path in the server and did its work inline — including a
+  scheduler poll that shells out to `sacct`/`qstat` — freezing every other
+  request for every user while it ran. It now runs off the event loop.
+- **A large job log no longer loads whole into memory.** The tail read to EOF and
+  sent one frame, so a 200 MB training log cost ~400 MB of RSS on the server (and
+  the same again through the browser). It now streams in bounded chunks, with a
+  decoder that no longer corrupts a UTF-8 character split across a chunk.
+- **A failed launch no longer leaves a job running untracked.** The process was
+  spawned before the record was saved, so an unknown `project_id` (a foreign key)
+  failed the insert *after* the job had started — leaving a live process with no
+  row, no job dir to find it by, and a 500 for the caller. Everything that can be
+  rejected is now rejected first, and a backend that fails mid-launch no longer
+  leaves an orphaned job folder.
+- **A broken scheduler is no longer reported as a queued job.** `poll` ignored the
+  query's exit status, so a dead cluster (or a missing `sacct`) read as "not in
+  the queue" and the job sat QUEUED forever; a missing binary or a timeout raised
+  straight out of the jobs list as a 500. Slurm also reported `exit_code=0` for a
+  *running* job, which the dashboard rendered as "exit 0".
+- Cancelling a job that has just finished keeps its real outcome instead of
+  recording it CANCELLED forever, and a job cancelled outside the dashboard now
+  gets a finish time.
+- A non-ASCII `?token=` returns 401 rather than 500 (`compare_digest` rejects
+  non-ASCII `str` outright).
+- `/api/fs` and `/api/fs/mkdir` return a listing / 400 for a `~unknownuser` path
+  instead of 500 — the fallback the endpoint already documented.
+- Job search treats `_` and `%` literally. They are `LIKE` wildcards, so a search
+  for `job_1` also matched `job11`, and `%` matched everything.
+- `query_jobs` honours `offset` when no `limit` is given (it was silently ignored).
+- The PBS backend runs the job in its job folder, as the Slurm backend and the
+  gallery docs already assumed; PBS starts in `$HOME`, so relative output landed
+  there and the gallery found nothing.
+- Launched jobs get `stdin=/dev/null` rather than inheriting the server's stdin.
+- `add_endpoint` awaits an `async def` handler (it returned the un-awaited
+  coroutine, which FastAPI could not serialise), and its `name` argument is no
+  longer ignored when `path` is given.
+- Invalid `backend_options` on a restart return 422 rather than 500, and a
+  rejected restart no longer overwrites the job's stored settings first.
+- Two apps registering the same `app/command` key are no longer both listed while
+  every lookup resolved to one of them.
+- Transparent PNGs thumbnail onto white instead of black, and EXIF orientation is
+  applied — the grid disagreed with the full-size image it links to.
+- The dashboard URL percent-encodes an explicit `--token` and brackets an IPv6
+  host; `--host ::1` also binds correctly now.
+- The dashboard reconnects its log stream, shows an error when a job action
+  fails, and no longer lets a slow response overwrite a newer command's form or
+  directory listing. The connection indicator can go red again once green.
 - A long log path no longer makes the job detail page scroll sideways. The path
   in the log toolbar is a flex item, whose `min-width` defaults to its content
   width, so the truncation never engaged and the row stretched the page past the
@@ -16,6 +112,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shrinks and ellipsises, with the full path still on hover. Only reachable with
   a jobs dir deep enough to overflow, which is why the default `~/.typantic/jobs`
   never showed it.
+- Creating a project from the **Projects** tab now surfaces an error when it
+  fails. The Projects and Launch screens carried drifting copies of the same
+  new-project input, and the Projects copy swallowed the rejection, so a failed
+  create silently did nothing. Both screens now share one input that reports the
+  error inline.
+
+### Changed
+
+- The `LICENSE` file now ships in the wheel and sdist. Only the `License-Expression`
+  metadata was included, while MIT asks that the notice travel with the code.
+- `LaunchPreview.script` is always a string. It was typed as optional, but every
+  backend renders one, so the null case (and the UI's guard for it) never existed.
+- The coverage config no longer excludes `if TYPE_CHECKING:`, `raise
+  NotImplementedError` or `@abstractmethod`. The first two matched nothing, and
+  the third was redundant — dropping it counts 12 more statements in
+  `scheduler.py`, so the 100% gate is now strictly stronger.
+- `make check` lints the whole tree, matching CI. It linted only `src`/`tests`,
+  so an `examples/` violation passed locally and failed in CI.
+- The **Projects** tab no longer refetches the project list on its own 3-second
+  timer. The app already polls it for the whole session, so the tab was issuing a
+  redundant second request; it now refreshes eagerly only after a create or
+  delete, where immediacy matters.
+- Internal reorganization, no behavior or public-API change: the directory-picker
+  filesystem logic moved out of the HTTP layer into its own
+  `typantic.web.filesystem` module (mirroring `gallery`); config-file key
+  validation moved next to the loader in `typantic._config_file`; the dashboard's
+  log-socket frame parsing moved into its API client; and the shared new-project
+  input became one component. Pure code-location changes.
+
+### Removed
+
+- `Launcher.refresh_all`, `Launcher.backend_keys` and `command_catalog`. Each was
+  a vestigial earlier version of something already in use (`query`/`get`,
+  `backends_meta`, and the dashboard's own grouping), called by nothing but its
+  own test. `refresh_all` also polled every job ever launched, which the paged
+  query exists to avoid.
 
 ## [0.5.0] - 2026-07-16
 

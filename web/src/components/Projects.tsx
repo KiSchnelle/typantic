@@ -1,14 +1,10 @@
 import { useEffect, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
-import { FolderKanban, FolderPlus, Search, Trash2, X } from "lucide-react";
-import {
-  createProject,
-  deleteProject,
-  fetchHistory,
-  fetchProjects,
-} from "../api.ts";
+import { FolderKanban, FolderPlus, Search, Trash2 } from "lucide-react";
+import { deleteProject, fetchHistory, fetchProjects } from "../api.ts";
 import { useStore } from "../store.ts";
 import type { History, JobRecord, Project } from "../types.ts";
+import { NewProjectInput } from "./NewProjectInput.tsx";
 import { StatusChip, relativeTime } from "./ui.tsx";
 
 function JobRow({ job }: { job: JobRecord }): ReactNode {
@@ -36,35 +32,26 @@ export default function Projects(): ReactNode {
   const [history, setHistory] = useState<History | null>(null);
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
 
-  const reload = () => {
+  // The history carries its own project list, so the poll only refetches that.
+  // The global `store.projects` slice (which the Launch tab reads) is owned by
+  // App.tsx's own poll; we refresh it eagerly only after a create/delete here.
+  const reloadHistory = () => {
     void fetchHistory()
       .then(setHistory)
       .catch(() => undefined);
+  };
+  const refreshProjects = () => {
     void fetchProjects()
       .then(setProjects)
       .catch(() => undefined);
   };
 
   useEffect(() => {
-    reload();
-    const t = window.setInterval(reload, 3000);
+    reloadHistory();
+    const t = window.setInterval(reloadHistory, 3000);
     return () => window.clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const create = () => {
-    const name = newName.trim();
-    if (!name) return;
-    void createProject(name)
-      .then(() => {
-        setNewName("");
-        setCreating(false);
-        reload();
-      })
-      .catch(() => undefined);
-  };
 
   const removeProject = (e: MouseEvent, project: Project, jobCount: number) => {
     e.stopPropagation();
@@ -75,7 +62,12 @@ export default function Projects(): ReactNode {
           `This cannot be undone.`
         : "This cannot be undone.";
     if (window.confirm(`Delete project "${project.name}"?\n\n${detail}`)) {
-      void deleteProject(project.id).then(reload).catch(() => undefined);
+      void deleteProject(project.id)
+        .then(() => {
+          reloadHistory();
+          refreshProjects();
+        })
+        .catch(() => undefined);
     }
   };
 
@@ -102,43 +94,20 @@ export default function Projects(): ReactNode {
         </div>
         <div className="ml-auto">
           {creating ? (
-            <div className="flex items-center gap-2">
-              <input
-                autoFocus
-                className="w-48 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm text-slate-100"
-                placeholder="New project name"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") create();
-                  else if (e.key === "Escape") setCreating(false);
-                }}
-              />
-              <button
-                type="button"
-                className="rjsf-add-btn"
-                disabled={newName.trim() === ""}
-                onClick={create}
-              >
-                Create
-              </button>
-              <button
-                type="button"
-                aria-label="Cancel"
-                className="rjsf-icon-btn"
-                onClick={() => setCreating(false)}
-              >
-                <X size={14} />
-              </button>
-            </div>
+            <NewProjectInput
+              inputClassName="w-48"
+              onCreated={() => {
+                setCreating(false);
+                reloadHistory();
+                refreshProjects();
+              }}
+              onCancel={() => setCreating(false)}
+            />
           ) : (
             <button
               type="button"
               className="rjsf-add-btn"
-              onClick={() => {
-                setNewName("");
-                setCreating(true);
-              }}
+              onClick={() => setCreating(true)}
             >
               <FolderPlus size={14} /> New project
             </button>

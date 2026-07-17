@@ -10,6 +10,7 @@ without a cluster.
 """
 
 import abc
+import logging
 import shlex
 import subprocess
 from collections.abc import Callable
@@ -23,7 +24,12 @@ from typantic.web.models import JobRecord, JobStatus
 
 Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
+logger = logging.getLogger("typantic.web")
+
 _SUBMIT_SCRIPT = "submit.sh"
+_TOOL_TIMEOUT_S = 30
+_TOOL_UNAVAILABLE = -1
+"""Return code standing in for "the tool could not be run at all"."""
 
 
 class SchedulerParams(BaseModel):
@@ -56,8 +62,27 @@ def _default_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_TOOL_TIMEOUT_S,
     )
+
+
+def _run_tool(run: Runner, argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a scheduler tool, turning "could not run it" into a failed result.
+
+    A missing binary or a hung tool is a fact about the cluster, not a bug in the
+    caller: surfaced as an exception it would escape ``poll`` and 500 the whole
+    jobs list, since every listed job is refreshed on read.
+    """
+    try:
+        return run(argv)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Scheduler tool %s could not be run: %s", argv[0], exc)
+        return subprocess.CompletedProcess(
+            argv,
+            returncode=_TOOL_UNAVAILABLE,
+            stdout="",
+            stderr=str(exc),
+        )
 
 
 class SchedulerBackend(abc.ABC):
@@ -103,6 +128,14 @@ class SchedulerBackend(abc.ABC):
 
     # --- shared flow ---
 
+    def _preamble(self, *, job_dir: Path) -> list[str]:  # noqa: ARG002 - subclass hook
+        """Shell lines to run after the directives, before the command.
+
+        Empty by default; a scheduler with no "start here" directive uses this to
+        ``cd`` into the job folder itself.
+        """
+        return []
+
     def _script(
         self,
         argv: list[str],
@@ -112,7 +145,10 @@ class SchedulerBackend(abc.ABC):
         params: SchedulerParams,
     ) -> str:
         lines = ["#!/bin/bash"]
+        # Directives must precede the first non-comment line, so the preamble sits
+        # between them and the command.
         lines.extend(self._directives(params, job_dir=job_dir, log_path=log_path))
+        lines.extend(self._preamble(job_dir=job_dir))
         lines.extend(["", shlex.join(argv), ""])
         return "\n".join(lines)
 
@@ -130,7 +166,7 @@ class SchedulerBackend(abc.ABC):
         script_path.write_text(
             self._script(argv, job_dir=job_dir, log_path=log_path, params=params),
         )
-        result = self._run(self._submit_command(script_path))
+        result = _run_tool(self._run, self._submit_command(script_path))
         if result.returncode != 0:
             detail = result.stderr.strip()
             msg = f"Submission failed (exit {result.returncode}): {detail}"
@@ -142,16 +178,30 @@ class SchedulerBackend(abc.ABC):
         return Launched(scheduler_id=job_id, status=JobStatus.QUEUED)
 
     def poll(self, record: JobRecord) -> PollResult:
-        """Resolve status by querying the scheduler for this job id."""
+        """Resolve status by querying the scheduler for this job id.
+
+        A query that could not run (missing tool, timeout, nonzero exit) says
+        nothing about the job, so the last known status is kept rather than
+        reading the empty output as "not in the queue" -- which would report a
+        dead cluster as QUEUED forever.
+        """
         if record.scheduler_id is None:
             return PollResult(status=JobStatus.FAILED)
-        result = self._run(self._status_command(record.scheduler_id))
+        result = _run_tool(self._run, self._status_command(record.scheduler_id))
+        if result.returncode != 0:
+            logger.warning(
+                "Status query for job %s failed (exit %s): %s",
+                record.scheduler_id,
+                result.returncode,
+                result.stderr.strip(),
+            )
+            return PollResult(status=record.status, exit_code=record.exit_code)
         return self._parse_status(result.stdout)
 
     def cancel(self, record: JobRecord) -> None:
         """Cancel the job through the scheduler (best effort)."""
         if record.scheduler_id is not None:
-            self._run(self._cancel_command(record.scheduler_id))
+            _run_tool(self._run, self._cancel_command(record.scheduler_id))
 
     def preview(
         self,

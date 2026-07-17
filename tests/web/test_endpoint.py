@@ -58,3 +58,36 @@ def test_explicit_path():
     client, _ = _client(path="/custom/run")
     assert client.post("/custom/run", json={"name": "z"}).status_code == 200
     assert client.get("/custom/run/schema").status_code == 200
+
+
+def test_async_handler_is_awaited():
+    # Calling an async handler from a sync route returns the coroutine itself,
+    # which FastAPI cannot serialise -- a 500 instead of the result.
+    app = FastAPI()
+
+    class Settings(BaseModel):
+        n: int = 1
+
+    async def run(cfg: Settings) -> dict[str, int]:
+        return {"doubled": cfg.n * 2}
+
+    add_endpoint(app, Settings, run, path="/run")
+    client = TestClient(app)
+    resp = client.post("/run", json={"n": 21})
+    assert resp.status_code == 200
+    assert resp.json() == {"doubled": 42}
+
+
+def test_route_names_follow_the_name_argument():
+    app = FastAPI()
+
+    class Settings(BaseModel):
+        n: int = 1
+
+    def handler(cfg: Settings) -> dict[str, int]:
+        return {"n": cfg.n}
+
+    add_endpoint(app, Settings, handler, name="predict", path="/custom")
+    names = {r.name for r in app.routes}
+    assert "predict" in names
+    assert "predict_schema" in names

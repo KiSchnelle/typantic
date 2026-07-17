@@ -3,9 +3,8 @@ import type { ReactNode } from "react";
 import Form from "@rjsf/core";
 import type { IChangeEvent } from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
-import { ArrowLeft, Eye, FolderPlus, Rocket, RotateCcw, X } from "lucide-react";
+import { ArrowLeft, Eye, FolderPlus, Rocket, RotateCcw } from "lucide-react";
 import {
-  createProject,
   fetchProjects,
   fetchSchema,
   launchJob,
@@ -17,15 +16,14 @@ import type { CommandMeta, JsonSchema, LaunchPreview } from "../types.ts";
 import { Button, Card } from "./ui.tsx";
 import { CheckboxWidget, templates } from "./rjsfTemplates.tsx";
 import { PathWidget } from "./PathWidget.tsx";
+import { NewProjectInput } from "./NewProjectInput.tsx";
 import { Section } from "./Section.tsx";
 
 const WIDGETS = { path: PathWidget, CheckboxWidget };
 
-type Schema = Record<string, unknown>;
-
 // A Pydantic path field: plain Path (`format: "path"`), FilePath/DirectoryPath
 // (`file-path`/`directory-path`), or one tagged with a `picker` hint.
-function isPathField(s: Schema): boolean {
+function isPathField(s: JsonSchema): boolean {
   return (
     s.format === "path" ||
     s.format === "file-path" ||
@@ -35,23 +33,23 @@ function isPathField(s: Schema): boolean {
   );
 }
 
-function pickerMode(s: Schema): "file" | "dir" | "any" {
+function pickerMode(s: JsonSchema): "file" | "dir" | "any" {
   if (s.picker === "file" || s.format === "file-path") return "file";
   if (s.picker === "dir" || s.format === "directory-path") return "dir";
   return "any";
 }
 
-function pathWidgetUi(s: Schema): Schema {
+function pathWidgetUi(s: JsonSchema): JsonSchema {
   return { "ui:widget": "path", "ui:options": { mode: pickerMode(s) } };
 }
 
 // Attach the path picker to every path field, including `list[Path]` array items.
-function pathUiSchema(schema: Schema): Schema {
-  const ui: Schema = {};
-  const props = schema.properties as Record<string, Schema> | undefined;
+function pathUiSchema(schema: JsonSchema): JsonSchema {
+  const ui: JsonSchema = {};
+  const props = schema.properties as Record<string, JsonSchema> | undefined;
   if (!props) return ui;
   for (const [key, s] of Object.entries(props)) {
-    const items = s.items as Schema | undefined;
+    const items = s.items as JsonSchema | undefined;
     if (isPathField(s)) {
       ui[key] = pathWidgetUi(s);
     } else if (s.type === "array" && items && isPathField(items)) {
@@ -133,7 +131,6 @@ export default function Launch(): ReactNode {
   const [name, setName] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [creatingProject, setCreatingProject] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<LaunchPreview | null>(null);
@@ -175,9 +172,15 @@ export default function Launch(): ReactNode {
     setProjectId(null);
     setBackendOptions({});
     if (current) setBackend(current.default_backend);
+    // Guard the response: switching commands while a schema is in flight would
+    // otherwise let the slower, older reply land on the newer command's form.
+    let active = true;
     fetchSchema(selectedCommandKey)
-      .then(setSchema)
-      .catch((e: unknown) => setError(String(e)));
+      .then((s) => active && setSchema(s))
+      .catch((e: unknown) => active && setError(String(e)));
+    return () => {
+      active = false;
+    };
   }, [selectedCommandKey]);
 
   // A "Clone" action stashed the source job's request; fill it in, then consume.
@@ -231,19 +234,6 @@ export default function Launch(): ReactNode {
     } finally {
       setPreviewing(false);
     }
-  };
-
-  const createNewProject = () => {
-    const name = newProjectName.trim();
-    if (!name) return;
-    void createProject(name)
-      .then((p) => {
-        setProjectId(p.id);
-        setCreatingProject(false);
-        setNewProjectName("");
-        void fetchProjects().then(setProjects);
-      })
-      .catch((e: unknown) => setError(String(e)));
   };
 
   return (
@@ -309,39 +299,14 @@ export default function Launch(): ReactNode {
                 <span className="font-normal text-slate-500">(optional)</span>
               </span>
               {creatingProject ? (
-                <div className="flex gap-2">
-                  <input
-                    autoFocus
-                    className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-slate-100"
-                    placeholder="New project name"
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        createNewProject();
-                      } else if (e.key === "Escape") {
-                        setCreatingProject(false);
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="rjsf-add-btn"
-                    disabled={newProjectName.trim() === ""}
-                    onClick={createNewProject}
-                  >
-                    Create
-                  </button>
-                  <button
-                    type="button"
-                    className="rjsf-icon-btn"
-                    aria-label="Cancel new project"
-                    onClick={() => setCreatingProject(false)}
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
+                <NewProjectInput
+                  onCreated={(p) => {
+                    setProjectId(p.id);
+                    setCreatingProject(false);
+                    void fetchProjects().then(setProjects);
+                  }}
+                  onCancel={() => setCreatingProject(false)}
+                />
               ) : (
                 <div className="flex gap-2">
                   <select
@@ -361,10 +326,7 @@ export default function Launch(): ReactNode {
                     className="rjsf-icon-btn"
                     aria-label="New project"
                     title="New project"
-                    onClick={() => {
-                      setNewProjectName("");
-                      setCreatingProject(true);
-                    }}
+                    onClick={() => setCreatingProject(true)}
                   >
                     <FolderPlus size={15} />
                   </button>
@@ -456,12 +418,8 @@ export default function Launch(): ReactNode {
             <div className="modal-body">
               <div className="preview-label">Config (submit_config.json)</div>
               <pre className="preview-pre">{preview.config}</pre>
-              {preview.script && (
-                <>
-                  <div className="preview-label">Command / submit script</div>
-                  <pre className="preview-pre">{preview.script}</pre>
-                </>
-              )}
+              <div className="preview-label">Command / submit script</div>
+              <pre className="preview-pre">{preview.script}</pre>
             </div>
             <footer className="modal-foot">
               <span className="text-xs text-slate-500">

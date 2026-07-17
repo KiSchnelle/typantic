@@ -1,4 +1,5 @@
 import asyncio
+import pathlib
 import subprocess
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from PIL import Image
 from starlette.websockets import WebSocketDisconnect
 
 from typantic.web import api as api_mod
+from typantic.web import filesystem as fs_mod
 from typantic.web import gallery
 from typantic.web import launcher as launcher_mod
 from typantic.web.api import _tail_log, make_api
@@ -376,7 +378,7 @@ def test_browse_unreadable_dir_reports_error(env, tmp_path, monkeypatch):
     def boom(_path):
         raise OSError
 
-    monkeypatch.setattr(api_mod.os, "scandir", boom)
+    monkeypatch.setattr(fs_mod.os, "scandir", boom)
     data = env.client.get(f"/api/fs?path={tmp_path}", headers=AUTH).json()
     assert data["error"] is not None
 
@@ -395,7 +397,7 @@ def test_browse_entry_error_is_skipped(env, tmp_path, monkeypatch):
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr(api_mod.os, "scandir", lambda _p: Scan())
+    monkeypatch.setattr(fs_mod.os, "scandir", lambda _p: Scan())
     data = env.client.get(f"/api/fs?path={tmp_path}", headers=AUTH).json()
     assert {"name": "weird", "is_dir": False} in data["entries"]
 
@@ -586,9 +588,33 @@ def test_is_dir_handles_oserror():
         def is_dir(self):
             raise OSError
 
-    assert api_mod._is_dir(BadPath()) is False
+    assert fs_mod._is_dir(BadPath()) is False
 
 
 def test_browse_nonexistent_path_uses_home(env):
     data = env.client.get("/api/fs?path=/no/such/dir/xyz", headers=AUTH).json()
     assert data["path"] != "/no/such/dir/xyz"
+
+
+def test_fs_browse_falls_back_to_home_for_an_unknown_user(env):
+    # Path.expanduser raises RuntimeError for ~nobody; unguarded that was a 500
+    # from an endpoint documented to fall back to home.
+    resp = env.client.get("/api/fs", params={"path": "~nosuchuser12345"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["path"] == str(pathlib.Path.home())
+
+
+def test_fs_mkdir_rejects_an_unknown_user_path(env):
+    resp = env.client.post(
+        "/api/fs/mkdir",
+        json={"path": "~nosuchuser12345", "name": "new"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_non_ascii_token_is_rejected_not_a_server_error(env):
+    # secrets.compare_digest raises TypeError on non-ASCII str, turning an
+    # ordinary 401 into an unhandled 500.
+    resp = env.client.get("/api/commands", params={"token": "pässwörd"})
+    assert resp.status_code == 401

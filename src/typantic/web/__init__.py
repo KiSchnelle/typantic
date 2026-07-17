@@ -20,17 +20,22 @@ from typantic.web.backends import (
     LocalBackend,
     PbsBackend,
     PollResult,
+    ProcessBackend,
+    SchedulerBackend,
+    SchedulerError,
+    SchedulerParams,
     SlurmBackend,
     SshBackend,
     load_backends,
 )
-from typantic.web.discovery import command_catalog, discover_commands
+from typantic.web.discovery import discover_commands
 from typantic.web.endpoint import add_endpoint
 from typantic.web.launcher import (
     JobNotTerminalError,
     Launcher,
     UnknownBackendError,
     UnknownCommandError,
+    UnknownProjectError,
 )
 from typantic.web.models import (
     CommandMeta,
@@ -70,16 +75,20 @@ __all__ = [
     "MakeDirRequest",
     "PbsBackend",
     "PollResult",
+    "ProcessBackend",
     "Project",
     "ProjectGroup",
+    "SchedulerBackend",
+    "SchedulerError",
+    "SchedulerParams",
     "SchemaCache",
     "SchemaError",
     "SlurmBackend",
     "SshBackend",
     "UnknownBackendError",
     "UnknownCommandError",
+    "UnknownProjectError",
     "add_endpoint",
-    "command_catalog",
     "default_jobs_dir",
     "discover_commands",
     "fetch_schema",
