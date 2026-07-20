@@ -9,6 +9,7 @@ tunnel.
 import ipaddress
 import secrets
 import socket
+import subprocess
 from urllib.parse import quote
 
 from typantic.web.api import make_api
@@ -50,17 +51,43 @@ def dashboard_url(host: str, port: int, token: str | None) -> str:
     return f"{base}?token={quote(token, safe='')}" if token else base
 
 
-def local_server_name() -> str:
-    """Best-effort name to SSH back to this host, for the tunnel command.
+def _looks_qualified(name: str) -> bool:
+    """Whether ``name`` is a usable FQDN: dotted and not a ``localhost`` alias."""
+    return bool(name) and "." in name and not name.startswith("localhost")
 
-    ``getfqdn`` resolves to a routable name on most clusters, but can return a
-    ``localhost`` alias on hosts whose loopback resolves first; there, fall back
-    to the bare node name. It is only a starting point the user can edit.
+
+def _fqdn_via_hostname() -> str:
+    """FQDN from ``hostname -f`` (empty string if it is unavailable or fails).
+
+    ``getfqdn`` returns the *short* name on hosts whose ``/etc/hosts`` maps only
+    the bare node name (common on Debian/Ubuntu, where ``127.0.1.1 grobi`` has no
+    qualified alias); ``hostname -f`` still resolves the fully-qualified name via
+    the OS resolver. Capped at two seconds so a slow resolver cannot hang startup.
     """
-    fqdn = socket.getfqdn()
-    if not fqdn or fqdn.startswith("localhost"):
-        return socket.gethostname()
-    return fqdn
+    try:
+        result = subprocess.run(
+            ["hostname", "-f"],  # noqa: S607 - fixed argv, no shell
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+def local_server_name() -> str:
+    """Best-effort routable name of this host for the SSH tunnel line.
+
+    Tries ``getfqdn`` then ``hostname -f`` (which resolves the qualified name on
+    hosts where ``getfqdn`` returns only the short name), falling back to the
+    bare node name when neither is qualified.
+    """
+    for candidate in (socket.getfqdn(), _fqdn_via_hostname()):
+        if _looks_qualified(candidate):
+            return candidate
+    return socket.gethostname()
 
 
 def ssh_forward_command(host: str, port: int, *, user: str, server: str) -> str:

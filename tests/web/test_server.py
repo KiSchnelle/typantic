@@ -28,16 +28,36 @@ def test_local_server_name_prefers_fqdn(monkeypatch):
     assert server.local_server_name() == "node01.cluster.example"
 
 
-def test_local_server_name_falls_back_when_localhost(monkeypatch):
-    monkeypatch.setattr(server.socket, "getfqdn", lambda: "localhost.localdomain")
-    monkeypatch.setattr(server.socket, "gethostname", lambda: "node01")
-    assert server.local_server_name() == "node01"
+def test_local_server_name_uses_hostname_f_when_getfqdn_short(monkeypatch):
+    # getfqdn returns only the bare name (the reported `grobi` behaviour) ->
+    # `hostname -f` supplies the qualified name
+    monkeypatch.setattr(server.socket, "getfqdn", lambda: "grobi")
+    monkeypatch.setattr(server, "_fqdn_via_hostname", lambda: "grobi.biologie.uos.de")
+    assert server.local_server_name() == "grobi.biologie.uos.de"
 
 
-def test_local_server_name_falls_back_when_empty(monkeypatch):
-    monkeypatch.setattr(server.socket, "getfqdn", lambda: "")
-    monkeypatch.setattr(server.socket, "gethostname", lambda: "node01")
-    assert server.local_server_name() == "node01"
+def test_local_server_name_falls_back_to_bare_name(monkeypatch):
+    # neither source qualified -> bare node name
+    monkeypatch.setattr(server.socket, "getfqdn", lambda: "grobi")
+    monkeypatch.setattr(server, "_fqdn_via_hostname", lambda: "")
+    monkeypatch.setattr(server.socket, "gethostname", lambda: "grobi")
+    assert server.local_server_name() == "grobi"
+
+
+def test_fqdn_via_hostname_reads_command(monkeypatch):
+    class _Result:
+        stdout = "grobi.biologie.uos.de\n"
+
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: _Result())
+    assert server._fqdn_via_hostname() == "grobi.biologie.uos.de"
+
+
+def test_fqdn_via_hostname_swallows_failure(monkeypatch):
+    def _boom(*a, **k):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(server.subprocess, "run", _boom)
+    assert server._fqdn_via_hostname() == ""
 
 
 def test_ssh_forward_command():
