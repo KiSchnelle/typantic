@@ -41,6 +41,12 @@ export default function App(): ReactNode {
     };
   }, [setTitle, setBackends]);
 
+  // Mirror the dashboard brand into the browser tab title (the index.html
+  // fallback only shows until /api/meta resolves).
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+
   // Poll the command catalog: it doubles as the liveness check behind the
   // "connected" dot, so it has to keep running — stopping on first success left
   // the dot stuck green even after the server went away. The catalog rarely

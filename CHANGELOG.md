@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The web dashboard now mirrors the `--title` brand into the browser tab title;
+  previously the tab always read "typantic web" regardless of `--title`.
+
 ## [0.5.1] - 2026-07-17
 
 ### Added
