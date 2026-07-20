@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The web dashboard now mirrors the `--title` brand into the browser tab title;
   previously the tab always read "typantic web" regardless of `--title`.
+- `typantic web serve` now prints a copy-paste-ready `ssh -N -L …` tunnel line
+  with the serving host's user and name filled in, instead of a `<this-host>`
+  placeholder.
 
 ## [0.5.1] - 2026-07-17
 

@@ -496,8 +496,8 @@ click **Launch** — the dashboard writes your values to a config file, runs
 
 - **It runs as you, on your machine**, on a free port with a token in the URL —
   just open the URL it prints. On a remote server, forward the port over SSH (the
-  command prints the exact `ssh -L …` line). Set the page's brand — sidebar and
-  browser tab — with `--title`.
+  command prints a ready-to-run `ssh -N -L …` line with your user and host filled
+  in). Set the page's brand — sidebar and browser tab — with `--title`.
 - **Backends decide *where* a job runs**, chosen per launch in the form.
   `local` (a subprocess on this machine) is the default and needs no setup;
   `slurm` / `pbs` submit to an HPC cluster, `docker` / `podman` / `apptainer`

@@ -35,6 +35,9 @@ def test_serve_no_token(monkeypatch, tmp_path):
 
 
 def test_serve_default_token_and_port(monkeypatch, tmp_path):
+    # no discovered commands -> exercises the "no commands" warning branch,
+    # without depending on whatever entry points the test env happens to expose
+    monkeypatch.setattr(launcher_mod, "discover_commands", list)
     monkeypatch.setattr(cli_mod, "serve", lambda *a, **k: None)
     monkeypatch.setattr(cli_mod, "find_free_port", lambda host: 55555)
     result = runner.invoke(app, ["serve", "--jobs-dir", str(tmp_path)])

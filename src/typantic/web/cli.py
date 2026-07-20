@@ -1,5 +1,6 @@
 """The ``typantic web`` Typer app: one ``serve`` command that starts the dashboard."""
 
+import getpass
 import logging
 from pathlib import Path
 from typing import Annotated
@@ -7,7 +8,13 @@ from typing import Annotated
 import typer
 
 from typantic.web.launcher import Launcher
-from typantic.web.server import dashboard_url, find_free_port, resolve_token, serve
+from typantic.web.server import (
+    find_free_port,
+    local_server_name,
+    resolve_token,
+    serve,
+    startup_banner,
+)
 from typantic.web.store import JobStore
 
 logger = logging.getLogger("typantic.web")
@@ -60,15 +67,15 @@ def serve_command(
         )
     resolved_token = resolve_token(token, disable=no_token)
     resolved_port = port or find_free_port(host)
-    url = dashboard_url(host, resolved_port, resolved_token)
 
-    typer.echo("")
-    typer.echo(f"  {title} is running. Open:")
-    typer.echo(f"    {url}")
-    if resolved_token:
-        typer.echo("  (the token in the URL is the credential; keep it private)")
-    typer.echo("  Remote host? Forward it with:")
-    typer.echo(f"    ssh -N -L {resolved_port}:{host}:{resolved_port} <this-host>")
-    typer.echo("")
+    for line in startup_banner(
+        title=title,
+        host=host,
+        port=resolved_port,
+        token=resolved_token,
+        user=getpass.getuser(),
+        server=local_server_name(),
+    ):
+        typer.echo(line)
 
     serve(launcher, host=host, port=resolved_port, token=resolved_token, title=title)

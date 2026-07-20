@@ -50,6 +50,66 @@ def dashboard_url(host: str, port: int, token: str | None) -> str:
     return f"{base}?token={quote(token, safe='')}" if token else base
 
 
+def local_server_name() -> str:
+    """Best-effort name to SSH back to this host, for the tunnel command.
+
+    ``getfqdn`` resolves to a routable name on most clusters, but can return a
+    ``localhost`` alias on hosts whose loopback resolves first; there, fall back
+    to the bare node name. It is only a starting point the user can edit.
+    """
+    fqdn = socket.getfqdn()
+    if not fqdn or fqdn.startswith("localhost"):
+        return socket.gethostname()
+    return fqdn
+
+
+def ssh_forward_command(host: str, port: int, *, user: str, server: str) -> str:
+    """The ``ssh -N -L ...`` line that tunnels the dashboard port to a laptop.
+
+    ``user`` and ``server`` are the serving host's own login and name, so the
+    line is copy-paste ready; edit them if you reach the host under a different
+    name.
+    """
+    return f"ssh -N -L {port}:{host}:{port} {user}@{server}"
+
+
+def startup_banner(
+    *,
+    title: str,
+    host: str,
+    port: int,
+    token: str | None,
+    user: str,
+    server: str,
+) -> list[str]:
+    """Assemble the copy-paste startup banner printed by ``serve``.
+
+    Shows the URL to open, then a ready-to-run ``ssh -N -L`` line (with this
+    host's user and name filled in) for reaching the dashboard from a remote
+    machine. The token note is omitted when the server runs without a token.
+    """
+    url = dashboard_url(host, port, token)
+    ssh_command = ssh_forward_command(host, port, user=user, server=server)
+    lines = [
+        "",
+        f"  {title} is running.",
+        "",
+        "  Open in a browser:",
+        f"    {url}",
+        "",
+        "  Remote host? First forward the port from your machine:",
+        f"    {ssh_command}",
+        "  then open the URL above locally.",
+    ]
+    if token is not None:
+        lines += [
+            "",
+            "  The token in the URL is the credential; keep it private.",
+        ]
+    lines.append("")
+    return lines
+
+
 def serve(
     launcher: Launcher,
     *,
