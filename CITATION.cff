@@ -22,7 +22,7 @@ keywords:
   - fastapi
   - job-launcher
   - json-schema
-version: "0.5.1"
-date-released: "2026-07-17"
+version: "0.6.0"
+date-released: "2026-07-21"
 # TODO: after Zenodo mints the concept DOI, uncomment and paste it here:
 # doi: "10.5281/zenodo.XXXXXXX"

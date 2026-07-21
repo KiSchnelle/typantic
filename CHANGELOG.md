@@ -7,13 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-21
+
+### Added
+
+- `typantic web serve --log-level` sets the uvicorn log level (critical, error,
+  warning, info, debug, or trace); previously it was fixed at `info`.
+- `POST /api/commands/refresh` re-discovers installed apps at runtime, so a
+  newly `pip install`-ed command appears without restarting the server.
+- The dashboard's `web/src/types.ts` is now generated from the Pydantic models
+  by `scripts/gen_types.py` (`make gen-types`), and a CI check fails the build if
+  it drifts. It previously mirrored the models by hand and had silently gone out
+  of sync.
+
 ### Changed
 
+- The web API responses that were untyped `dict`s are now Pydantic models
+  (`/api/meta`, the backends list, the `/api/fs` directory listing, and job
+  images), so their shape is validated and shows up in the OpenAPI schema. The
+  emitted JSON is unchanged.
 - The web dashboard now mirrors the `--title` brand into the browser tab title;
   previously the tab always read "typantic web" regardless of `--title`.
 - `typantic web serve` now prints a copy-paste-ready `ssh -N -L …` tunnel line
   with the serving host's user and name filled in, instead of a `<this-host>`
   placeholder.
+
+### Fixed
+
+- A finished job's detail page no longer polls the server forever: the 2-second
+  status poll and the 3-second output-image poll now stop once the job reaches a
+  terminal state.
+- The local/process backend no longer leaves a zombie when `poll` reads the
+  exit-code marker in the narrow window before the wrapper shell has exited — the
+  reap now retries briefly until the child is collected.
+- A crashed local job no longer reads as `running` after a server restart when
+  its pid has been recycled onto an unrelated process: the process start-time
+  recorded at launch is compared on each poll (Linux; a no-op where `/proc` is
+  absent, falling back to the previous liveness probe).
+- The launcher's poll cache is now bounded (fixed size, least-recently-updated
+  eviction), so a job that terminated without a later refresh can no longer leave
+  its entry behind indefinitely.
 
 ### Dependencies
 

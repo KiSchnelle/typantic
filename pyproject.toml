@@ -1,6 +1,6 @@
 [project]
 name = "typantic"
-version = "0.5.1"
+version = "0.6.0"
 description = "Type-safe interfaces from Pydantic v2 models: Typer CLIs, plus an optional FastAPI web launcher + dashboard."
 readme = "README.md"
 license = "MIT"
@@ -153,6 +153,8 @@ ignore = [
 # A runnable demo app: a deferred Pillow import and non-crypto randomness are
 # fine, and it is a standalone project (not part of the typantic package).
 "examples/**" = ["PLC0415", "S311", "INP001"]
+# Dev codegen (gen_types.py): a standalone script, not an importable package.
+"scripts/**" = ["INP001"]
 # Typer commands legitimately use boolean flag options with defaults, and a
 # serve command maps a settings model's worth of options onto flags.
 "src/typantic/_cli.py" = ["FBT001", "FBT002"]
