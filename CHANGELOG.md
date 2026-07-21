@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the serving host's user and name filled in, instead of a `<this-host>`
   placeholder.
 
+### Dependencies
+
+- Updated the locked `websockets` (part of the `[web]` extra's stack) from 16.1
+  to 16.1.1. The declared floor (`websockets>=16`) is unchanged.
+- CI only, no effect on the published package: bumped `actions/checkout` from
+  7.0.0 to 7.0.1 and `pypa/gh-action-pypi-publish` from 1.14.0 to 1.14.1.
+
 ## [0.5.1] - 2026-07-17
 
 ### Added
