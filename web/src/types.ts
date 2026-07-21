@@ -55,6 +55,7 @@ export interface JobRecord {
   config_path: string;
   log_path: string;
   pid: number | null;
+  pid_start: number | null;
   scheduler_id: string | null;
   status: JobStatus;
   created_at: string;
