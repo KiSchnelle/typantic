@@ -180,8 +180,8 @@ function CopyButton(): ReactNode {
 // a big command (detect) isn't one long wall. Optional starts collapsed — that
 // is the clutter-tamer. Nested objects keep the default flat rendering.
 export function ObjectFieldTemplate(props: ObjectFieldTemplateProps): ReactNode {
-  const { properties, idSchema, schema, title } = props;
-  if (idSchema.$id !== "root") {
+  const { properties, fieldPathId, schema, title } = props;
+  if (fieldPathId.$id !== "root") {
     return (
       <fieldset>
         {title ? <legend>{title}</legend> : null}

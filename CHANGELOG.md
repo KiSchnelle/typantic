@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Dashboard frontend majors: upgraded React JSON Schema Form (`@rjsf/core`,
+  `@rjsf/utils`, `@rjsf/validator-ajv8`) from 5 to 6, TypeScript from 6 to 7,
+  and `lucide-react` to 1.25. RJSF v6 renames the custom-template `idSchema`
+  prop to `fieldPathId` and prefixes its generated marker classes
+  (`form-group` → `rjsf-field`, `array-item` → `rjsf-array-item`); the affected
+  template and the dashboard CSS that targeted those classes were migrated. The
+  Python API is unchanged.
 - Updated the locked `websockets` (part of the `[web]` extra's stack) from 16.1
   to 16.1.1. The declared floor (`websockets>=16`) is unchanged.
 - CI only, no effect on the published package: bumped `actions/checkout` from

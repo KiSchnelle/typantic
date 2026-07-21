@@ -72,7 +72,7 @@ pre,
 }
 
 /* ---- RJSF default-theme controls, styled to match the dark UI ---------- */
-.rjsf .form-group {
+.rjsf .rjsf-field {
   margin-bottom: 0.9rem;
 }
 
@@ -242,14 +242,14 @@ pre,
 }
 
 /* Give array item controls a tidy row with a little breathing room. */
-.rjsf .array-item {
+.rjsf .rjsf-array-item {
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
   margin-bottom: 0.4rem;
 }
 
-.rjsf .array-item > :first-child {
+.rjsf .rjsf-array-item > :first-child {
   flex: 1;
 }
 
