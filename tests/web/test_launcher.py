@@ -13,7 +13,13 @@ from typantic.web.launcher import (
     UnknownCommandError,
     UnknownProjectError,
 )
-from typantic.web.models import CommandMeta, JobRecord, JobStatus, LaunchRequest
+from typantic.web.models import (
+    BackendMeta,
+    CommandMeta,
+    JobRecord,
+    JobStatus,
+    LaunchRequest,
+)
 from typantic.web.store import JobStore
 
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
@@ -398,7 +404,7 @@ def test_refresh_queued_to_running(wired):
 
 def test_backends_meta_no_options(wired):
     launcher, _, _ = wired
-    assert launcher.backends_meta() == [{"key": "local", "options_schema": None}]
+    assert launcher.backends_meta() == [BackendMeta(key="local", options_schema=None)]
 
 
 def test_backends_meta_with_options(tmp_path, monkeypatch):
@@ -411,8 +417,9 @@ def test_backends_meta_with_options(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
     launcher = Launcher(JobStore(tmp_path / "jobs"), backends={"box": BoxBackend()})
     meta = launcher.backends_meta()
-    assert meta[0]["key"] == "box"
-    schema = meta[0]["options_schema"]
+    assert meta[0].key == "box"
+    schema = meta[0].options_schema
+    assert schema is not None
     assert schema["properties"]["image"]["type"] == "string"
 
 

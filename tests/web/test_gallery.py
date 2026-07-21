@@ -121,9 +121,9 @@ def test_list_images(tmp_path):
     _png(tmp_path / "a.png", mtime=100)
     record = _record(tmp_path)
     images = gallery.list_images(record, "job1")
-    assert images[0]["name"] == "a.png"
-    assert images[0]["root"] == 0
-    assert "job1/image?root=0&path=a.png" in images[0]["url"]
+    assert images[0].name == "a.png"
+    assert images[0].root == 0
+    assert "job1/image?root=0&path=a.png" in images[0].url
 
 
 def test_list_images_skips_non_dir_root(tmp_path):
@@ -133,7 +133,7 @@ def test_list_images_skips_non_dir_root(tmp_path):
     _png(job / "a.png")
     record = _record(job, {"output_folder": str(ghost)})
     images = gallery.list_images(record, "job1")
-    assert [img["root"] for img in images] == [0]
+    assert [img.root for img in images] == [0]
 
 
 def test_list_images_limit(tmp_path, monkeypatch):

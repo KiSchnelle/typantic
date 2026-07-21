@@ -22,6 +22,7 @@ from typantic.web.backends import LaunchBackend, PollResult, load_backends
 from typantic.web.discovery import discover_commands
 from typantic.web.models import (
     TERMINAL_STATUSES,
+    BackendMeta,
     CommandMeta,
     JobRecord,
     JobStatus,
@@ -124,17 +125,17 @@ class Launcher:
         """The discovered launchable commands."""
         return self._commands
 
-    def backends_meta(self) -> list[dict[str, object]]:
+    def backends_meta(self) -> list[BackendMeta]:
         """Each backend's key and its options JSON Schema (for the UI), sorted."""
-        meta: list[dict[str, object]] = []
+        meta: list[BackendMeta] = []
         for key in sorted(self._backends):
             model = getattr(self._backends[key], "options_model", None)
             schema = (
-                normalize_for_form(model.model_json_schema())
+                cast("dict[str, Any]", normalize_for_form(model.model_json_schema()))
                 if model is not None
                 else None
             )
-            meta.append({"key": key, "options_schema": schema})
+            meta.append(BackendMeta(key=key, options_schema=schema))
         return meta
 
     def command(self, key: str) -> CommandMeta:

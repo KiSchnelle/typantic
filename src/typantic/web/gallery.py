@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
-from typantic.web.models import JobRecord
+from typantic.web.models import JobImage, JobRecord
 
 _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _IMAGE_LIMIT = 300  # most images returned to the UI
@@ -87,9 +87,9 @@ def scan_images(root: Path) -> list[Path]:
     return [path for _, path in candidates]
 
 
-def list_images(record: JobRecord, job_id: str) -> list[dict[str, object]]:
+def list_images(record: JobRecord, job_id: str) -> list[JobImage]:
     """Find output images across a job's artifact roots (bounded), newest first."""
-    found: list[dict[str, object]] = []
+    found: list[JobImage] = []
     for index, root in enumerate(artifact_roots(record)):
         if not root.is_dir():
             continue
@@ -98,11 +98,11 @@ def list_images(record: JobRecord, job_id: str) -> list[dict[str, object]]:
                 return found
             rel = file.relative_to(root).as_posix()
             found.append(
-                {
-                    "name": rel,
-                    "root": index,
-                    "url": f"/api/jobs/{job_id}/image?root={index}&path={quote(rel)}",
-                },
+                JobImage(
+                    name=rel,
+                    root=index,
+                    url=f"/api/jobs/{job_id}/image?root={index}&path={quote(rel)}",
+                ),
             )
     return found
 

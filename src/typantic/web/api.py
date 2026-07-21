@@ -40,8 +40,11 @@ from typantic.web.launcher import (
     UnknownProjectError,
 )
 from typantic.web.models import (
+    ApiMeta,
     CommandMeta,
+    FsListing,
     History,
+    JobImage,
     JobPage,
     JobRecord,
     JobStatus,
@@ -122,12 +125,12 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
     guard = [Depends(require_token)]
 
     @app.get("/api/meta", dependencies=guard)
-    def meta() -> dict[str, object]:
-        return {
-            "title": title,
-            "version": version("typantic"),
-            "backends": launcher.backends_meta(),
-        }
+    def meta() -> ApiMeta:
+        return ApiMeta(
+            title=title,
+            version=version("typantic"),
+            backends=launcher.backends_meta(),
+        )
 
     @app.get("/api/commands", dependencies=guard)
     def list_commands() -> list[CommandMeta]:
@@ -217,7 +220,7 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
         return record
 
     @app.get("/api/jobs/{job_id}/images", dependencies=guard)
-    def job_images(job_id: str) -> dict[str, object]:
+    def job_images(job_id: str) -> dict[str, list[JobImage]]:
         record = launcher.get(job_id)
         if record is None:
             raise HTTPException(status_code=404, detail="No such job.")
@@ -269,11 +272,11 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
         return launcher.store.grouped_history()
 
     @app.get("/api/fs", dependencies=guard)
-    def browse(path: Annotated[str | None, Query()] = None) -> dict[str, object]:
+    def browse(path: Annotated[str | None, Query()] = None) -> FsListing:
         return filesystem.browse_directory(path)
 
     @app.post("/api/fs/mkdir", dependencies=guard)
-    def make_dir(request: MakeDirRequest) -> dict[str, object]:
+    def make_dir(request: MakeDirRequest) -> FsListing:
         with _domain_errors():
             return filesystem.make_directory(request.path, request.name)
 

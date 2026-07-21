@@ -195,3 +195,44 @@ class History(BaseModel):
 
     projects: list[ProjectGroup]
     ungrouped: list[JobRecord]
+
+
+class BackendMeta(BaseModel):
+    """One installed backend and the JSON Schema for its options (None = none)."""
+
+    key: str
+    options_schema: dict[str, Any] | None = None
+
+
+class ApiMeta(BaseModel):
+    """The ``/api/meta`` payload: dashboard brand, version, and the backends."""
+
+    title: str
+    version: str
+    backends: list[BackendMeta]
+
+
+class FsEntry(BaseModel):
+    """One entry (file or directory) in a path-picker listing."""
+
+    name: str
+    is_dir: bool
+
+
+class FsListing(BaseModel):
+    """A path-picker directory listing, with paging bounds and any read error."""
+
+    path: str
+    parent: str | None = None
+    entries: list[FsEntry]
+    error: str | None = None
+    total: int
+    truncated: bool
+
+
+class JobImage(BaseModel):
+    """One output image discovered under a job's artifact roots."""
+
+    name: str
+    root: int
+    url: str

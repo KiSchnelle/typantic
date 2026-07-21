@@ -10,6 +10,8 @@ image gallery is the sibling precedent -- output-image scanning lives in
 import os
 from pathlib import Path
 
+from typantic.web.models import FsEntry, FsListing
+
 
 class FileSystemError(Exception):
     """A path-picker request that cannot be served (bad name / missing parent)."""
@@ -43,7 +45,7 @@ def _expand(path: str) -> Path | None:
         return None
 
 
-def browse_directory(path: str | None) -> dict[str, object]:
+def browse_directory(path: str | None) -> FsListing:
     """List a directory for the path picker (falls back to home on a bad path)."""
     raw = (_expand(path) or Path.home()) if path else Path.home()
     if raw.is_file():
@@ -67,20 +69,21 @@ def browse_directory(path: str | None) -> dict[str, object]:
 
     listed.sort(key=lambda item: (not item[0], item[1].lower()))
     entries = [
-        {"name": name, "is_dir": is_dir} for is_dir, name in listed[:_BROWSE_ENTRY_CAP]
+        FsEntry(name=name, is_dir=is_dir)
+        for is_dir, name in listed[:_BROWSE_ENTRY_CAP]
     ]
     parent = str(base.parent) if base.parent != base else None
-    return {
-        "path": str(base),
-        "parent": parent,
-        "entries": entries,
-        "error": error,
-        "total": len(listed),
-        "truncated": len(listed) > _BROWSE_ENTRY_CAP,
-    }
+    return FsListing(
+        path=str(base),
+        parent=parent,
+        entries=entries,
+        error=error,
+        total=len(listed),
+        truncated=len(listed) > _BROWSE_ENTRY_CAP,
+    )
 
 
-def make_directory(path: str, name: str) -> dict[str, object]:
+def make_directory(path: str, name: str) -> FsListing:
     """Create one folder ``name`` under ``path`` and return its (empty) listing.
 
     Raises:

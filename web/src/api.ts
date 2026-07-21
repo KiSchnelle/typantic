@@ -2,6 +2,7 @@
 // the page URL (?token=…, the Jupyter pattern) and is sent as a Bearer header.
 
 import type {
+  ApiMeta,
   CommandMeta,
   FsListing,
   History,
@@ -12,7 +13,6 @@ import type {
   JsonSchema,
   LaunchPreview,
   LaunchRequest,
-  Meta,
   Project,
 } from "./types.ts";
 
@@ -40,7 +40,7 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return (await resp.json()) as T;
 }
 
-export function fetchMeta(): Promise<Meta> {
+export function fetchMeta(): Promise<ApiMeta> {
   return getJson("/api/meta");
 }
 
