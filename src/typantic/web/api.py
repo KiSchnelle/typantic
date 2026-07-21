@@ -133,6 +133,12 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
     def list_commands() -> list[CommandMeta]:
         return launcher.commands
 
+    @app.post("/api/commands/refresh", dependencies=guard)
+    def refresh_commands() -> list[CommandMeta]:
+        # Re-discover installed apps so a newly pip-installed command appears
+        # without restarting the server.
+        return launcher.refresh_commands()
+
     @app.get("/api/commands/{app_name}/{command}/schema", dependencies=guard)
     def command_schema(app_name: str, command: str) -> dict[str, object]:
         with _domain_errors():

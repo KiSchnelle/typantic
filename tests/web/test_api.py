@@ -114,6 +114,20 @@ def test_list_commands(env):
     assert env.client.get("/api/commands", headers=AUTH).json()[0]["key"] == "app/run"
 
 
+def test_refresh_commands_rediscovers(env, monkeypatch):
+    new = CommandMeta(app="app2", command="go", argv=("go",), title="Go")
+    monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META, new])
+    resp = env.client.post("/api/commands/refresh", headers=AUTH)
+    assert resp.status_code == 200
+    assert {c["key"] for c in resp.json()} == {"app/run", "app2/go"}
+    # the list endpoint now reflects the re-discovery, no restart needed
+    assert len(env.client.get("/api/commands", headers=AUTH).json()) == 2
+
+
+def test_refresh_commands_requires_token(env):
+    assert env.client.post("/api/commands/refresh").status_code == 401
+
+
 def test_command_schema_cached(env):
     env.launcher.schema_cache._cache["app/run"] = {"title": "Run"}
     resp = env.client.get("/api/commands/app/run/schema", headers=AUTH)
