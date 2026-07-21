@@ -38,6 +38,11 @@ logger = logging.getLogger("typantic.web")
 # the same second.
 _POLL_TTL_SECONDS = 2.0
 
+# Hard cap on the poll cache. Entries evict on the terminal transition, cancel,
+# delete, and project-delete, but a job that terminates without a subsequent
+# refresh leaves its entry behind; this bounds that residue to a fixed size.
+_POLL_CACHE_MAX = 1024
+
 _PLACEHOLDER_JOB_ID = "<job-id>"
 
 
@@ -223,6 +228,7 @@ class Launcher:
             config_path=str(config_path),
             log_path=str(log_path),
             pid=launched.pid,
+            pid_start=launched.pid_start,
             scheduler_id=launched.scheduler_id,
             status=launched.status,
             created_at=created_at,
@@ -248,7 +254,11 @@ class Launcher:
         if cached is not None and now - cached[0] < _POLL_TTL_SECONDS:
             return cached[1]
         result = self._backends[record.backend].poll(record)
+        # Re-insert at the end so eviction is least-recently-updated first.
+        self._poll_cache.pop(record.id, None)
         self._poll_cache[record.id] = (now, result)
+        while len(self._poll_cache) > _POLL_CACHE_MAX:
+            del self._poll_cache[next(iter(self._poll_cache))]
         return result
 
     def refresh(self, record: JobRecord) -> JobRecord:
@@ -443,6 +453,7 @@ class Launcher:
                 "name": new_request.name,
                 "project_id": new_request.project_id,
                 "pid": launched.pid,
+                "pid_start": launched.pid_start,
                 "scheduler_id": launched.scheduler_id,
                 "finished_at": None,
                 "exit_code": None,

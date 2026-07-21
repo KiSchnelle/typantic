@@ -20,11 +20,13 @@ class Launched(BaseModel):
 
     ``status`` is the job's initial state (a local process is RUNNING at once; a
     scheduler job is QUEUED). Exactly one handle (``pid`` or ``scheduler_id``) is
-    set, depending on the backend family.
+    set, depending on the backend family. ``pid_start`` accompanies ``pid``: the
+    process start-time that tells a live pid apart from a recycled one.
     """
 
     status: JobStatus
     pid: int | None = None
+    pid_start: int | None = None
     scheduler_id: str | None = None
 
 

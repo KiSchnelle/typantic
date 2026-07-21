@@ -173,6 +173,29 @@ def test_reap_nonexistent_pid_suppressed():
     _reap(999_999)  # no error
 
 
+def test_reap_retries_until_harvested(monkeypatch):
+    # First WNOHANG races the wrapper's exit (nothing reapable yet); the retry
+    # then collects it, so the child never lingers defunct.
+    results = iter([(0, 0), (4242, 0)])
+    monkeypatch.setattr(proc.os, "waitpid", lambda *_a, **_k: next(results))
+    monkeypatch.setattr(proc.time, "sleep", lambda _d: None)
+    _reap(4242)
+
+
+def test_reap_gives_up_after_attempts(monkeypatch):
+    count = 0
+
+    def never_reapable(*_a, **_k):
+        nonlocal count
+        count += 1
+        return (0, 0)
+
+    monkeypatch.setattr(proc.os, "waitpid", never_reapable)
+    monkeypatch.setattr(proc.time, "sleep", lambda _d: None)
+    _reap(4242, attempts=3)
+    assert count == 3
+
+
 def test_process_running_true_for_live_child():
     child = subprocess.Popen(["sleep", "2"])  # noqa: S607
     try:
@@ -219,3 +242,47 @@ def test_process_running_not_our_child_alive(monkeypatch):
     monkeypatch.setattr(proc.os, "waitpid", raise_child)
     monkeypatch.setattr(proc.os, "kill", lambda *_a, **_k: None)
     assert _process_running(4242) is True
+
+
+# --- pid start-time / pid-reuse detection ---
+
+
+def test_pid_start_time_reads_starttime(monkeypatch, tmp_path):
+    (tmp_path / "123").mkdir()
+    # comm (field 2) has spaces and a ')'; starttime (field 22) is 987654.
+    stat = "123 (sh proc) S " + " ".join(["0"] * 18) + " 987654 0 0 0"
+    (tmp_path / "123" / "stat").write_text(stat)
+    monkeypatch.setattr(proc, "_PROC", tmp_path)
+    assert proc._pid_start_time(123) == 987654
+
+
+def test_pid_start_time_missing_is_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(proc, "_PROC", tmp_path)  # no <pid>/stat under it
+    assert proc._pid_start_time(999) is None
+
+
+def test_pid_start_time_unparseable_is_none(monkeypatch, tmp_path):
+    (tmp_path / "5").mkdir()
+    (tmp_path / "5" / "stat").write_text("5 (sh) S 1 2 3")  # too few fields
+    monkeypatch.setattr(proc, "_PROC", tmp_path)
+    assert proc._pid_start_time(5) is None
+
+
+def test_process_running_start_matches_is_alive(monkeypatch):
+    monkeypatch.setattr(proc.os, "waitpid", lambda *_a, **_k: (0, 0))
+    monkeypatch.setattr(proc, "_pid_start_time", lambda _pid: 555)
+    monkeypatch.setattr(proc.os, "kill", lambda *_a, **_k: None)
+    assert _process_running(4242, 555) is True
+
+
+def test_process_running_pid_recycled_is_gone(monkeypatch):
+    monkeypatch.setattr(proc.os, "waitpid", lambda *_a, **_k: (0, 0))
+    monkeypatch.setattr(proc, "_pid_start_time", lambda _pid: 999)  # differs
+    assert _process_running(4242, 555) is False
+
+
+def test_process_running_start_unreadable_falls_through(monkeypatch):
+    monkeypatch.setattr(proc.os, "waitpid", lambda *_a, **_k: (0, 0))
+    monkeypatch.setattr(proc, "_pid_start_time", lambda _pid: None)
+    monkeypatch.setattr(proc.os, "kill", lambda *_a, **_k: None)
+    assert _process_running(4242, 555) is True

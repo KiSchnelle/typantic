@@ -163,6 +163,7 @@ class JobRecord(BaseModel):
     config_path: str
     log_path: str
     pid: int | None = None
+    pid_start: int | None = None
     scheduler_id: str | None = None
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime

@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import BaseModel, Field
@@ -12,7 +13,7 @@ from typantic.web.launcher import (
     UnknownCommandError,
     UnknownProjectError,
 )
-from typantic.web.models import CommandMeta, JobStatus, LaunchRequest
+from typantic.web.models import CommandMeta, JobRecord, JobStatus, LaunchRequest
 from typantic.web.store import JobStore
 
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
@@ -179,6 +180,31 @@ def test_poll_cache_reuses_within_ttl(wired):
     launcher.refresh(record)
     launcher.refresh(record)
     assert backend.poll_count == 1  # second refresh hit the TTL cache
+
+
+def _bare_record(job_id):
+    return JobRecord(
+        id=job_id,
+        command_key="app/run",
+        app="app",
+        command="run",
+        title="Run",
+        backend="local",
+        job_dir="/tmp",
+        config_path="/tmp/c.json",
+        log_path="/tmp/j.log",
+        created_at=datetime.now(UTC),
+    )
+
+
+def test_poll_cache_is_bounded(wired, monkeypatch):
+    launcher, _, _ = wired
+    monkeypatch.setattr(launcher_mod, "_POLL_CACHE_MAX", 3)
+    for i in range(10):
+        launcher._poll(_bare_record(f"job-{i}"))
+    assert len(launcher._poll_cache) == 3
+    # LRU: the three most-recently polled ids survive, the earlier ones evicted.
+    assert set(launcher._poll_cache) == {"job-7", "job-8", "job-9"}
 
 
 def test_get_refreshes_from_the_backend(wired):
