@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+title: "typantic"
+abstract: >-
+  Type-safe interfaces from one Pydantic v2 model: a Typer CLI, plus an optional
+  FastAPI web form and a job launcher + dashboard. Define your config once; no
+  duplication, no drift.
+type: software
+authors:
+  - family-names: "Schnelle"
+    given-names: "Kilian"
+    email: "kilian.schnelle@kischnelle.dev"
+    orcid: "https://orcid.org/0000-0001-8808-594X"
+license: MIT
+repository-code: "https://github.com/KiSchnelle/typantic"
+url: "https://github.com/KiSchnelle/typantic"
+keywords:
+  - typer
+  - pydantic
+  - pydantic-v2
+  - cli
+  - fastapi
+  - job-launcher
+  - json-schema
+version: "0.5.1"
+date-released: "2026-07-17"
+# TODO: after Zenodo mints the concept DOI, uncomment and paste it here:
+# doi: "10.5281/zenodo.XXXXXXX"

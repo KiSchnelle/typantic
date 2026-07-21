@@ -1,0 +1,22 @@
+{
+  "upload_type": "software",
+  "title": "typantic: Type-safe interfaces from Pydantic v2 models",
+  "description": "Type-safe interfaces from one Pydantic v2 model: a Typer CLI, plus an optional FastAPI web form and a job launcher + dashboard. Define your config once; no duplication, no drift.",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Schnelle, Kilian",
+      "orcid": "0000-0001-8808-594X"
+    }
+  ],
+  "keywords": [
+    "typer",
+    "pydantic",
+    "pydantic-v2",
+    "cli",
+    "fastapi",
+    "job-launcher",
+    "json-schema"
+  ]
+}
