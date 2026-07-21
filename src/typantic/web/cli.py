@@ -57,6 +57,12 @@ def serve_command(
         str,
         typer.Option(help="Dashboard brand shown in the UI."),
     ] = "typantic web",
+    log_level: Annotated[
+        str,
+        typer.Option(
+            help="Uvicorn log level: critical, error, warning, info, debug, or trace.",
+        ),
+    ] = "info",
 ) -> None:
     """Start the dashboard, printing the tokenized localhost URL to open."""
     launcher = Launcher(JobStore(jobs_dir))
@@ -78,4 +84,11 @@ def serve_command(
     ):
         typer.echo(line)
 
-    serve(launcher, host=host, port=resolved_port, token=resolved_token, title=title)
+    serve(
+        launcher,
+        host=host,
+        port=resolved_port,
+        token=resolved_token,
+        title=title,
+        log_level=log_level,
+    )

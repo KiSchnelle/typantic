@@ -31,7 +31,20 @@ def test_serve_no_token(monkeypatch, tmp_path):
     assert captured["token"] is None
     assert captured["port"] == 8123
     assert captured["title"] == "My UI"
+    assert captured["log_level"] == "info"  # the default, threaded through
     assert "My UI is running" in result.output
+
+
+def test_serve_log_level_is_threaded_through(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
+    captured = {}
+    monkeypatch.setattr(cli_mod, "serve", lambda launcher, **k: captured.update(k))
+    result = runner.invoke(
+        app,
+        ["serve", "--no-token", "--jobs-dir", str(tmp_path), "--log-level", "debug"],
+    )
+    assert result.exit_code == 0
+    assert captured["log_level"] == "debug"
 
 
 def test_serve_default_token_and_port(monkeypatch, tmp_path):
