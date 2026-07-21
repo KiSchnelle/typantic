@@ -164,6 +164,8 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
     void action.catch((e: unknown) => setActionError(String(e)));
   };
 
+  const terminal = job !== null && TERMINAL_STATUSES.includes(job.status);
+
   useEffect(() => {
     let active = true;
     const poll = () =>
@@ -171,12 +173,19 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
         .then((j) => active && setJob(j))
         .catch(() => undefined);
     poll();
+    // A terminal job's status is final — stop polling so the detail view doesn't
+    // hit the server forever after the job has finished.
+    if (terminal) {
+      return () => {
+        active = false;
+      };
+    }
     const t = window.setInterval(poll, 2000);
     return () => {
       active = false;
       window.clearInterval(t);
     };
-  }, [id]);
+  }, [id, terminal]);
 
   useEffect(() => {
     let active = true;
@@ -260,22 +269,32 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
     URL.revokeObjectURL(url);
   };
 
+  // Clear the gallery when switching jobs / restarting, kept separate from the
+  // poll below so the terminal transition doesn't blank it and refetch.
+  useEffect(() => {
+    setImages([]);
+  }, [id, runEpoch]);
+
   useEffect(() => {
     let active = true;
-    setImages([]);
     const load = () =>
       fetchImages(id)
         .then((r) => active && setImages(r.images))
         .catch(() => undefined);
     load();
+    // One final load lands on the terminal transition; then stop polling.
+    if (terminal) {
+      return () => {
+        active = false;
+      };
+    }
     const t = window.setInterval(load, 3000);
     return () => {
       active = false;
       window.clearInterval(t);
     };
-  }, [id, runEpoch]);
+  }, [id, runEpoch, terminal]);
 
-  const terminal = job !== null && TERMINAL_STATUSES.includes(job.status);
   const options = request ? usedOptions(request.backend_options) : [];
   const logView = useMemo(() => (log ? colorizeLog(log) : null), [log]);
 
