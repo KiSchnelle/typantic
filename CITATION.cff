@@ -24,5 +24,5 @@ keywords:
   - json-schema
 version: "0.6.0"
 date-released: "2026-07-21"
-# TODO: after Zenodo mints the concept DOI, uncomment and paste it here:
-# doi: "10.5281/zenodo.XXXXXXX"
+# Concept DOI: represents all versions and always resolves to the latest.
+doi: "10.5281/zenodo.21473880"

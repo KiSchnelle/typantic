@@ -4,6 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/typantic.svg)](https://pypi.org/project/typantic/)
 [![Python](https://img.shields.io/pypi/pyversions/typantic.svg)](https://pypi.org/project/typantic/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21473880.svg)](https://doi.org/10.5281/zenodo.21473880)
 
 Auto-generate [Typer](https://typer.tiangolo.com/) CLI interfaces from [Pydantic](https://docs.pydantic.dev/) models — a **Pydantic → Typer** bridge.
 
