@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The web form no longer rejects leaving an optional `X | None` scalar field
+  blank. Collapsing a nullable union kept the field's `default: null` while
+  narrowing its `type` to the non-null branch, so the emitted schema was
+  self-contradictory (`type: number` with `default: null`) and RJSF's validator
+  refused to submit until a value was entered. Nullable scalars are now emitted
+  as `type: [<type>, "null"]` (rendered as the same single input) so the null
+  default and an empty input validate; for non-scalar nullable branches
+  (`$ref`/enum, array, object) the invalid null default is dropped so the model's
+  own `None` default applies.
+
 ## [0.6.0] - 2026-07-21
 
 ### Added

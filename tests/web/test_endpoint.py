@@ -40,7 +40,7 @@ def test_schema_route_is_normalized():
     schema = client.get("/run/schema").json()
     seed = schema["properties"]["seed"]
     assert "anyOf" not in seed  # nullable union collapsed
-    assert seed["type"] == "integer"
+    assert seed["type"] == ["integer", "null"]  # kept nullable so None validates
 
 
 def test_default_name_from_handler():

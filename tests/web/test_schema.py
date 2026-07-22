@@ -31,7 +31,7 @@ def test_fetch_schema_end_to_end(monkeypatch):
     assert set(props) == {"name", "seed", "workers"}
     seed = props["seed"]
     assert "anyOf" not in seed  # nullable union collapsed
-    assert seed["type"] == "integer"
+    assert seed["type"] == ["integer", "null"]  # nullability kept so None validates
     assert seed["default"] is None
     assert seed["description"] == "An optional seed."
 
@@ -120,9 +120,70 @@ def test_normalize_collapses_nullable_single():
         "title": "S",
     }
     assert normalize_for_form(node) == {
-        "type": "integer",
+        "type": ["integer", "null"],
         "default": None,
         "title": "S",
+    }
+
+
+def test_normalize_nullable_scalar_keeps_constraints_and_default():
+    # Mirrors a real `float | None = None` field (e.g. a probability threshold):
+    # the collapsed field stays nullable so its None default and an empty input
+    # both validate, while the numeric bounds and hints survive.
+    node = {
+        "anyOf": [
+            {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            {"type": "null"},
+        ],
+        "default": None,
+        "title": "T",
+        "description": "d",
+    }
+    assert normalize_for_form(node) == {
+        "type": ["number", "null"],
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "default": None,
+        "title": "T",
+        "description": "d",
+    }
+
+
+def test_normalize_nullable_ref_drops_null_default():
+    # A $ref branch has no scalar `type` to make nullable, so the invalid null
+    # default is dropped and the model's own None default applies on omission.
+    node = {
+        "anyOf": [{"$ref": "#/$defs/E"}, {"type": "null"}],
+        "default": None,
+        "title": "E",
+    }
+    assert normalize_for_form(node) == {"$ref": "#/$defs/E", "title": "E"}
+
+
+def test_normalize_nullable_array_keeps_type_and_drops_null_default():
+    # An array branch keeps its string `type: "array"` (the frontend keys array
+    # handling off it) and drops the null default instead of becoming a type
+    # array.
+    node = {
+        "anyOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "null"},
+        ],
+        "default": None,
+    }
+    assert normalize_for_form(node) == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
+def test_normalize_multibranch_nullable_drops_null_default():
+    node = {
+        "anyOf": [{"type": "integer"}, {"type": "string"}, {"type": "null"}],
+        "default": None,
+    }
+    assert normalize_for_form(node) == {
+        "anyOf": [{"type": "integer"}, {"type": "string"}],
     }
 
 
@@ -139,7 +200,7 @@ def test_normalize_leaves_genuine_union_untouched():
 
 def test_normalize_handles_oneof():
     node = {"oneOf": [{"type": "integer"}, {"type": "null"}]}
-    assert normalize_for_form(node) == {"type": "integer"}
+    assert normalize_for_form(node) == {"type": ["integer", "null"]}
 
 
 def test_normalize_prefixitems_to_items():
@@ -158,7 +219,7 @@ def test_normalize_prefixitems_kept_when_items_present():
 
 def test_normalize_recurses_lists_and_passes_scalars():
     assert normalize_for_form([{"anyOf": [{"type": "integer"}, {"type": "null"}]}]) == [
-        {"type": "integer"},
+        {"type": ["integer", "null"]},
     ]
     assert normalize_for_form("scalar") == "scalar"
     assert normalize_for_form(5) == 5

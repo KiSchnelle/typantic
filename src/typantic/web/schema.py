@@ -17,6 +17,12 @@ from typantic.web.models import CommandMeta
 # Importing a heavy settings module can be slow the first time.
 _SCHEMA_TIMEOUT_S = 120.0
 
+# Scalar JSON Schema types a nullable field can keep as ``type: [X, "null"]``
+# when its union is collapsed. Array/object/$ref branches are excluded: RJSF's
+# form logic keys off a string ``type`` (``"array"``/``"object"``), so a type
+# array would silently change how those render.
+_NULLABLE_SCALAR_TYPES = frozenset({"number", "integer", "string", "boolean"})
+
 
 class SchemaError(RuntimeError):
     """Raised when a command's ``--schema`` invocation fails or is unparseable."""
@@ -102,9 +108,11 @@ def normalize_for_form(node: object) -> object:
     RJSF's field generator speaks Draft-07, so two Pydantic idioms trip it up:
 
     - ``X | None`` becomes ``anyOf: [X, {"type": "null"}]``, which renders as an
-      ``Option 1 / Option 2`` selector. We collapse a nullable union back to its
-      single non-null branch (keeping the field's title/description/default), so
-      it renders as one optional field.
+      ``Option 1 / Option 2`` selector. We collapse a nullable union to its
+      single non-null branch (keeping the field's title/description/default) so
+      it renders as one optional field. A nullable scalar keeps its
+      nullability as ``type: [X, "null"]`` so the kept ``None`` default stays
+      valid; see :func:`_collapse_nullable_union`.
     - A fixed tuple (e.g. ``tuple[int, int]``) becomes ``prefixItems: [...]``,
       which the renderer cannot handle ("Missing items definition"). We move it
       to the Draft-07 array form ``items: [...]`` so each element gets its own
@@ -125,11 +133,31 @@ def normalize_for_form(node: object) -> object:
     return {key: normalize_for_form(value) for key, value in result.items()}
 
 
+def _drop_null_default(node: dict[str, object]) -> None:
+    """Remove a ``default: null`` the collapsed non-null schema can no longer hold.
+
+    Once the ``{"type": "null"}`` branch is gone, a ``null`` default is invalid
+    against the remaining type, which makes RJSF/AJV reject the untouched field.
+    Dropping it lets the settings model apply its own ``None`` default when the
+    field is omitted on submit.
+    """
+    if "default" in node and node["default"] is None:
+        del node["default"]
+
+
 def _collapse_nullable_union(node: dict[str, object]) -> dict[str, object]:
     """Fold ``anyOf``/``oneOf`` that carries a ``{"type": "null"}`` branch.
 
     One non-null branch left -> inline it (the field's own title/description/
     default win). Several left -> keep the union but drop the null branch.
+
+    A single scalar branch keeps its nullability as ``type: [X, "null"]``:
+    RJSF renders that as the plain non-null input (``getSchemaType`` picks the
+    non-null type) while AJV still accepts ``null``, so the field's kept ``None``
+    default and an empty input both validate. A bare ``type: number`` carrying
+    ``default: null`` would instead fail validation and block submit. Non-scalar
+    branches ($ref/enum, array, object) have no scalar ``type`` to make nullable,
+    so their invalid ``null`` default is dropped instead.
     """
     for union_key in ("anyOf", "oneOf"):
         variants = node.get(union_key)
@@ -144,6 +172,13 @@ def _collapse_nullable_union(node: dict[str, object]) -> dict[str, object]:
             continue  # no null branch; leave a genuine union alone
         siblings = {k: v for k, v in node.items() if k != union_key}
         if len(non_null) == 1 and isinstance(non_null[0], dict):
-            return {**non_null[0], **siblings}
+            merged = {**non_null[0], **siblings}
+            branch_type = merged.get("type")
+            if isinstance(branch_type, str) and branch_type in _NULLABLE_SCALAR_TYPES:
+                merged["type"] = [branch_type, "null"]
+            else:
+                _drop_null_default(merged)
+            return merged
+        _drop_null_default(siblings)
         return {**siblings, union_key: non_null}
     return node
