@@ -200,7 +200,9 @@ class Launcher:
                 json.dumps(_clean_form_values(request.values), indent=2),
             )
             # The full request so the job can later be cloned or restarted.
-            self.store.request_path(job_id).write_text(request.model_dump_json(indent=2))
+            self.store.request_path(job_id).write_text(
+                request.model_dump_json(indent=2)
+            )
             log_path = self.store.log_path(job_id)
 
             argv = meta.invocation("--config", str(config_path))

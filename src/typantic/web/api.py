@@ -80,9 +80,7 @@ def _domain_errors() -> Iterator[None]:
     try:
         yield
     except tuple(exc for exc, _ in _ERROR_STATUS) as exc:
-        status = next(
-            code for kind, code in _ERROR_STATUS if isinstance(exc, kind)
-        )
+        status = next(code for kind, code in _ERROR_STATUS if isinstance(exc, kind))
         raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 

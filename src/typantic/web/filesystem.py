@@ -69,8 +69,7 @@ def browse_directory(path: str | None) -> FsListing:
 
     listed.sort(key=lambda item: (not item[0], item[1].lower()))
     entries = [
-        FsEntry(name=name, is_dir=is_dir)
-        for is_dir, name in listed[:_BROWSE_ENTRY_CAP]
+        FsEntry(name=name, is_dir=is_dir) for is_dir, name in listed[:_BROWSE_ENTRY_CAP]
     ]
     parent = str(base.parent) if base.parent != base else None
     return FsListing(

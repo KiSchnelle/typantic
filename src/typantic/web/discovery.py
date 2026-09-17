@@ -83,4 +83,3 @@ def _parse_entry(entry_name: str, raw: object) -> list[CommandMeta]:
         except ValidationError:
             logger.warning("Skipping malformed command from %r: %r", entry_name, item)
     return parsed
-

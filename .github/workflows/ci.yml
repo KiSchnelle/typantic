@@ -31,6 +31,9 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - run: uv sync --dev --frozen
       - run: uv run ruff check .
+      # Scoped to src+tests: the README's code fences are hand-aligned
+      # for readability and the formatter would unwrap them.
+      - run: uv run ruff format --check src tests
       # web/src/types.ts is generated from the Pydantic models; fail if it drifted.
       - run: uv run python scripts/gen_types.py --check
 

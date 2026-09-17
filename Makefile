@@ -18,6 +18,9 @@ wheel: frontend
 # pass locally and fail in CI.
 check:
 	uv run ruff check .
+	# README code fences stay hand-aligned for readability; the formatter
+	# would unwrap them, so the check is scoped to src+tests like the siblings.
+	uv run ruff format --check src tests
 	uv run mypy src
 	uv run pytest -q
 	uv run python scripts/gen_types.py --check

@@ -27,7 +27,10 @@ class FakeRunner:
 
     def set(self, tool, *, returncode=0, stdout="", stderr=""):
         self.responses[tool] = subprocess.CompletedProcess(
-            [tool], returncode, stdout, stderr,
+            [tool],
+            returncode,
+            stdout,
+            stderr,
         )
 
     def __call__(self, argv):
@@ -99,7 +102,10 @@ def test_slurm_launch_strips_cluster_suffix(tmp_path):
     runner = FakeRunner()
     runner.set("sbatch", stdout="777;clusterA\n")
     launched = SlurmBackend(runner).launch(
-        ARGV, job_dir=tmp_path, log_path=tmp_path / "log", backend_options={},
+        ARGV,
+        job_dir=tmp_path,
+        log_path=tmp_path / "log",
+        backend_options={},
     )
     assert launched.scheduler_id == "777"
 
@@ -109,7 +115,10 @@ def test_slurm_submit_failure_raises(tmp_path):
     runner.set("sbatch", returncode=1, stderr="boom")
     with pytest.raises(SchedulerError, match="Submission failed"):
         SlurmBackend(runner).launch(
-            ARGV, job_dir=tmp_path, log_path=tmp_path / "log", backend_options={},
+            ARGV,
+            job_dir=tmp_path,
+            log_path=tmp_path / "log",
+            backend_options={},
         )
 
 
@@ -118,7 +127,10 @@ def test_slurm_empty_job_id_raises(tmp_path):
     runner.set("sbatch", stdout="   \n")
     with pytest.raises(SchedulerError, match="did not return a job id"):
         SlurmBackend(runner).launch(
-            ARGV, job_dir=tmp_path, log_path=tmp_path / "log", backend_options={},
+            ARGV,
+            job_dir=tmp_path,
+            log_path=tmp_path / "log",
+            backend_options={},
         )
 
 
@@ -184,7 +196,10 @@ def test_slurm_cancel_without_id_is_noop(tmp_path):
 
 def test_slurm_preview_returns_script(tmp_path):
     script = SlurmBackend(FakeRunner()).preview(
-        ARGV, job_dir=tmp_path, log_path=tmp_path / "log", backend_options={},
+        ARGV,
+        job_dir=tmp_path,
+        log_path=tmp_path / "log",
+        backend_options={},
     )
     assert script.startswith("#!/bin/bash")
     assert "#SBATCH" in script

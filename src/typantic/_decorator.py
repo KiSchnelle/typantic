@@ -54,6 +54,7 @@ class _Leaf(NamedTuple):
     name_path: tuple[str, ...]
     flags: tuple[str, ...]
 
+
 # Python identifiers for the injected config-file parameters (kept distinct from
 # any model field name); the user-facing flags are --config / --generate-config.
 _CTX_PARAM = "_typantic_ctx"
@@ -179,16 +180,28 @@ def _config_file_params() -> tuple[list[inspect.Parameter], dict[str, object]]:
     keyword_only = inspect.Parameter.KEYWORD_ONLY
     params = [
         inspect.Parameter(
-            _CONFIG_PARAM, keyword_only, default=None, annotation=config_ann,
+            _CONFIG_PARAM,
+            keyword_only,
+            default=None,
+            annotation=config_ann,
         ),
         inspect.Parameter(
-            _GENERATE_PARAM, keyword_only, default=None, annotation=generate_ann,
+            _GENERATE_PARAM,
+            keyword_only,
+            default=None,
+            annotation=generate_ann,
         ),
         inspect.Parameter(
-            _SCHEMA_PARAM, keyword_only, default=False, annotation=schema_ann,
+            _SCHEMA_PARAM,
+            keyword_only,
+            default=False,
+            annotation=schema_ann,
         ),
         inspect.Parameter(
-            _CTX_PARAM, keyword_only, default=None, annotation=typer.Context,
+            _CTX_PARAM,
+            keyword_only,
+            default=None,
+            annotation=typer.Context,
         ),
     ]
     annotations: dict[str, object] = {

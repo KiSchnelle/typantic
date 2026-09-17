@@ -164,9 +164,7 @@ def _collapse_nullable_union(node: dict[str, object]) -> dict[str, object]:
         if not isinstance(variants, list):
             continue
         non_null = [
-            v
-            for v in variants
-            if not (isinstance(v, dict) and v.get("type") == "null")
+            v for v in variants if not (isinstance(v, dict) and v.get("type") == "null")
         ]
         if len(non_null) == len(variants):
             continue  # no null branch; leave a genuine union alone

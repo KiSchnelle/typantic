@@ -105,8 +105,17 @@ def _insert_bad_row(store, job_id):
         conn.execute(
             "INSERT INTO jobs (id, command_key, app, command, title, backend, "
             "status, created_at, record_json) VALUES (?,?,?,?,?,?,?,?,?)",
-            (job_id, "a/b", "a", "b", "T", "local", "running", _dt(1).isoformat(),
-             "not-json"),
+            (
+                job_id,
+                "a/b",
+                "a",
+                "b",
+                "T",
+                "local",
+                "running",
+                _dt(1).isoformat(),
+                "not-json",
+            ),
         )
 
 

@@ -51,8 +51,7 @@ def web(ctx: typer.Context) -> None:
         from typantic.web.cli import app as web_app  # noqa: PLC0415
     except ModuleNotFoundError:
         typer.echo(
-            "The web interface requires the [web] extra: "
-            "pip install 'typantic[web]'",
+            "The web interface requires the [web] extra: pip install 'typantic[web]'",
             err=True,
         )
         raise typer.Exit(1) from None

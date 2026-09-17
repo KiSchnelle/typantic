@@ -410,7 +410,12 @@ def _build_file_only_app() -> tuple[typer.Typer, dict[str, object]]:
 
     app = typer.Typer()
     add_command(
-        app, Simple, run, name="go", config_file="only", help="Run from a file.",
+        app,
+        Simple,
+        run,
+        name="go",
+        config_file="only",
+        help="Run from a file.",
     )
 
     @app.command()

@@ -341,7 +341,9 @@ def test_job_image_bad_path(env):
 
 def test_projects_crud(env):
     created = env.client.post(
-        "/api/projects", json={"name": "Screen A"}, headers=AUTH,
+        "/api/projects",
+        json={"name": "Screen A"},
+        headers=AUTH,
     ).json()
     assert created["name"] == "Screen A"
     listing = env.client.get("/api/projects", headers=AUTH).json()
