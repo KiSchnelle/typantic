@@ -339,6 +339,25 @@ models), so a typo like `wrokers: 8` fails fast instead of being silently droppe
 and leaving the field at its default. Computed-field names are still accepted, so
 a config written back out (which serialises them) reloads cleanly.
 
+### The helpers behind the flags
+
+The same three steps are available directly, for code that reads or writes a
+settings file outside a Typer command:
+
+```python
+from pathlib import Path
+
+from typantic import build_config_template, load_config_file, write_config_template
+
+write_config_template(Config, Path("config.yaml"))  # what --generate-config writes
+template = build_config_template(Config)            # the same mapping, unwritten
+settings = Config(**load_config_file(Path("config.yaml")))
+```
+
+`write_config_template` picks JSON for a `.json` suffix and YAML otherwise.
+`load_config_file` accepts `.yaml`, `.yml` and `.json`, and raises `ValueError`
+for an unsupported suffix, unparseable content, or a non-mapping top level.
+
 ### File-only commands
 
 Some models can't map onto flat flags at all — nested-model lists, or

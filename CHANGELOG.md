@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The README now documents `load_config_file`, `build_config_template` and
+  `write_config_template`. All three have been exported since 0.2.0, but the
+  Config files section only ever covered the `--config` / `--generate-config`
+  flags, so three of the five public names had no documentation.
+
 ### Fixed
 
 - The web form no longer rejects leaving an optional `X | None` scalar field
