@@ -371,6 +371,52 @@ add_command(app, TuneConfig, run, config_file="only", help="Tune from a config f
 File-only commands still expose `--schema`, so a web front-end can build their
 form the same way.
 
+## Entry point (`make_main`)
+
+`make_main` builds the `main()` you point your console script at. It is optional —
+`main = app` works — but it handles four things a hand-written entry point usually
+gets wrong:
+
+```python
+# myapp/cli.py
+from typantic import make_main
+
+
+def _load_app():
+    from myapp.commands import app  # imported only when a command will actually run
+
+    return app
+
+
+main = make_main(_load_app, package_name="myapp")
+```
+
+```toml
+# pyproject.toml
+[project.scripts]
+myapp = "myapp.cli:main"
+```
+
+- **`--version` is answered from package metadata before `load_app()` is called**,
+  so an app that imports a heavy stack (torch, say) still responds instantly.
+  That is why the app is passed as a *loader* rather than as the app itself.
+- **Shell completion is handed straight to Typer**, without setting up the run
+  context below.
+- **A real run is timed**, logging `Execution took N minutes.` to a logger named
+  after `package_name`. Introspection flags (`--help`, `--schema`,
+  `--generate-config`) exit without a run, so they are not timed and their stdout
+  stays machine-readable.
+- **A crash becomes exit 1 with the traceback logged**, rather than a raw
+  traceback; a non-zero `Exit` code propagates unchanged.
+
+Pass `run_context` to wrap the run in a context manager — typically logging setup
+that has to be torn down even when the command raises. It is entered after the
+version and completion short-circuits, so neither pays for it:
+
+```python
+main = make_main(_load_app, package_name="myapp", run_context=MyLogger.running)
+```
+
 ## Web (`typantic[web]`)
 
 The optional `[web]` extra turns the same settings models into web interfaces —

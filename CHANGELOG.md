@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `make_main(load_app, *, package_name, run_context=None)` builds the `main()` a
+  package exposes as its console script. It answers `--version` from package
+  metadata *before* calling `load_app()`, so an app that imports a heavy stack
+  still responds instantly; hands shell-completion requests straight to Typer;
+  logs the wall-clock duration of a real run (but not of `--help`, `--schema` or
+  `--generate-config`, whose stdout stays machine-readable); and turns an
+  uncaught exception into exit 1 with the traceback logged. `run_context` wraps
+  the run in a caller-supplied context manager — logging setup that must be torn
+  down even when the command raises — entered after the version and completion
+  short-circuits so neither pays for it.
+
 ### Changed
 
 - The README now documents `load_config_file`, `build_config_template` and
