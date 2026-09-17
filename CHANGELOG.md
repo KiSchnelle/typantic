@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-17
+
 ### Added
 
 - `make_main(load_app, *, package_name, run_context=None)` builds the `main()` a
@@ -22,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dependency floors raised to the versions actually resolved.** For
+  `typantic[web]` this is a real minimum bump: `fastapi>=0.141.1` (was 0.138),
+  `uvicorn>=0.53.0` (was 0.49), `websockets>=17.1` (was 16) and `pillow>=12.3.0`
+  (was 11). Base typantic moves to `pydantic>=2.13.5` (was 2.10), `pyyaml>=6.0.3`
+  and `typer>=0.27.2` (was 0.27). The supported Python range is **unchanged** —
+  still 3.12 through 3.15.
 - The README now documents `load_config_file`, `build_config_template` and
   `write_config_template`. All three have been exported since 0.2.0, but the
   Config files section only ever covered the `--config` / `--generate-config`
