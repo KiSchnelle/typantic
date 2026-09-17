@@ -158,7 +158,7 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
             return launcher.preview(request)
 
     @app.get("/api/jobs", dependencies=guard)
-    def list_jobs(  # noqa: PLR0913 - filter/sort/page query params
+    def list_jobs(  # noqa: PLR0913, PLR0917 - filter/sort/page query params
         status: Annotated[JobStatus | None, Query()] = None,
         app_name: Annotated[str | None, Query(alias="app")] = None,
         backend: Annotated[str | None, Query()] = None,
