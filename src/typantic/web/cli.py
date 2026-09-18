@@ -10,6 +10,7 @@ import typer
 from typantic.web.launcher import Launcher
 from typantic.web.server import (
     find_free_port,
+    is_loopback_host,
     local_server_name,
     resolve_token,
     serve,
@@ -72,6 +73,15 @@ def serve_command(
             "'typantic.web_commands' entry-point group so their commands appear.",
         )
     resolved_token = resolve_token(token, disable=no_token)
+    # Keyed on the resolved token, not the flag, so `--token ""` cannot slip past.
+    if resolved_token is None and not is_loopback_host(host):
+        msg = (
+            f"--no-token disables authentication, so it is only allowed on a "
+            f"loopback host; {host!r} is reachable from the network. Either drop "
+            f"--no-token (a random one is generated for you) or bind 127.0.0.1 "
+            f"and reach it over an SSH tunnel."
+        )
+        raise typer.BadParameter(msg)
     resolved_port = port or find_free_port(host)
 
     for line in startup_banner(

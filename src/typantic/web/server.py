@@ -32,6 +32,22 @@ def _is_ipv6(host: str) -> bool:
         return False  # a hostname, not a literal
 
 
+def is_loopback_host(host: str) -> bool:
+    """Whether ``host`` is a loopback address the OS will not expose off-machine.
+
+    Anything that is not a loopback literal -- ``0.0.0.0``, ``::``, an empty
+    string, or a hostname this process cannot resolve -- is treated as routable.
+    The check is deliberately conservative in that direction: the cost of calling
+    a routable host loopback is an unauthenticated dashboard on the network.
+    """
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False  # a hostname, not a literal: assume it is reachable
+
+
 def resolve_token(token: str | None, *, disable: bool) -> str | None:
     """Return the token to enforce: explicit, else generated, unless disabled."""
     if disable:
@@ -113,7 +129,10 @@ def startup_banner(
 
     Shows the URL to open, then a ready-to-run ``ssh -N -L`` line (with this
     host's user and name filled in) for reaching the dashboard from a remote
-    machine. The token note is omitted when the server runs without a token.
+    machine. With a token, the banner says to keep it private; without one it
+    says plainly that the dashboard is unauthenticated, rather than staying
+    silent about it -- ``serve`` only permits that on a loopback bind, but
+    anyone with an account on this machine can still reach it.
     """
     url = dashboard_url(host, port, token)
     ssh_command = ssh_forward_command(host, port, user=user, server=server)
@@ -132,6 +151,12 @@ def startup_banner(
         lines += [
             "",
             "  The token in the URL is the credential; keep it private.",
+        ]
+    else:
+        lines += [
+            "",
+            "  WARNING: --no-token is set: this dashboard has no authentication.",
+            "  Anyone who can reach this port can launch jobs as you.",
         ]
     lines.append("")
     return lines

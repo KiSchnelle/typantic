@@ -18,6 +18,39 @@ def test_resolve_token():
     assert len(generated) > 10
 
 
+def test_is_loopback_host():
+    # Loopback literals and the localhost alias: safe to serve without auth.
+    assert server.is_loopback_host("127.0.0.1")
+    assert server.is_loopback_host("127.0.1.5")  # the whole 127/8 block
+    assert server.is_loopback_host("::1")
+    assert server.is_loopback_host("localhost")
+    # Everything else is treated as reachable, including the wildcards and any
+    # hostname this process cannot resolve -- guessing wrong the other way would
+    # leave an unauthenticated dashboard on the network.
+    assert not server.is_loopback_host("0.0.0.0")  # noqa: S104 - asserting it is refused
+    assert not server.is_loopback_host("::")
+    assert not server.is_loopback_host("example.com")
+    assert not server.is_loopback_host("")
+
+
+def test_startup_banner_warns_when_unauthenticated():
+    with_token = "\n".join(
+        server.startup_banner(
+            title="T", host="127.0.0.1", port=1, token="tok", user="u", server="s"
+        ),
+    )
+    assert "keep it private" in with_token
+    assert "no authentication" not in with_token
+
+    without = "\n".join(
+        server.startup_banner(
+            title="T", host="127.0.0.1", port=1, token=None, user="u", server="s"
+        ),
+    )
+    assert "no authentication" in without
+    assert "launch jobs as you" in without
+
+
 def test_dashboard_url():
     assert server.dashboard_url("h", 80, "tok") == "http://h:80/?token=tok"
     assert server.dashboard_url("h", 80, None) == "http://h:80/"
