@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
 
+# Least privilege for every job that does not override it -- including jobs added
+# later, which would otherwise silently inherit the repository default.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Run tests
