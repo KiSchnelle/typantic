@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-18
+
+### Security
+
+- `typantic web serve --no-token` is now **refused on a non-loopback host**,
+  exiting 2 with an explanation. The flag has always been documented "localhost
+  dev only", but nothing enforced it, so `--no-token --host 0.0.0.0` published an
+  unauthenticated dashboard to the network. What that exposes is not just the
+  path picker but the job launcher itself: anyone who could reach the port could
+  run commands as the serving user. Bind a loopback address, or drop `--no-token`
+  and use the token that is generated for you.
+- The startup banner now states plainly that the dashboard is unauthenticated
+  when it runs without a token, instead of silently omitting the token note.
+
+### Changed
+
+- Both GitHub Actions workflows declare `permissions: contents: read` at the
+  workflow root, so every job runs with least privilege and any job added later
+  inherits it rather than the repository default. The PyPI publish job keeps its
+  own `id-token: write`.
+
 ## [0.7.0] - 2026-09-17
 
 ### Added

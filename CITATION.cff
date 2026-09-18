@@ -22,7 +22,7 @@ keywords:
   - fastapi
   - job-launcher
   - json-schema
-version: "0.7.0"
+version: "0.7.1"
 date-released: "2026-07-21"
 # Concept DOI: represents all versions and always resolves to the latest.
 doi: "10.5281/zenodo.21473880"
