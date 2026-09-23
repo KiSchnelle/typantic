@@ -67,19 +67,24 @@ if __name__ == "__main__":
 ```
 $ python example.py --help
 
- Usage: example.py [OPTIONS] IMAGES...
+ Usage: example.py [OPTIONS] {images}...
 
  Process images with validation.
 
-╭─ Arguments ──────────────────────────────────────────────────╮
-│ *  images  IMAGES...  Image folders to process.  [required]  │
-╰──────────────────────────────────────────────────────────────╯
-╭─ Options ────────────────────────────────────────────────────╮
-│ *  --output     PATH     Output directory.  [required]       │
-│    --threshold  FLOAT    Detection threshold.  [default: 0.5]│
-│    --seed       INTEGER  Random seed.  [default: (None)]     │
-│    --help                Show this message and exit.         │
-╰──────────────────────────────────────────────────────────────╯
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    images      <path>  Image folders to process. [required]                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --output                    <path>   Output directory. [required]         │
+│    --threshold                 <float>  Detection threshold. [default: 0.5]  │
+│    --seed                      <int>    Random seed. [default: (None)]       │
+│    --install-completion                 Install completion for the current   │
+│                                         shell.                               │
+│    --show-completion                    Show completion for the current      │
+│                                         shell, to copy it or customize the   │
+│                                         installation.                        │
+│    --help                               Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## How it works
@@ -230,13 +235,18 @@ $ python example.py --help
 
  Usage: example.py [OPTIONS]
 
-╭─ Options ──────────────────────────────────────────────────────╮
-│ --dry-run    --no-dry-run    Dry run.  [default: no-dry-run]   │
-│ --help                       Show this message and exit.       │
-╰────────────────────────────────────────────────────────────────╯
-╭─ Compute ──────────────────────────────────────────────────────╮
-│ --cpus        INTEGER        CPU count.  [default: 4]          │
-╰────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --dry-run               --no-dry-run      Dry run. [default: no-dry-run]     │
+│ --install-completion                      Install completion for the current │
+│                                           shell.                             │
+│ --show-completion                         Show completion for the current    │
+│                                           shell, to copy it or customize the │
+│                                           installation.                      │
+│ --help                                    Show this message and exit.        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Compute ────────────────────────────────────────────────────────────────────╮
+│ --cpus        <int>  CPU count. [default: 4]                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 `--cpus` renders under a "Compute" panel; `--dry-run` stays in the default
@@ -326,16 +336,26 @@ $ myapp run --config run.yaml                 # run entirely from the file
 $ myapp run --config run.yaml --workers 16    # file as base, --workers overrides
 ```
 
+Precedence, highest first: a flag you pass, its environment variable
+(`cli_envvar`), the file, then the model's own default. A relative path in a
+config file resolves against the directory you run the command from, not the
+file's own directory.
+
 `--help` lists these options under a **Config file** panel:
 
 ```
 ╭─ Config file ──────────────────────────────────────────────────╮
-│ --config           PATH  Load settings from a YAML/JSON file    │
-│                          (flags passed still override).         │
-│ --generate-config  PATH  Write a default config template to     │
-│                          PATH and exit.                         │
-│ --schema                 Print the settings model's JSON Schema │
-│                          to stdout and exit.                    │
+│ --config                 <path>  Load settings from a          │
+│                                  YAML/JSON file (flags passed  │
+│                                  still override).              │
+│                                  [default: (None)]             │
+│ --generate-config        <path>  Write an editable default     │
+│                                  config template to this file  │
+│                                  and exit.                     │
+│                                  [default: (None)]             │
+│ --schema                         Print the settings model's    │
+│                                  JSON Schema to stdout and     │
+│                                  exit.                         │
 ╰────────────────────────────────────────────────────────────────╯
 ```
 

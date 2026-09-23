@@ -316,7 +316,7 @@ def _config_file_params() -> tuple[list[inspect.Parameter], dict[str, object]]:
         Path | None,
         typer.Option(
             "--generate-config",
-            help="Write a default config template to PATH and exit.",
+            help="Write an editable default config template to this file and exit.",
             rich_help_panel=_CONFIG_PANEL,
             show_default="None",
         ),
