@@ -21,10 +21,12 @@ from typantic.web.api import _tail_log, make_api
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.backends.slurm import SlurmBackend
 from typantic.web.models import CommandMeta, JobRecord, JobStatus
+from typantic.web.security import host_name
 from typantic.web.store import JobStore
 
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
 AUTH = {"Authorization": "Bearer secret"}
+LOCAL = "http://127.0.0.1:8791"
 BAD_AUTH = {"Authorization": "Bearer wrong"}
 
 
@@ -96,7 +98,7 @@ def test_no_token_configured_is_open(tmp_path, monkeypatch):
         JobStore(tmp_path / "j"),
         backends={"local": FakeBackend()},
     )
-    client = TestClient(make_api(launcher, token=None))
+    client = TestClient(make_api(launcher, token=None), base_url=LOCAL)
     assert client.get("/api/commands").status_code == 200
 
 
@@ -644,7 +646,9 @@ def test_extra_routers_are_mounted(tmp_path, monkeypatch):
         return {"ok": True}
 
     launcher = _bare_launcher(tmp_path, monkeypatch)
-    client = TestClient(make_api(launcher, token=None, extra_routers=[router]))
+    client = TestClient(
+        make_api(launcher, token=None, extra_routers=[router]), base_url=LOCAL
+    )
     assert client.get("/api/extra").json() == {"ok": True}
 
 
@@ -654,7 +658,7 @@ def test_serves_spa_when_present(tmp_path, monkeypatch):
     (spa / "index.html").write_text("<html>hi</html>")
     monkeypatch.setattr(api_mod, "_SPA_DIR", spa)
     launcher = _bare_launcher(tmp_path, monkeypatch)
-    client = TestClient(make_api(launcher, token=None))
+    client = TestClient(make_api(launcher, token=None), base_url=LOCAL)
     resp = client.get("/")
     assert resp.status_code == 200
     assert "hi" in resp.text
@@ -663,7 +667,7 @@ def test_serves_spa_when_present(tmp_path, monkeypatch):
 def test_no_spa_when_dashboard_disabled(tmp_path, monkeypatch):
     # dashboard=False never mounts the SPA, even if web_dist exists on disk.
     launcher = _bare_launcher(tmp_path, monkeypatch)
-    client = TestClient(make_api(launcher, token=None, dashboard=False))
+    client = TestClient(make_api(launcher, token=None, dashboard=False), base_url=LOCAL)
     assert client.get("/").status_code == 404
 
 
@@ -795,3 +799,104 @@ def test_a_delete_that_leaves_files_behind_is_409(env):
         assert resp.status_code == 200
     finally:
         locked.chmod(0o700)
+
+
+# --- without a token, only this machine's own names are served (DNS rebinding) ---
+
+
+def _open_client(tmp_path, monkeypatch, **kwargs):
+    launcher = _bare_launcher(tmp_path, monkeypatch)
+    return TestClient(make_api(launcher, token=None, **kwargs), base_url=LOCAL)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        # A page on evil.example re-resolves its name to 127.0.0.1 and calls the
+        # API from the victim's browser, same-origin; only Host still names it.
+        "evil.example:8791",
+        "127.0.0.1.evil.example:8791",
+        "localhost.evil.example",
+        "[::1].evil.example",
+    ],
+)
+def test_without_a_token_a_foreign_host_is_refused(tmp_path, monkeypatch, host):
+    client = _open_client(tmp_path, monkeypatch)
+    resp = client.get("/api/commands", headers={"Host": host})
+    assert resp.status_code == 400
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect("/ws/jobs/any/log", headers={"Host": host}) as ws,
+    ):
+        ws.receive_json()
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "127.0.0.1:8791",
+        "127.0.0.2",
+        "localhost:8791",
+        "LOCALHOST",
+        "[::1]:8791",
+        "[::1]",
+    ],
+)
+def test_without_a_token_this_machines_names_are_served(tmp_path, monkeypatch, host):
+    client = _open_client(tmp_path, monkeypatch)
+    assert client.get("/api/commands", headers={"Host": host}).status_code == 200
+
+
+def test_without_a_token_the_bound_host_is_served(tmp_path, monkeypatch):
+    client = _open_client(tmp_path, monkeypatch, host="node7.example")
+    headers = {"Host": "node7.example:8791"}
+    assert client.get("/api/commands", headers=headers).status_code == 200
+
+
+def test_with_a_token_any_host_is_served(env):
+    headers = {**AUTH, "Host": "dashboard.example.org"}
+    assert env.client.get("/api/commands", headers=headers).status_code == 200
+
+
+def test_a_request_without_a_host_header_is_refused(tmp_path, monkeypatch):
+    app = make_api(_bare_launcher(tmp_path, monkeypatch), token=None)
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.0",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/commands",
+        "raw_path": b"/api/commands",
+        "query_string": b"",
+        "headers": [],
+        "server": ("127.0.0.1", 8791),
+        "client": ("127.0.0.1", 50000),
+    }
+    asyncio.run(app(scope, receive, send))
+    assert sent[0]["status"] == 400
+
+
+@pytest.mark.parametrize(
+    ("header", "name"),
+    [
+        ("localhost", "localhost"),
+        ("localhost:8791", "localhost"),
+        ("[::1]", "::1"),
+        ("[::1]:8791", "::1"),
+        ("[::1].evil.example", None),  # not an address in brackets
+        ("[::1", None),
+        ("::1", None),  # an IPv6 literal must be bracketed
+        ("localhost:http", None),
+    ],
+)
+def test_host_name_is_parsed_strictly(header, name):
+    assert host_name(header) == name

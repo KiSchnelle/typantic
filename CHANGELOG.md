@@ -361,6 +361,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Without a token, the dashboard answered any web page that could reach
+  it.** A page on another site can re-resolve its own name to `127.0.0.1` (DNS
+  rebinding) and then call a `--no-token` dashboard from your browser as that
+  site, launching jobs as you; a development setup on a fixed port makes the
+  port easy to guess. Without a token, HTTP requests and log sockets are now
+  served only when addressed to a loopback name (`localhost`, `127.x.x.x`,
+  `[::1]`) or to the host the server is bound to (`make_api(host=...)`,
+  which `serve` passes); anything else gets HTTP 400. With a token nothing
+  changes. **Migration:** a reverse proxy in front of a `--no-token` server
+  must pass a loopback `Host` (nginx's default,
+  `proxy_set_header Host $proxy_host`, does).
 - **Breaking: the job store is private.** Each job folder holds the submitted
   config, which can carry a secret the form took as plain text, and the job's
   log. Under the usual 022 umask both were readable by every user of a shared

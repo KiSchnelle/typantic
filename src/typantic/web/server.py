@@ -179,5 +179,5 @@ def serve(
     import uvicorn  # noqa: PLC0415 - deferred so --help/--version stay light
 
     gallery.prune_thumbnails()
-    app = make_api(launcher, token=token, title=title)
+    app = make_api(launcher, token=token, title=title, host=host)
     uvicorn.run(app, host=host, port=port, log_level=log_level)

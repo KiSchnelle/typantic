@@ -56,7 +56,7 @@ from typantic.web.models import (
     ProjectCreate,
 )
 from typantic.web.schema import SchemaError
-from typantic.web.security import token_ok
+from typantic.web.security import LocalHostOnly, token_ok
 from typantic.web.store import FolderNotRemovedError
 
 _SPA_DIR = Path(__file__).parent / "web_dist"
@@ -89,13 +89,14 @@ def _domain_errors() -> Iterator[None]:
         raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 
-def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure is trivial
+def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; each closure is trivial
     launcher: Launcher,
     *,
     token: str | None = None,
     title: str = "typantic web",
     extra_routers: Sequence[APIRouter] = (),
     dashboard: bool = True,
+    host: str | None = None,
 ) -> FastAPI:
     """Build the FastAPI app over ``launcher``.
 
@@ -103,15 +104,20 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
         launcher: The job launcher the routes delegate to.
         token: Shared secret required on ``/api`` and ``/ws`` (via ``Authorization:
             Bearer`` or a ``?token=`` query param). ``None`` disables auth — only
-            appropriate for a localhost dev run.
+            appropriate for a localhost dev run — and then serves only requests
+            addressed to a loopback name or ``host`` (see
+            :class:`~typantic.web.security.LocalHostOnly`).
         title: The dashboard brand, surfaced at ``/api/meta``.
         extra_routers: Extra routers to mount (each token-guarded by the caller).
         dashboard: Serve the built SPA at ``/`` if present.
+        host: The host the server is bound to, served without a token as well.
 
     Returns:
         The configured application (serve with uvicorn).
     """
     app = FastAPI(title=title, version=typantic.__version__)
+    if token is None:
+        app.add_middleware(LocalHostOnly, hosts=[host] if host else [])
 
     def require_token(
         authorization: Annotated[str | None, Header()] = None,
