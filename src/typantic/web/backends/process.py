@@ -4,8 +4,8 @@ The job is spawned in a new session (``start_new_session=True``) so it outlives
 the web process — a restart never kills a running job, and a still-running job
 is re-attached by polling its pid. A detached child is reparented away from us,
 so we cannot ``waitpid`` for its exit code; instead the launch wraps the command
-so it records its exit code into an ``exit_code`` marker in the job dir when it
-finishes. That on-disk marker is the durable truth ``poll`` reads back.
+so it records its exit code into a ``.typantic-exit`` marker in the job dir when
+it finishes. That on-disk marker is the durable truth ``poll`` reads back.
 
 Subclasses override :meth:`ProcessBackend._wrap` to run the command through
 something else (SSH to a remote host, a container runtime, …) while reusing all
@@ -26,12 +26,26 @@ from typing import Any
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
-_EXIT_CODE_FILE = "exit_code"
+EXIT_MARKER = ".typantic-exit"
+# The marker's name before 0.8.0, which an app could collide with; a job launched
+# by an older typantic and still running across the upgrade writes it.
+_LEGACY_EXIT_MARKER = "exit_code"
 _PROC = Path("/proc")
 
 
-def _exit_code_path(job_dir: Path) -> Path:
-    return job_dir / _EXIT_CODE_FILE
+def read_exit_code(job_dir: Path) -> int | None:
+    """The exit code a finished job recorded in ``job_dir``, else ``None``."""
+    for name in (EXIT_MARKER, _LEGACY_EXIT_MARKER):
+        code = _read_exit_code(job_dir / name)
+        if code is not None:
+            return code
+    return None
+
+
+def clear_exit_code(job_dir: Path) -> None:
+    """Remove a previous run's markers, so a restart in place starts unfinished."""
+    for name in (EXIT_MARKER, _LEGACY_EXIT_MARKER):
+        (job_dir / name).unlink(missing_ok=True)
 
 
 def _pid_start_time(pid: int) -> int | None:
@@ -100,7 +114,9 @@ def _process_running(pid: int, pid_start: int | None = None) -> bool:
     ``pid_start`` is the start-time recorded at launch. After a restart a bare
     signal-0 probe cannot tell our job from a *recycled* pid now naming an
     unrelated process; when we can read the pid's current start-time and it
-    differs, the pid has been recycled and our job is gone.
+    differs, the pid has been recycled and our job is gone. So has it when the
+    probe is refused: the tracked pid is always our own shell, so a pid we may
+    not signal belongs to another user by now.
     """
     try:
         reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
@@ -114,10 +130,8 @@ def _process_running(pid: int, pid_start: int | None = None) -> bool:
             return False  # pid recycled onto a different process
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         return False
-    except PermissionError:
-        return True  # exists but owned by another user
     return True
 
 
@@ -144,12 +158,11 @@ class ProcessBackend:
     ) -> Launched:
         """Spawn the (wrapped) command detached, capturing output to ``log_path``."""
         wrapped = self._wrap(argv, job_dir=job_dir, backend_options=backend_options)
-        exit_path = _exit_code_path(job_dir)
-        # Clear any marker from a previous run in this dir (restart re-runs in
-        # place); otherwise poll() would read the stale code and report the fresh
-        # run as already finished.
-        exit_path.unlink(missing_ok=True)
-        script = f"{shlex.join(wrapped)}\necho $? > {shlex.quote(str(exit_path))}\n"
+        # A restart re-runs in place: a previous run's marker would report the
+        # fresh run as already finished.
+        clear_exit_code(job_dir)
+        marker = shlex.quote(str(job_dir / EXIT_MARKER))
+        script = f"{shlex.join(wrapped)}\necho $? > {marker}\n"
         with log_path.open("wb") as log:
             process = subprocess.Popen(  # noqa: S603
                 ["/bin/sh", "-c", script],
@@ -169,23 +182,49 @@ class ProcessBackend:
 
     def poll(self, record: JobRecord) -> PollResult:
         """Resolve status from the exit-code marker, else the pid's liveness."""
-        exit_code = _read_exit_code(_exit_code_path(Path(record.job_dir)))
-        if exit_code is not None:
-            if record.pid is not None:
-                _reap(record.pid)  # the wrapper is done; don't leave a zombie
-            status = JobStatus.DONE if exit_code == 0 else JobStatus.FAILED
-            return PollResult(status=status, exit_code=exit_code)
-        if record.pid is not None and _process_running(record.pid, record.pid_start):
-            return PollResult(status=JobStatus.RUNNING)
-        # Gone without recording an exit code: crashed or was killed.
-        return PollResult(status=JobStatus.FAILED)
+        job_dir = Path(record.job_dir)
+        exit_code = read_exit_code(job_dir)
+        if exit_code is None:
+            if record.pid is not None and _process_running(
+                record.pid,
+                record.pid_start,
+            ):
+                return PollResult(status=JobStatus.RUNNING)
+            # The wrapper writes the marker just before it exits, so a job that
+            # finished between the two checks has one now.
+            exit_code = read_exit_code(job_dir)
+            if exit_code is None:
+                # Gone without recording an exit code: crashed or was killed.
+                return PollResult(status=JobStatus.FAILED)
+        if record.pid is not None:
+            _reap(record.pid)  # the wrapper is done; don't leave a zombie
+        status = JobStatus.DONE if exit_code == 0 else JobStatus.FAILED
+        return PollResult(status=status, exit_code=exit_code)
 
     def cancel(self, record: JobRecord) -> None:
-        """SIGTERM the job's process group (best effort)."""
-        if record.pid is None:
-            return
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(os.getpgid(record.pid), signal.SIGTERM)
+        """SIGTERM the job's process group, if that process is still our job."""
+        self._signal(record)
+
+    def _signal(self, record: JobRecord) -> bool:
+        """SIGTERM the job's process group; whether it was there to signal.
+
+        A stale row's pid can name an unrelated process of the same user by now
+        (the job exited and the pid was reused, say across a server restart), and
+        signalling its group would kill that. So the pid is signalled only while
+        it still runs with the start time recorded at launch (where ``/proc``
+        tells), and still leads its own process group -- as the job's shell does,
+        having been started in a new session.
+        """
+        pid = record.pid
+        if pid is None or not _process_running(pid, record.pid_start):
+            return False
+        try:
+            if os.getpgid(pid) != pid:
+                return False
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            return False
+        return True
 
     def preview(
         self,

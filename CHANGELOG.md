@@ -255,6 +255,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that has finished since, which recorded CANCELLED over its real outcome.
   - The status cache is synchronised; concurrent requests could raise
     `KeyError` from it.
+- A local job that finished in the instant between the two halves of a status
+  check was recorded FAILED forever: its exit marker was read (not there yet),
+  then its process looked for (gone by then). The marker is now read again
+  before a job is called failed.
+- A local job whose liveness probe was refused (`EPERM`) was taken to be still
+  running, for good. The tracked pid is always typantic's own shell, so a
+  refusal means the pid belongs to another user by now and the job is gone.
+- A local job's exit marker is now `.typantic-exit` in its folder. The old name,
+  `exit_code`, is one an app could plausibly write into its working directory
+  itself. A job launched by an older typantic and still running across the
+  upgrade writes the old name, which is still read.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the
@@ -273,6 +284,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is, and the server warns at start with the `chmod 700` that fixes it.
   **Migration:** if colleagues read results straight out of your job folders,
   point the command's output folder somewhere shared instead.
+- **Cancelling or deleting a local job could SIGTERM an unrelated process
+  group.** Deleting a job whose stored status still said RUNNING -- its process
+  long gone, say across a server restart -- signalled whatever process group its
+  pid named by now. A pid is now signalled only while it still runs with the
+  start time recorded at launch (where `/proc` tells), and still leads its own
+  process group, as the job's shell does. Deleting a job (or a project) asks for
+  its live status before it cancels anything.
 
 ## [0.7.1] - 2026-09-18
 

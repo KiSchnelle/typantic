@@ -428,6 +428,11 @@ class Launcher:
             if record is None:
                 return False
             if not record.is_terminal:
+                # Asked afresh: a job that has finished since the row was stored
+                # must not be signalled -- its pid may name another process now.
+                self._forget_poll(job_id)
+                record = self.refresh(record)
+            if not record.is_terminal:
                 backend = self._backends.get(record.backend)
                 if backend is not None:
                     backend.cancel(record)

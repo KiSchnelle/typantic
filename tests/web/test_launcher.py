@@ -639,3 +639,25 @@ def test_a_refresh_that_changes_nothing_new_stores_nothing(wired):
 
     backend.on_poll = start_meanwhile
     assert launcher.refresh(record).status is JobStatus.RUNNING
+
+
+# --- delete asks for the live status before it signals anything ---
+
+
+def test_delete_does_not_cancel_a_job_that_has_finished(wired):
+    # The stored row still said RUNNING; cancelling it signalled a pid that may
+    # name an unrelated process by now.
+    launcher, backend, _ = wired
+    record = launcher.launch(_request())
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    assert launcher.delete(record.id) is True
+    assert backend.cancelled == []
+
+
+def test_delete_project_does_not_cancel_a_job_that_has_finished(wired):
+    launcher, backend, store = wired
+    project = store.create_project("P")
+    launcher.launch(_request(project_id=project.id))
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    assert launcher.delete_project(project.id) is True
+    assert backend.cancelled == []
