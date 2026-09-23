@@ -12,7 +12,12 @@ batch script and track it by job id.
 """
 
 from typantic.web.backends.apptainer import ApptainerBackend
-from typantic.web.backends.base import LaunchBackend, Launched, PollResult
+from typantic.web.backends.base import (
+    LaunchBackend,
+    Launched,
+    LaunchUncertainError,
+    PollResult,
+)
 from typantic.web.backends.container import ContainerBackend
 from typantic.web.backends.local import LocalBackend
 from typantic.web.backends.pbs import PbsBackend
@@ -30,6 +35,7 @@ __all__ = [
     "ApptainerBackend",
     "ContainerBackend",
     "LaunchBackend",
+    "LaunchUncertainError",
     "Launched",
     "LocalBackend",
     "PbsBackend",

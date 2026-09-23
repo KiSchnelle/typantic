@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from typantic.web._files import write_private
 from typantic.web._subprocess import run_tool
-from typantic.web.backends.base import Launched, PollResult
+from typantic.web.backends.base import Launched, LaunchUncertainError, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
 Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
@@ -32,6 +32,8 @@ _SUBMIT_SCRIPT = "submit.sh"
 _TOOL_TIMEOUT_S = 30
 _TOOL_UNAVAILABLE = -1
 """Return code standing in for "the tool could not be run at all"."""
+_TOOL_TIMED_OUT = -2
+"""Return code standing in for "the tool did not answer in time"."""
 
 
 class SchedulerParams(BaseModel):
@@ -73,6 +75,14 @@ def _run_tool(run: Runner, argv: list[str]) -> subprocess.CompletedProcess[str]:
     """
     try:
         return run(argv)
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("Scheduler tool %s timed out: %s", argv[0], exc)
+        return subprocess.CompletedProcess(
+            argv,
+            returncode=_TOOL_TIMED_OUT,
+            stdout="",
+            stderr=str(exc),
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Scheduler tool %s could not be run: %s", argv[0], exc)
         return subprocess.CompletedProcess(
@@ -165,7 +175,15 @@ class SchedulerBackend(abc.ABC):
             script_path,
             self._script(argv, job_dir=job_dir, log_path=log_path, params=params),
         )
-        result = _run_tool(self._run, self._submit_command(script_path))
+        submit = self._submit_command(script_path)
+        result = _run_tool(self._run, submit)
+        if result.returncode == _TOOL_TIMED_OUT:
+            msg = (
+                f"{submit[0]} did not answer within {_TOOL_TIMEOUT_S} s, and the job "
+                f"may have been queued anyway: check the scheduler's queue. Its "
+                f"folder is kept at {job_dir}."
+            )
+            raise LaunchUncertainError(msg)
         if result.returncode != 0:
             detail = result.stderr.strip()
             msg = f"Submission failed (exit {result.returncode}): {detail}"

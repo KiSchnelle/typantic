@@ -14,13 +14,14 @@ PRIVATE_DIR = 0o700
 PRIVATE_FILE = 0o600
 
 
-def write_private(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` as UTF-8, readable and writable by its owner only."""
+def write_private(path: Path, data: str | bytes) -> None:
+    """Write ``data`` (text as UTF-8) to ``path``, readable by its owner only."""
+    raw = data.encode() if isinstance(data, str) else data
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE)
-    with os.fdopen(fd, "w", encoding="utf-8") as out:
+    with os.fdopen(fd, "wb") as out:
         # O_CREAT's mode applies only to a new file; an existing one keeps its own.
         os.fchmod(out.fileno(), PRIVATE_FILE)
-        out.write(text)
+        out.write(raw)
 
 
 def touch_private(path: Path) -> None:

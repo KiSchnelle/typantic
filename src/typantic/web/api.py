@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 import typantic
 from typantic.web import filesystem, gallery
+from typantic.web.backends.base import LaunchUncertainError
 from typantic.web.backends.scheduler import SchedulerError
 from typantic.web.filesystem import FileSystemError
 from typantic.web.launcher import (
@@ -68,6 +69,7 @@ _ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
     (UnknownProjectError, 400),
     (JobNotTerminalError, 409),
     (SchemaError, 502),
+    (LaunchUncertainError, 504),
     (SchedulerError, 502),
     (FileSystemError, 400),
     (ValidationError, 422),

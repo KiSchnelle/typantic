@@ -30,6 +30,15 @@ class Launched(BaseModel):
     scheduler_id: str | None = None
 
 
+class LaunchUncertainError(RuntimeError):
+    """The backend cannot tell whether the job started.
+
+    A submission that timed out may still have been accepted: ``sbatch`` can
+    hang after the controller queued the job. The launcher then keeps the job's
+    folder, which a job that does run needs for its config and log.
+    """
+
+
 class PollResult(BaseModel):
     """A backend's status readout for a job.
 

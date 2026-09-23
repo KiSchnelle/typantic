@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import stat
 import time
 from datetime import UTC, datetime
@@ -8,7 +9,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from typantic.web import launcher as launcher_mod
-from typantic.web.backends.base import Launched, PollResult
+from typantic.web.backends.base import Launched, LaunchUncertainError, PollResult
 from typantic.web.launcher import (
     JobNotTerminalError,
     Launcher,
@@ -38,11 +39,17 @@ class FakeBackend:
         # Runs in place of the poll, to act out what happens while a slow
         # status query (sacct can take seconds) is in flight.
         self.on_poll = None
+        # A scheduler job writes its log only once it starts running.
+        self.writes_log = True
+        self.rejects = None  # an exception preview() and launch() raise
 
     def launch(self, argv, *, job_dir, log_path, backend_options):
+        if self.rejects is not None:
+            raise self.rejects
         pid = 4321 + len(self.launched)  # each run gets its own process
         self.launched.append((argv, backend_options))
-        log_path.write_text("hello\n")
+        if self.writes_log:
+            log_path.write_text("hello\n")
         return Launched(pid=pid, status=self.next_status)
 
     def poll(self, record):
@@ -55,6 +62,8 @@ class FakeBackend:
         self.cancelled.append(record.id)
 
     def preview(self, argv, *, job_dir, log_path, backend_options):
+        if self.rejects is not None:
+            raise self.rejects
         return "PREVIEW " + " ".join(argv)
 
 
@@ -661,3 +670,186 @@ def test_delete_project_does_not_cancel_a_job_that_has_finished(wired):
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
     assert launcher.delete_project(project.id) is True
     assert backend.cancelled == []
+
+
+# --- a restart that fails leaves the job exactly as it was ---
+
+
+def _finished(launcher, backend, **request):
+    record = launcher.launch(_request(**request))
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    return launcher.get(record.id)
+
+
+def _files(store, job_id):
+    return {
+        name: path.read_text()
+        for name, path in (
+            ("config", store.config_path(job_id)),
+            ("request", store.request_path(job_id)),
+            ("log", store.log_path(job_id)),
+        )
+    }
+
+
+def test_a_restart_the_backend_rejects_leaves_the_job_as_it_was(wired):
+    # The new settings were written before the backend looked at its options,
+    # so a rejected restart destroyed the job's stored settings.
+    launcher, backend, store = wired
+    done = _finished(launcher, backend, values={"x": 1})
+    before = _files(store, done.id)
+    backend.rejects = ValueError("partition: bad value")
+    with pytest.raises(ValueError, match="partition"):
+        launcher.restart(done.id, _request(values={"x": 2}))
+    assert _files(store, done.id) == before
+    assert store.load(done.id) == done
+
+
+def test_a_restart_that_fails_to_start_puts_the_files_back(wired, monkeypatch):
+    launcher, backend, store = wired
+    done = _finished(launcher, backend, values={"x": 1})
+    before = _files(store, done.id)
+
+    def refuse(*_args, **_kwargs):
+        msg = "no scheduler here"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(backend, "launch", refuse)
+    with pytest.raises(RuntimeError):
+        launcher.restart(done.id, _request(values={"x": 2}))
+    assert _files(store, done.id) == before
+    assert store.load(done.id) == done
+    assert [p.name for p in store.job_dir(done.id).iterdir()].count("job.log") == 1
+
+
+def test_a_restarted_job_starts_with_an_empty_log(wired):
+    # A queued scheduler job writes nothing until it runs, so the dashboard
+    # showed the previous run's log as if it were the new one's.
+    launcher, backend, store = wired
+    done = _finished(launcher, backend)
+    backend.writes_log = False
+    launcher.restart(done.id)
+    assert store.log_path(done.id).read_text() == ""
+    assert sorted(p.name for p in store.job_dir(done.id).iterdir()) == [
+        "job.log",
+        "launch_request.json",
+        "submit_config.json",
+    ]
+
+
+def test_a_restart_runs_from_the_stores_paths(wired):
+    # restart wrote the new config to the store's path but launched with the
+    # path in the record, which a pre-0.8.0 relative jobs root left relative.
+    launcher, backend, store = wired
+    done = _finished(launcher, backend)
+    stale = done.model_copy(
+        update={
+            "job_dir": "jobs/x",
+            "config_path": "jobs/x/submit_config.json",
+            "log_path": "jobs/x/job.log",
+        },
+    )
+    store.save(stale)
+    restarted = launcher.restart(done.id)
+    argv, _ = backend.launched[-1]
+    assert argv[-1] == str(store.config_path(done.id))
+    assert restarted.config_path == str(store.config_path(done.id))
+    assert restarted.job_dir == str(store.job_dir(done.id))
+    assert restarted.log_path == str(store.log_path(done.id))
+
+
+def test_a_restart_without_its_request_says_what_it_lost(wired, caplog):
+    launcher, backend, store = wired
+    done = _finished(launcher, backend)
+    store.request_path(done.id).unlink()
+    launcher.restart(done.id)
+    assert "backend options" in caplog.text
+
+
+# --- a job that started but could not be recorded is stopped ---
+
+
+def _failing_save(store, monkeypatch):
+    real = store.save
+
+    def save(record):
+        if record.pid is not None:  # the row that records a started run
+            msg = "database is locked"
+            raise sqlite3.OperationalError(msg)
+        real(record)
+
+    monkeypatch.setattr(store, "save", save)
+
+
+def test_a_launch_that_cannot_be_recorded_stops_the_job(wired, monkeypatch):
+    # Unrecorded, the running job could never be found, cancelled or cleaned up.
+    launcher, backend, store = wired
+    _failing_save(store, monkeypatch)
+    with pytest.raises(sqlite3.OperationalError):
+        launcher.launch(_request())
+    assert len(backend.cancelled) == 1
+    assert [p for p in store.root.iterdir() if p.is_dir()] == []
+
+
+def test_a_restart_that_cannot_be_recorded_stops_the_new_run(wired, monkeypatch):
+    launcher, backend, store = wired
+    done = _finished(launcher, backend, values={"x": 1})
+    before = _files(store, done.id)
+    _failing_save(store, monkeypatch)
+    with pytest.raises(sqlite3.OperationalError):
+        launcher.restart(done.id, _request(values={"x": 2}))
+    assert backend.cancelled == [done.id]
+    assert _files(store, done.id) == before
+
+
+# --- a submission that timed out may have queued the job ---
+
+
+def test_a_launch_that_may_have_queued_keeps_its_folder(wired):
+    # The job may run: deleting the folder its --output and --chdir name
+    # would make it fail on start, with nothing left to say why.
+    launcher, backend, store = wired
+    backend.rejects = LaunchUncertainError("sbatch did not answer")
+    with pytest.raises(LaunchUncertainError):
+        launcher.launch(_request())
+    (folder,) = [p for p in store.root.iterdir() if p.is_dir()]
+    assert (folder / "submit_config.json").exists()
+
+
+def test_a_restart_that_may_have_queued_keeps_the_new_settings(wired, monkeypatch):
+    launcher, backend, store = wired
+    done = _finished(launcher, backend, values={"x": 1})
+
+    def uncertain(*_args, **_kwargs):
+        msg = "sbatch did not answer"
+        raise LaunchUncertainError(msg)
+
+    monkeypatch.setattr(backend, "launch", uncertain)
+    with pytest.raises(LaunchUncertainError):
+        launcher.restart(done.id, _request(values={"x": 2}))
+    assert json.loads(store.config_path(done.id).read_text()) == {"x": 2}
+
+
+def test_a_failed_restart_removes_what_it_added(wired, monkeypatch):
+    launcher, backend, store = wired
+    done = _finished(launcher, backend)
+    store.request_path(done.id).unlink()
+    store.log_path(done.id).unlink()
+
+    def refuse(*_args, **_kwargs):
+        msg = "no scheduler here"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(backend, "launch", refuse)
+    with pytest.raises(RuntimeError):
+        launcher.restart(done.id, _request(values={"x": 2}))
+    assert not store.request_path(done.id).exists()
+    assert not store.log_path(done.id).exists()
+
+
+def test_a_restart_of_a_job_without_a_log(wired):
+    launcher, backend, store = wired
+    done = _finished(launcher, backend)
+    store.log_path(done.id).unlink()
+    launcher.restart(done.id)
+    assert store.log_path(done.id).read_text() == "hello\n"

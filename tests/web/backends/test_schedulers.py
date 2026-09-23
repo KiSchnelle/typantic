@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from typantic.web.backends.base import LaunchUncertainError
 from typantic.web.backends.pbs import (
     PbsBackend,
     _job_name,
@@ -346,3 +347,15 @@ def test_the_submit_script_is_private(tmp_path):
         ARGV, job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
     )
     assert stat.S_IMODE((tmp_path / "submit.sh").stat().st_mode) == 0o600
+
+
+def test_a_submission_that_timed_out_may_have_queued(tmp_path):
+    # sbatch can hang after the controller accepted the job; the launcher keeps
+    # the folder for a job that may run.
+    def hangs(argv):
+        raise subprocess.TimeoutExpired(argv, 30)
+
+    with pytest.raises(LaunchUncertainError, match="may have been queued"):
+        SlurmBackend(hangs).launch(
+            ARGV, job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
+        )

@@ -7,6 +7,7 @@ through a backend, so the CLI does the authoritative validation and heavy app
 dependencies never enter the web process.
 """
 
+import contextlib
 import json
 import logging
 import shutil
@@ -20,7 +21,12 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from typantic.web._files import write_private
-from typantic.web.backends import LaunchBackend, PollResult, load_backends
+from typantic.web.backends import (
+    LaunchBackend,
+    LaunchUncertainError,
+    PollResult,
+    load_backends,
+)
 from typantic.web.discovery import discover_commands
 from typantic.web.models import (
     TERMINAL_STATUSES,
@@ -87,6 +93,42 @@ def _read_values(config_path: str) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _read_or_none(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+class _Snapshot:
+    """A job's settings and log as they were, to put back if a restart fails."""
+
+    def __init__(self, settings: list[Path], log_path: Path) -> None:
+        self._settings = {path: _read_or_none(path) for path in settings}
+        self._log = log_path
+        # The log is moved aside rather than copied: it can be large.
+        self._old_log: Path | None = log_path.with_name(f"{log_path.name}.previous")
+        try:
+            log_path.replace(self._old_log)
+        except FileNotFoundError:
+            self._old_log = None
+
+    def restore(self) -> None:
+        for path, data in self._settings.items():
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                write_private(path, data)
+        if self._old_log is None:
+            self._log.unlink(missing_ok=True)
+        else:
+            self._old_log.replace(self._log)
+
+    def discard(self) -> None:
+        if self._old_log is not None:
+            self._old_log.unlink(missing_ok=True)
 
 
 class UnknownCommandError(ValueError):
@@ -192,7 +234,8 @@ class Launcher:
 
         Everything that can be rejected is rejected *before* anything is started:
         a process spawned ahead of a failing insert would keep running with no
-        record to find, cancel, or clean up by.
+        record to find, cancel, or clean up by. A job whose row cannot be stored
+        even so is stopped again.
 
         Raises:
             UnknownCommandError: If the command is not installed.
@@ -230,6 +273,8 @@ class Launcher:
                 log_path=log_path,
                 backend_options=request.backend_options,
             )
+        except LaunchUncertainError:
+            raise  # the job may run, and needs its folder
         except Exception:
             # Nothing is running yet (or the backend failed to start it), so the
             # half-built folder is ours to remove rather than leave orphaned.
@@ -254,9 +299,25 @@ class Launcher:
             status=launched.status,
             created_at=created_at,
         )
-        self.store.save(record)
+        try:
+            self._record_started(record, backend)
+        except BaseException:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
         logger.info("Launched %s as job %s (%s)", meta.key, job_id, request.backend)
         return record
+
+    def _record_started(self, record: JobRecord, backend: LaunchBackend) -> None:
+        """Store a just-started job's row, stopping the job again if that fails.
+
+        Unrecorded, a running job could never be found, cancelled or cleaned up.
+        """
+        try:
+            self.store.save(record)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                backend.cancel(record)
+            raise
 
     def _check_project(self, project_id: str | None) -> None:
         """Reject an unknown project before a job is started for it.
@@ -458,6 +519,11 @@ class Launcher:
                 self.store.request_path(record.id).read_text(),
             )
         except (OSError, ValidationError):
+            logger.warning(
+                "Job %s has no readable launch request; rebuilding it from the "
+                "job and its config, without its backend options.",
+                record.id,
+            )
             return LaunchRequest(
                 command_key=record.command_key,
                 backend=record.backend,
@@ -504,38 +570,63 @@ class Launcher:
             # rejected restart must leave the job exactly as it was.
             backend = self._backend(new_request.backend)
             self._check_project(new_request.project_id)
-
-            if request is not None:
-                write_private(
-                    self.store.config_path(job_id),
-                    json.dumps(_clean_form_values(new_request.values), indent=2),
-                )
-                write_private(
-                    self.store.request_path(job_id),
-                    new_request.model_dump_json(indent=2),
-                )
-
-            self._forget_poll(job_id)
-            argv = meta.invocation("--config", record.config_path)
-            launched = backend.launch(
+            # One set of paths, the store's: a record from a pre-0.8.0 relative
+            # jobs root holds relative ones.
+            job_dir = self.store.job_dir(job_id)
+            config_path = self.store.config_path(job_id)
+            request_path = self.store.request_path(job_id)
+            log_path = self.store.log_path(job_id)
+            argv = meta.invocation("--config", str(config_path))
+            # Options the backend would refuse are refused now, not after the
+            # new settings have replaced the old.
+            backend.preview(
                 argv,
-                job_dir=Path(record.job_dir),
-                log_path=Path(record.log_path),
+                job_dir=job_dir,
+                log_path=log_path,
                 backend_options=new_request.backend_options,
             )
-            record = record.model_copy(
-                update={
-                    "status": launched.status,
-                    "backend": new_request.backend,
-                    "name": new_request.name,
-                    "project_id": new_request.project_id,
-                    "pid": launched.pid,
-                    "pid_start": launched.pid_start,
-                    "scheduler_id": launched.scheduler_id,
-                    "finished_at": None,
-                    "exit_code": None,
-                },
-            )
-            self.store.save(record)
-            logger.info("Restarted job %s (%s)", job_id, record.backend)
-            return record
+
+            snapshot = _Snapshot([config_path, request_path], log_path)
+            try:
+                if request is not None:
+                    write_private(
+                        config_path,
+                        json.dumps(_clean_form_values(new_request.values), indent=2),
+                    )
+                    write_private(request_path, new_request.model_dump_json(indent=2))
+                # The new run's log starts empty: a queued scheduler job writes
+                # nothing until it runs, and showed the old run's log till then.
+                write_private(log_path, "")
+                self._forget_poll(job_id)
+                launched = backend.launch(
+                    argv,
+                    job_dir=job_dir,
+                    log_path=log_path,
+                    backend_options=new_request.backend_options,
+                )
+                restarted = record.model_copy(
+                    update={
+                        "status": launched.status,
+                        "backend": new_request.backend,
+                        "name": new_request.name,
+                        "project_id": new_request.project_id,
+                        "job_dir": str(job_dir),
+                        "config_path": str(config_path),
+                        "log_path": str(log_path),
+                        "pid": launched.pid,
+                        "pid_start": launched.pid_start,
+                        "scheduler_id": launched.scheduler_id,
+                        "finished_at": None,
+                        "exit_code": None,
+                    },
+                )
+                self._record_started(restarted, backend)
+            except LaunchUncertainError:
+                snapshot.discard()  # the job may be queued, reading the new files
+                raise
+            except BaseException:
+                snapshot.restore()
+                raise
+            snapshot.discard()
+            logger.info("Restarted job %s (%s)", job_id, restarted.backend)
+            return restarted

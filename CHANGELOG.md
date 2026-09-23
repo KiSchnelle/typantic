@@ -255,6 +255,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that has finished since, which recorded CANCELLED over its real outcome.
   - The status cache is synchronised; concurrent requests could raise
     `KeyError` from it.
+- **A restart that failed could leave the job worse off than before:**
+  - A restart the backend refused (a bad partition, say) destroyed the job's
+    settings: the new ones were written before the backend looked at its
+    options. Options are now checked first, and if the relaunch fails anyway
+    the job's config, launch request and log are put back as they were.
+  - A restarted scheduler job showed the previous run's log until it started
+    running, which can be hours in the queue. The new run's log starts empty.
+  - A restart wrote the new config to one path and launched with another, the
+    one in the job's record: a job from a relative jobs root (above) could not
+    be restarted. Restart now uses the store's paths throughout, and records
+    them.
+  - A job without its stored launch request (deleted, or lost) restarted
+    without its backend options, silently. That is now logged.
+- A job whose record could not be stored once it had started (a locked or full
+  database) kept running with nothing to find, cancel or clean it up by. It is
+  now stopped again and the error reported.
+- A submission that timed out deleted the job's folder, although the scheduler
+  may have queued the job anyway (`sbatch` can hang after the controller
+  accepted it); the job then failed on start, with nowhere to write its log.
+  The folder is kept, and the dashboard answers HTTP 504 saying the job may
+  have been queued.
 - A local job that finished in the instant between the two halves of a status
   check was recorded FAILED forever: its exit marker was read (not there yet),
   then its process looked for (gone by then). The marker is now read again

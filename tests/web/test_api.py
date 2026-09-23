@@ -736,3 +736,14 @@ def test_browse_stops_reading_a_huge_directory(env, tmp_path, monkeypatch):
     assert data["total"] == 5
     assert data["truncated"]
     assert len(data["entries"]) == 3
+
+
+def test_a_submission_that_may_have_queued_is_504(env, monkeypatch):
+    def hangs(argv):
+        raise subprocess.TimeoutExpired(argv, 30)
+
+    monkeypatch.setattr(env.launcher._backends["slurm"], "_run", hangs)
+    body = {"command_key": "app/run", "backend": "slurm"}
+    resp = env.client.post("/api/launch", json=body, headers=AUTH)
+    assert resp.status_code == 504
+    assert "may have been queued" in resp.json()["detail"]
