@@ -144,13 +144,15 @@ def _interface(model: type[BaseModel]) -> str:
 
 
 def _enum() -> str:
-    values = " | ".join(f'"{member.value}"' for member in JobStatus)
-    terminals = ", ".join(
+    members = [f'"{member.value}"' for member in JobStatus]
+    terminals = [
         f'"{member.value}"' for member in JobStatus if member in TERMINAL_STATUSES
-    )
+    ]
     return (
-        f"export type JobStatus = {values};\n\n"
-        f"export const TERMINAL_STATUSES: JobStatus[] = [{terminals}];"
+        f"export type JobStatus = {' | '.join(members)};\n\n"
+        "// Every status, in lifecycle order: the Jobs filter lists these.\n"
+        f"export const JOB_STATUSES: JobStatus[] = [{', '.join(members)}];\n\n"
+        f"export const TERMINAL_STATUSES: JobStatus[] = [{', '.join(terminals)}];"
     )
 
 

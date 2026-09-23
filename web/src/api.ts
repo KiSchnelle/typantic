@@ -24,9 +24,23 @@ function headers(extra?: Record<string, string>): Record<string, string> {
   return base;
 }
 
+// A failed response as an Error: the API's {"detail": ...} message where it
+// sends one, else the raw body.
+async function failure(resp: Response): Promise<Error> {
+  const body = await resp.text();
+  let detail = body;
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    if (typeof parsed.detail === "string") detail = parsed.detail;
+  } catch {
+    // Not JSON: the body is the message.
+  }
+  return new Error(`${resp.status} ${detail}`);
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const resp = await fetch(path, { headers: headers() });
-  if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+  if (!resp.ok) throw await failure(resp);
   return (await resp.json()) as T;
 }
 
@@ -36,7 +50,7 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
     headers: body ? headers({ "Content-Type": "application/json" }) : headers(),
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+  if (!resp.ok) throw await failure(resp);
   return (await resp.json()) as T;
 }
 
@@ -80,7 +94,7 @@ export async function deleteProject(id: string): Promise<void> {
     method: "DELETE",
     headers: headers(),
   });
-  if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+  if (!resp.ok) throw await failure(resp);
 }
 
 export function fetchDir(path?: string): Promise<FsListing> {
@@ -136,7 +150,7 @@ export async function deleteJob(id: string): Promise<void> {
     method: "DELETE",
     headers: headers(),
   });
-  if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+  if (!resp.ok) throw await failure(resp);
 }
 
 // Re-run a terminal job in place. Without `request` it resubmits the same
@@ -157,14 +171,24 @@ export function openLogSocket(id: string): WebSocket {
 }
 
 // Each frame on the log socket is a JSON envelope: {"log": "..."} for output,
-// {"end": {...}} once the job is terminal. Wrapping the log in an envelope means
-// a log line can never be mistaken for the end signal.
+// {"reset": true} when the log started over (replaced by a restart in place, or
+// truncated), {"end": {...}} once the job is terminal. Wrapping the log in an
+// envelope means a log line can never be mistaken for a signal.
 export function logChunk(data: string): string {
   try {
     const frame = JSON.parse(data) as { log?: unknown };
     return typeof frame.log === "string" ? frame.log : "";
   } catch {
     return "";
+  }
+}
+
+// The log started over: what is shown so far is no longer in it.
+export function isResetFrame(data: string): boolean {
+  try {
+    return (JSON.parse(data) as { reset?: unknown }).reset === true;
+  } catch {
+    return false;
   }
 }
 

@@ -350,6 +350,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reading at its old offset and skipped the new run's first bytes, or all of
     them. A replaced or truncated log is now streamed from its start, after a
     `{"reset": true}` frame that tells the dashboard to clear what it shows.
+- **The dashboard:**
+  - The job log showed its text twice after the log socket reconnected (a
+    server restart, a network blip): the server sends the whole log on every
+    connection, and the page appended it to what it already showed. The log
+    now starts over on each connection, and when the server says the log
+    itself started over (a job restarted in place).
+  - Deleting the last job on the last page left the Jobs list on an empty page
+    with the pagination hidden. It now steps back to the last page with jobs.
+  - A failed delete in the Jobs or Projects list did nothing visible. It now
+    says why, as the job page already did, and error messages show the
+    server's explanation rather than the JSON it arrived in.
+  - The live views asked the server again on a fixed clock, so a slow answer
+    (a large output folder's image scan, a history refresh waiting on `sacct`)
+    was overlapped by the next request, and the next. Each view now asks
+    again only once the previous answer is in.
+  - **Copy log** threw an error on a dashboard opened over plain http by host
+    name, where browsers offer no clipboard API; it falls back to the
+    browser's copy command. **Download log** released the file's address
+    before some browsers had begun the download.
+  - A server clock a little ahead of the browser's showed times like "-5s
+    ago"; they read "just now".
 - The `ssh -N -L` line the dashboard prints for an IPv6 bind (`--host ::1`)
   read `8000:::1:8000`, which ssh rejects; the address is now bracketed.
 - `typantic web serve --log-level` took any word, printed the startup banner,

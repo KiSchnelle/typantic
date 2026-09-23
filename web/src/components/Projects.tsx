@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import { FolderKanban, FolderPlus, Search, Trash2 } from "lucide-react";
 import { deleteProject, fetchHistory, fetchProjects } from "../api.ts";
+import { startPolling } from "../poll.ts";
 import { useStore } from "../store.ts";
 import type { History, JobRecord, Project } from "../types.ts";
 import { NewProjectInput } from "./NewProjectInput.tsx";
-import { StatusChip, relativeTime } from "./ui.tsx";
+import { Alert, StatusChip, errorText, relativeTime } from "./ui.tsx";
 
 function JobRow({ job }: { job: JobRecord }): ReactNode {
   const openJob = useStore((s) => s.openJob);
@@ -32,6 +33,7 @@ export default function Projects(): ReactNode {
   const [history, setHistory] = useState<History | null>(null);
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // The history carries its own project list, so the poll only refetches that.
   // The global `store.projects` slice (which the Launch tab reads) is owned by
@@ -47,11 +49,9 @@ export default function Projects(): ReactNode {
       .catch(() => undefined);
   };
 
-  useEffect(() => {
-    reloadHistory();
-    const t = window.setInterval(reloadHistory, 3000);
-    return () => window.clearInterval(t);
-  }, []);
+  // The history refreshes every active job's status, which can be slow:
+  // never start the next load before the last has answered.
+  useEffect(() => startPolling(() => fetchHistory().then(setHistory), 3000), []);
 
   const removeProject = (e: MouseEvent, project: Project, jobCount: number) => {
     e.stopPropagation();
@@ -62,12 +62,14 @@ export default function Projects(): ReactNode {
           `This cannot be undone.`
         : "This cannot be undone.";
     if (window.confirm(`Delete project "${project.name}"?\n\n${detail}`)) {
+      setDeleteError(null);
       void deleteProject(project.id)
-        .then(() => {
+        .catch((err: unknown) => setDeleteError(errorText(err)))
+        .finally(() => {
+          // A partly failed delete still removed what it could.
           reloadHistory();
           refreshProjects();
-        })
-        .catch(() => undefined);
+        });
     }
   };
 
@@ -114,6 +116,8 @@ export default function Projects(): ReactNode {
           )}
         </div>
       </div>
+
+      {deleteError && <Alert>{deleteError}</Alert>}
 
       {groups.map(({ project, jobs }) => (
         <div

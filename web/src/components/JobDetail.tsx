@@ -9,15 +9,26 @@ import {
   fetchJobRequest,
   imageSrc,
   isEndFrame,
+  isResetFrame,
   logChunk,
   openLogSocket,
   restartJob,
   thumbSrc,
 } from "../api.ts";
+import { copyText, downloadText } from "../browser.ts";
+import { startPolling } from "../poll.ts";
 import { useStore } from "../store.ts";
 import type { JobImage, JobRecord, LaunchRequest } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
-import { Button, StatusChip, cn, confirmDeleteJob, relativeTime } from "./ui.tsx";
+import {
+  Alert,
+  Button,
+  StatusChip,
+  cn,
+  confirmDeleteJob,
+  errorText,
+  relativeTime,
+} from "./ui.tsx";
 
 // A job log is captured console output. If it was written with a Python logging
 // handler that keeps the "LEVEL  time - name - message  file:line" layout (e.g.
@@ -163,29 +174,29 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   // used to be an unhandled rejection, so the button just did nothing at all.
   const run = (action: Promise<unknown>): void => {
     setActionError(null);
-    void action.catch((e: unknown) => setActionError(String(e)));
+    void action.catch((e: unknown) => setActionError(errorText(e)));
   };
 
   const terminal = job !== null && TERMINAL_STATUSES.includes(job.status);
 
   useEffect(() => {
     let active = true;
-    const poll = () =>
-      fetchJob(id)
-        .then((j) => active && setJob(j))
-        .catch(() => undefined);
-    poll();
-    // A terminal job's status is final — stop polling so the detail view doesn't
-    // hit the server forever after the job has finished.
+    const load = () =>
+      fetchJob(id).then((j) => {
+        if (active) setJob(j);
+      });
+    // A terminal job's status is final — load it once and stop, so the detail
+    // view doesn't hit the server forever after the job has finished.
     if (terminal) {
+      void load().catch(() => undefined);
       return () => {
         active = false;
       };
     }
-    const t = window.setInterval(poll, 2000);
+    const stop = startPolling(load, 2000);
     return () => {
       active = false;
-      window.clearInterval(t);
+      stop();
     };
   }, [id, terminal]);
 
@@ -214,7 +225,11 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
       if (!active) return;
       const ws = openLogSocket(id);
       socket = ws;
+      // The server sends the whole log on every connection: start over, or a
+      // reconnect shows it twice.
+      ws.onopen = () => setLog("");
       ws.onmessage = (ev: MessageEvent<string>) => {
+        if (isResetFrame(ev.data)) setLog(""); // the log itself started over
         const chunk = logChunk(ev.data);
         if (chunk) {
           attempt = 0; // a delivered frame proves the link is healthy again
@@ -255,21 +270,14 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   };
 
   const copyLog = () => {
-    void navigator.clipboard.writeText(log).then(() => {
+    void copyText(log).then((ok) => {
+      if (!ok) return;
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     });
   };
 
-  const downloadLog = () => {
-    const blob = new Blob([log], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${job?.name || id}.log`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const downloadLog = () => downloadText(`${job?.name || id}.log`, log);
 
   // Clear the gallery when switching jobs / restarting, kept separate from the
   // poll below so the terminal transition doesn't blank it and refetch.
@@ -280,24 +288,24 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   useEffect(() => {
     let active = true;
     const load = () =>
-      fetchImages(id)
-        .then((r) => {
-          if (!active) return;
-          setImages(r.images);
-          setImagesTruncated(r.truncated);
-        })
-        .catch(() => undefined);
-    load();
+      fetchImages(id).then((r) => {
+        if (!active) return;
+        setImages(r.images);
+        setImagesTruncated(r.truncated);
+      });
     // One final load lands on the terminal transition; then stop polling.
     if (terminal) {
+      void load().catch(() => undefined);
       return () => {
         active = false;
       };
     }
-    const t = window.setInterval(load, 3000);
+    // A scan of a big output folder can be slow: never start the next one
+    // before the last has answered.
+    const stop = startPolling(load, 3000);
     return () => {
       active = false;
-      window.clearInterval(t);
+      stop();
     };
   }, [id, runEpoch, terminal]);
 
@@ -374,14 +382,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
         </div>
       )}
 
-      {actionError && (
-        <div
-          role="alert"
-          className="mb-4 rounded-lg border border-red-900 bg-red-950/40 px-4 py-2 text-sm text-red-200"
-        >
-          {actionError}
-        </div>
-      )}
+      {actionError && <Alert>{actionError}</Alert>}
 
       {request && (
         <details className="mb-4 rounded-lg border border-slate-800 bg-slate-900/40">
@@ -437,6 +438,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
         </div>
         <pre
           ref={logRef}
+          aria-label="Job log"
           onScroll={onLogScroll}
           className={cn(
             "mono h-[60vh] overflow-auto px-4 py-3 text-xs leading-relaxed text-slate-300",

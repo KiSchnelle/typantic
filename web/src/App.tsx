@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { FolderKanban, ListChecks, Rocket } from "lucide-react";
 import { fetchCommands, fetchMeta, fetchProjects } from "./api.ts";
+import { startPolling } from "./poll.ts";
 import { useStore } from "./store.ts";
 import type { View } from "./store.ts";
 import Launch from "./components/Launch.tsx";
@@ -65,12 +66,13 @@ export default function App(): ReactNode {
           if (changed) setCommands(c);
           setConnected(true);
         })
-        .catch(() => active && setConnected(false));
-    load();
-    const timer = window.setInterval(load, 5000);
+        .catch(() => {
+          if (active) setConnected(false);
+        });
+    const stop = startPolling(load, 5000);
     return () => {
       active = false;
-      window.clearInterval(timer);
+      stop();
     };
   }, [setCommands]);
 
@@ -78,14 +80,13 @@ export default function App(): ReactNode {
   useEffect(() => {
     let active = true;
     const load = () =>
-      fetchProjects()
-        .then((p) => active && setProjects(p))
-        .catch(() => undefined);
-    load();
-    const timer = window.setInterval(load, 5000);
+      fetchProjects().then((p) => {
+        if (active) setProjects(p);
+      });
+    const stop = startPolling(load, 5000);
     return () => {
       active = false;
-      window.clearInterval(timer);
+      stop();
     };
   }, [setProjects]);
 

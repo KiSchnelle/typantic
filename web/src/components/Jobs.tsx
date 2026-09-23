@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import { Search, Trash2 } from "lucide-react";
 import { deleteJob, fetchJobs } from "../api.ts";
-import type { JobQuery } from "../types.ts";
+import { startPolling } from "../poll.ts";
 import { useStore } from "../store.ts";
-import type { JobRecord, JobStatus } from "../types.ts";
+import { JOB_STATUSES } from "../types.ts";
+import type { JobQuery, JobRecord, JobStatus } from "../types.ts";
 import JobDetail from "./JobDetail.tsx";
-import { StatusChip, confirmDeleteJob, relativeTime } from "./ui.tsx";
+import { Alert, StatusChip, confirmDeleteJob, errorText, relativeTime } from "./ui.tsx";
 
 const PAGE_SIZE = 25;
-const STATUSES: JobStatus[] = ["queued", "running", "done", "failed", "cancelled"];
 const SORTS: { key: string; label: string }[] = [
   { key: "created_at:desc", label: "Newest first" },
   { key: "created_at:asc", label: "Oldest first" },
@@ -29,6 +29,7 @@ export default function Jobs(): ReactNode {
   const [backend, setBackend] = useState("");
   const [sortKey, setSortKey] = useState("created_at:desc");
   const [page, setPage] = useState(0);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const query = useMemo<JobQuery>(() => {
     const [sort, order] = sortKey.split(":");
@@ -49,27 +50,29 @@ export default function Jobs(): ReactNode {
   useEffect(() => {
     if (selectedJobId) return undefined; // detail view does its own polling
     let active = true;
-    const poll = () =>
-      fetchJobs(query)
-        .then((p) => {
-          if (!active) return;
-          setJobs(p.jobs);
-          setTotal(p.total);
-        })
-        .catch(() => undefined);
-    poll();
-    const id = window.setInterval(poll, 2000);
+    const load = () =>
+      fetchJobs(query).then((p) => {
+        if (!active) return;
+        setJobs(p.jobs);
+        setTotal(p.total);
+        // Jobs deleted since (here or elsewhere) can leave this page past the
+        // end, empty and with the pagination hidden: step back to the last page.
+        const last = Math.max(0, Math.ceil(p.total / PAGE_SIZE) - 1);
+        setPage((current) => Math.min(current, last));
+      });
+    const stop = startPolling(load, 2000);
     return () => {
       active = false;
-      window.clearInterval(id);
+      stop();
     };
   }, [selectedJobId, query]);
 
   const removeJob = (e: MouseEvent, id: string) => {
     e.stopPropagation();
     if (confirmDeleteJob()) {
+      setDeleteError(null);
       setJobs((prev) => prev.filter((j) => j.id !== id));
-      void deleteJob(id).catch(() => undefined);
+      void deleteJob(id).catch((err: unknown) => setDeleteError(errorText(err)));
     }
   };
 
@@ -96,11 +99,12 @@ export default function Jobs(): ReactNode {
         </div>
         <select
           className={SELECT}
+          aria-label="Status"
           value={status}
           onChange={(e) => setStatus(e.target.value as JobStatus | "")}
         >
           <option value="">All statuses</option>
-          {STATUSES.map((s) => (
+          {JOB_STATUSES.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -108,6 +112,7 @@ export default function Jobs(): ReactNode {
         </select>
         <select
           className={SELECT}
+          aria-label="Backend"
           value={backend}
           onChange={(e) => setBackend(e.target.value)}
         >
@@ -120,6 +125,7 @@ export default function Jobs(): ReactNode {
         </select>
         <select
           className={SELECT}
+          aria-label="Sort"
           value={sortKey}
           onChange={(e) => setSortKey(e.target.value)}
         >
@@ -130,6 +136,8 @@ export default function Jobs(): ReactNode {
           ))}
         </select>
       </div>
+
+      {deleteError && <Alert>{deleteError}</Alert>}
 
       {jobs.length === 0 ? (
         <p className="text-slate-500">

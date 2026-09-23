@@ -63,22 +63,35 @@ export function Button({
 export function Card({
   children,
   onClick,
-  active,
 }: {
   children: ReactNode;
   onClick?: () => void;
-  active?: boolean;
 }): ReactNode {
   return (
     <div
       onClick={onClick}
       className={cn(
-        "rounded-lg border p-4 transition-colors",
+        "rounded-lg border border-slate-800 bg-slate-900/40 p-4 transition-colors",
+        "hover:border-slate-700",
         onClick && "cursor-pointer",
-        active
-          ? "border-cyan-600 bg-cyan-950/30"
-          : "border-slate-800 bg-slate-900/40 hover:border-slate-700",
       )}
+    >
+      {children}
+    </div>
+  );
+}
+
+// A failed action's message, without JavaScript's "Error: " prefix.
+export function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// A failed action, shown where it was taken instead of failing silently.
+export function Alert({ children }: { children: ReactNode }): ReactNode {
+  return (
+    <div
+      role="alert"
+      className="mb-4 rounded-lg border border-red-900 bg-red-950/40 px-4 py-2 text-sm text-red-200"
     >
       {children}
     </div>
@@ -100,6 +113,8 @@ export function confirmDeleteJob(): boolean {
 export function relativeTime(iso: string | null): string {
   if (!iso) return "—";
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  // A server clock a little ahead of this one puts a fresh time in the future.
+  if (diff < 1) return "just now";
   if (diff < 60) return `${Math.floor(diff)}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;

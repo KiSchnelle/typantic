@@ -4,6 +4,9 @@
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
+// Every status, in lifecycle order: the Jobs filter lists these.
+export const JOB_STATUSES: JobStatus[] = ["queued", "running", "done", "failed", "cancelled"];
+
 export const TERMINAL_STATUSES: JobStatus[] = ["done", "failed", "cancelled"];
 
 // A JSON Schema object (a command's --schema, or a backend's options); handed
