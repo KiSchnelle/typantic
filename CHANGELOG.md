@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `icon` as a data URI). `make_api` and `serve` take a `brand=` and never
   discover one themselves, so a test or an embedding app gets exactly the brand
   it passes. `Brand`, `discover_brand` and `resolve_brand` are exported from
-  `typantic.web`.
+  `typantic.web`. The dashboard shows the brand's mark in the sidebar and the
+  tab, its wordmark, and recolours everything accented from the one colour.
 - The dashboard's thumbnail cache follows `$XDG_CACHE_HOME`, and
   `$TYPANTIC_WEB_CACHE_DIR` moves it anywhere (it was always
   `~/.cache/typantic/thumbnails`). It no longer grows forever: the server prunes
@@ -88,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path as you spelled it rather than resolving symlinks: the path you pick is
   what the job's config receives, and a resolved one (`/scratch/…` turned into
   `/lustre/…`) may not exist where the job runs.
+- **The dashboard shows typantic's logo, and one cyan throughout.** The mark
+  is the sidebar logo and the browser tab's icon (an SVG, and a PNG for
+  browsers without SVG tab icons). The accent everywhere is the logo's cyan:
+  the utility classes moved from Tailwind v4's slightly different cyan to it,
+  a shift visible only side by side. A brand (above) replaces the mark, the tab
+  icon and the accent. The status colours (`running`, the log's `INFO`) stay
+  as they are, beside red `failed` / `ERROR`.
 - **Breaking (containers): docker and podman jobs run with `--init`, named
   `typantic-<job id>`.** A process running as PID 1 ignores SIGTERM unless it
   installs a handler, so a Python app in a container shrugged off every
@@ -362,6 +370,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     them. A replaced or truncated log is now streamed from its start, after a
     `{"reset": true}` frame that tells the dashboard to clear what it shows.
 - **The dashboard:**
+  - A page loaded while the server was restarting never learnt the backends
+    (the launch form offered none) or the brand: `/api/meta` was asked once.
+    It is now asked until it answers.
   - The job log showed its text twice after the log socket reconnected (a
     server restart, a network blip): the server sends the whole log on every
     connection, and the page appended it to what it already showed. The log

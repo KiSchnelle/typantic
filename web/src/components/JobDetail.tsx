@@ -48,7 +48,8 @@ const LEVEL_TEXT: Record<string, string> = {
   ERROR: "text-red-300",
   CRITICAL: "text-red-300 font-semibold",
 };
-// The level keyword itself, a touch stronger than its line.
+// The level keyword itself, a touch stronger than its line. Semantic, beside
+// red ERROR, so INFO keeps Tailwind's cyan whatever the brand's accent.
 const LEVEL_TAG: Record<string, string> = {
   DEBUG: "text-slate-400",
   INFO: "text-cyan-400",
@@ -133,7 +134,7 @@ function LogAction({
       aria-label={title}
       className={cn(
         "rounded p-1 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200",
-        active && "bg-slate-800 text-cyan-300",
+        active && "bg-slate-800 text-brand-300",
       )}
     >
       {children}
@@ -442,7 +443,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
           onScroll={onLogScroll}
           className={cn(
             "mono h-[60vh] overflow-auto px-4 py-3 text-xs leading-relaxed text-slate-300",
-            "selection:bg-cyan-500/30",
+            "selection:bg-brand-500/30",
             wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre",
           )}
         >
@@ -497,7 +498,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
             <div className="mt-4 flex flex-col gap-2">
               <button
                 type="button"
-                className="rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-left transition-colors hover:border-cyan-700 hover:bg-slate-800"
+                className="rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-left transition-colors hover:border-brand-700 hover:bg-slate-800"
                 onClick={() => {
                   setShowRestart(false);
                   run(fetchJobRequest(id).then((req) => editForRestart(id, req)));

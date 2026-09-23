@@ -1,6 +1,21 @@
 @import "tailwindcss";
 
-/* Dark-first NOC/ops aesthetic with one cyan accent. */
+/* The accent, as six shades of one colour: Tailwind utilities (text-brand-400,
+   bg-brand-950/50, ...) and the rules below read these variables. The defaults
+   are the typantic logo's own cyans (Tailwind v3's cyan ramp); a brand's accent
+   replaces them at runtime (src/brand.ts sets them on :root). `static`, never
+   `inline`: an inline theme compiles the colours into every utility, where a
+   runtime setProperty cannot reach them. */
+@theme static {
+  --color-brand-300: #67e8f9;
+  --color-brand-400: #22d3ee;
+  --color-brand-500: #06b6d4;
+  --color-brand-600: #0891b2;
+  --color-brand-700: #0e7490;
+  --color-brand-950: #083344;
+}
+
+/* Dark-first NOC/ops aesthetic with one accent (the brand's; cyan by default). */
 :root {
   color-scheme: dark;
 }
@@ -125,7 +140,7 @@ pre,
 
 .help-tip:hover,
 .help-tip:focus {
-  color: #22d3ee;
+  color: var(--color-brand-400);
 }
 
 /* Portaled to <body>, fixed-positioned, and above the icon (translateY(-100%)).
@@ -169,8 +184,8 @@ pre,
 .rjsf select:focus,
 .rjsf textarea:focus {
   outline: none;
-  border-color: #22d3ee;
-  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2);
+  border-color: var(--color-brand-400);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-brand-400) 20%, transparent);
 }
 
 .rjsf .field-description,
@@ -200,9 +215,11 @@ pre,
   align-items: center;
   gap: 0.3rem;
   margin-top: 0.35rem;
-  background: #0e3b42;
-  border: 1px solid rgba(34, 211, 238, 0.35);
-  color: #67e8f9;
+  /* A dark plate of the accent: with typantic's cyan, within a hair of the
+     #0e3b42 it used to be. */
+  background: color-mix(in oklab, var(--color-brand-400) 41%, black);
+  border: 1px solid color-mix(in oklab, var(--color-brand-400) 35%, transparent);
+  color: var(--color-brand-300);
   border-radius: 0.4rem;
   padding: 0.3rem 0.7rem;
   font-size: 0.8rem;
@@ -211,7 +228,7 @@ pre,
 }
 
 .rjsf-add-btn:hover {
-  background: #124a54;
+  background: color-mix(in oklab, var(--color-brand-400) 47%, black); /* was #124a54 */
 }
 
 .rjsf-icon-btn {
@@ -340,7 +357,7 @@ pre,
 
 .newfolder-input:focus {
   outline: none;
-  border-color: #0891b2;
+  border-color: var(--color-brand-600);
 }
 
 .modal-newfolder .rjsf-add-btn {

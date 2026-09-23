@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { FolderKanban, ListChecks, Rocket } from "lucide-react";
 import { fetchCommands, fetchMeta, fetchProjects } from "./api.ts";
+import { applyAccent, showFavicon } from "./brand.ts";
 import { startPolling } from "./poll.ts";
 import { useStore } from "./store.ts";
 import type { View } from "./store.ts";
@@ -23,30 +24,50 @@ const HEADER: Record<View, string> = {
 };
 
 export default function App(): ReactNode {
-  const { view, setView, title, setTitle, setBackends, setCommands, setProjects } =
-    useStore();
+  const {
+    view,
+    setView,
+    title,
+    wordmarkLead,
+    wordmarkRest,
+    icon,
+    accent,
+    setBrand,
+    setBackends,
+    setCommands,
+    setProjects,
+  } = useStore();
   const [connected, setConnected] = useState(true);
 
-  // Load branding + backends once (they don't change during a session).
+  // The brand and the backends don't change during a session, but are asked
+  // for until the server answers: asked once, a page loaded while the server
+  // restarted kept no backends, and typantic's brand, for the whole session.
   useEffect(() => {
     let active = true;
-    fetchMeta()
-      .then((m) => {
-        if (!active) return;
-        setTitle(m.title);
-        setBackends(m.backends);
-      })
-      .catch(() => undefined);
+    let stop = (): void => undefined;
+    stop = startPolling(
+      () =>
+        fetchMeta().then((m) => {
+          if (!active) return;
+          setBrand(m);
+          setBackends(m.backends);
+          stop();
+        }),
+      2000,
+    );
     return () => {
       active = false;
+      stop();
     };
-  }, [setTitle, setBackends]);
+  }, [setBrand, setBackends]);
 
-  // Mirror the dashboard brand into the browser tab title (the index.html
-  // fallback only shows until /api/meta resolves).
+  // Mirror the brand into the tab (index.html's title and icons are
+  // typantic's, until /api/meta answers) and into the accent colours.
   useEffect(() => {
     document.title = title;
   }, [title]);
+  useEffect(() => showFavicon(icon), [icon]);
+  useEffect(() => applyAccent(accent), [accent]);
 
   // Poll the command catalog: it doubles as the liveness check behind the
   // "connected" dot, so it has to keep running — stopping on first success left
@@ -90,19 +111,18 @@ export default function App(): ReactNode {
     };
   }, [setProjects]);
 
-  const [brandLead, ...brandRest] = title.split(" ");
-
   return (
     <div className="flex min-h-screen">
       <aside className="w-52 shrink-0 border-r border-slate-800 bg-slate-950/60 p-4">
         <div className="mb-6 flex items-center gap-2">
-          <span className="text-lg font-bold tracking-tight text-cyan-400">
-            {brandLead}
+          {/* An <img>, never inline markup: an SVG shown as an image runs no
+              scripts. The wordmark beside it names it, so no alt text. */}
+          <img src={icon ?? "/favicon.svg"} alt="" className="h-7 w-7 shrink-0" />
+          <span className="text-lg font-bold tracking-tight text-brand-400">
+            {wordmarkLead}
           </span>
-          {brandRest.length > 0 && (
-            <span className="text-lg font-light text-slate-400">
-              {brandRest.join(" ")}
-            </span>
+          {wordmarkRest && (
+            <span className="text-lg font-light text-slate-400">{wordmarkRest}</span>
           )}
         </div>
         <nav className="space-y-1">
@@ -113,7 +133,7 @@ export default function App(): ReactNode {
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium",
                 view === item.id
-                  ? "bg-cyan-950/50 text-cyan-300"
+                  ? "bg-brand-950/50 text-brand-300"
                   : "text-slate-400 hover:bg-slate-900 hover:text-slate-200",
               )}
             >

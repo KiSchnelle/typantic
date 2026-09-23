@@ -152,7 +152,7 @@ function DirBrowser({
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
-          <FolderOpen size={16} className="text-cyan-400" />
+          <FolderOpen size={16} className="text-brand-400" />
           <span className="modal-cwd mono">{listing?.path ?? "…"}</span>
           <button
             type="button"
@@ -184,7 +184,7 @@ function DirBrowser({
 
         {newName !== null && (
           <div className="modal-newfolder">
-            <FolderPlus size={14} className="text-cyan-500" />
+            <FolderPlus size={14} className="text-brand-500" />
             <input
               autoFocus
               className="newfolder-input mono"
@@ -254,7 +254,7 @@ function DirBrowser({
                   onClick={() => load(full)}
                   onDoubleClick={() => onPick(full)}
                 >
-                  <Folder size={15} className="text-cyan-500" />
+                  <Folder size={15} className="text-brand-500" />
                   <span>{entry.name}</span>
                 </button>
               ) : (

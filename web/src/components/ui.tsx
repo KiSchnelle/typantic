@@ -5,6 +5,8 @@ export function cn(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
 }
 
+// Status colours are semantic, beside red "failed": they stay put whatever
+// the brand's accent, so "running" is Tailwind's cyan, not brand-*.
 const STATUS_STYLE: Record<JobStatus, string> = {
   queued: "bg-slate-700/40 text-slate-300 border-slate-600",
   running: "bg-cyan-500/15 text-cyan-300 border-cyan-700",
@@ -41,7 +43,7 @@ export function Button({
 }): ReactNode {
   const styles = {
     default: "bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600",
-    primary: "bg-cyan-600 hover:bg-cyan-500 text-white border-cyan-500",
+    primary: "bg-brand-600 hover:bg-brand-500 text-white border-brand-500",
     danger: "bg-red-900/60 hover:bg-red-800 text-red-100 border-red-700",
   }[variant];
   return (

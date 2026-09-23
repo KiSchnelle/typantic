@@ -91,7 +91,7 @@ function Catalog(): ReactNode {
     <div className="space-y-6">
       {[...byApp.entries()].map(([app, cmds]) => (
         <section key={app}>
-          <h2 className="mb-2 font-mono text-sm text-cyan-400">{app}</h2>
+          <h2 className="mb-2 font-mono text-sm text-brand-400">{app}</h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {cmds.map((c) => (
               <Card key={c.key} onClick={() => selectCommand(c.key)}>
@@ -404,7 +404,7 @@ export default function Launch(): ReactNode {
         <div className="modal-overlay" onClick={() => setPreview(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <header className="modal-head">
-              <Eye size={16} className="text-cyan-400" />
+              <Eye size={16} className="text-brand-400" />
               <span className="modal-cwd">Submission preview — {backend}</span>
               <button
                 type="button"

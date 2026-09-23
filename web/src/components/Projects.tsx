@@ -125,7 +125,7 @@ export default function Projects(): ReactNode {
           className="overflow-hidden rounded-lg border border-slate-800"
         >
           <div className="flex items-center gap-2 bg-slate-900/60 px-4 py-2">
-            <FolderKanban size={16} className="text-cyan-400" />
+            <FolderKanban size={16} className="text-brand-400" />
             <span className="font-semibold text-slate-200">{project.name}</span>
             {project.description && (
               <span className="text-sm text-slate-500">{project.description}</span>

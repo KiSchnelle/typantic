@@ -1,11 +1,23 @@
 import { create } from "zustand";
-import type { BackendMeta, CommandMeta, LaunchRequest, Project } from "./types.ts";
+import type {
+  ApiMeta,
+  BackendMeta,
+  CommandMeta,
+  LaunchRequest,
+  Project,
+} from "./types.ts";
 
 export type View = "launch" | "jobs" | "projects";
 
 interface State {
   view: View;
+  // The brand (see ApiMeta): the tab's title, the sidebar wordmark, the mark
+  // (a data: URI) and the accent; typantic's own until /api/meta answers.
   title: string;
+  wordmarkLead: string;
+  wordmarkRest: string;
+  icon: string | null;
+  accent: string | null;
   backends: BackendMeta[];
   commands: CommandMeta[];
   projects: Project[];
@@ -18,7 +30,7 @@ interface State {
   // place, rather than launching a brand-new job.
   restartJobId: string | null;
   setView: (view: View) => void;
-  setTitle: (title: string) => void;
+  setBrand: (meta: ApiMeta) => void;
   setBackends: (backends: BackendMeta[]) => void;
   setCommands: (commands: CommandMeta[]) => void;
   setProjects: (projects: Project[]) => void;
@@ -33,6 +45,10 @@ interface State {
 export const useStore = create<State>((set) => ({
   view: "launch",
   title: "typantic web",
+  wordmarkLead: "typantic",
+  wordmarkRest: "web",
+  icon: null,
+  accent: null,
   backends: [],
   commands: [],
   projects: [],
@@ -50,7 +66,14 @@ export const useStore = create<State>((set) => ({
       prefill: null,
       restartJobId: null,
     }),
-  setTitle: (title) => set({ title }),
+  setBrand: (meta) =>
+    set({
+      title: meta.title,
+      wordmarkLead: meta.wordmark_lead,
+      wordmarkRest: meta.wordmark_rest,
+      icon: meta.icon,
+      accent: meta.accent,
+    }),
   setBackends: (backends) => set({ backends }),
   setCommands: (commands) => set({ commands }),
   setProjects: (projects) => set({ projects }),
