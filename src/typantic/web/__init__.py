@@ -15,8 +15,10 @@ from typantic.web.api import make_api
 from typantic.web.backends import (
     ApptainerBackend,
     ContainerBackend,
+    ForeignHostError,
     LaunchBackend,
     Launched,
+    LaunchUncertainError,
     LocalBackend,
     PbsBackend,
     PollResult,
@@ -55,12 +57,14 @@ from typantic.web.schema import (
     normalize_for_form,
 )
 from typantic.web.server import serve
-from typantic.web.store import JobStore, default_jobs_dir
+from typantic.web.store import FolderNotRemovedError, JobStore, default_jobs_dir
 
 __all__ = [
     "ApptainerBackend",
     "CommandMeta",
     "ContainerBackend",
+    "FolderNotRemovedError",
+    "ForeignHostError",
     "History",
     "JobNotTerminalError",
     "JobRecord",
@@ -69,6 +73,7 @@ __all__ = [
     "LaunchBackend",
     "LaunchPreview",
     "LaunchRequest",
+    "LaunchUncertainError",
     "Launched",
     "Launcher",
     "LocalBackend",
