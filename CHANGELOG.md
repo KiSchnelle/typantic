@@ -78,6 +78,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config files are read and written as UTF-8 on every platform, rather than in
   the locale's encoding (mojibake on a Windows cp1252 locale). A leading
   byte-order mark is tolerated.
+- With `config_file=True`, a field whose flag is one typantic injects
+  (`--config`, `--generate-config`, `--schema`) was silently unsettable, and
+  `--help` listed the flag twice. A field named `config` is the common case. This
+  is now a decoration-time error asking for a `cli_name`.
+- The flag-collision check now knows a boolean's implicit `--no-x` off switch.
+  Fields `cache: bool = True` and `no_cache: bool = False` made `cache`
+  impossible to turn off, with no error. A `cli_name` that already carries its
+  off switch (`"--color/--no-color"`) no longer collides with itself.
+- Positional arguments no longer swap when `config_file` is switched on. Config
+  mode kept declaration order while default mode put required arguments first,
+  so `cmd A B` filled `src`/`dst` differently in the two modes. Required
+  arguments now come first in both, and config mode's `--help` also lists
+  required options first.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

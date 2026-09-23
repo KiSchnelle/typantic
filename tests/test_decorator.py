@@ -1849,3 +1849,82 @@ def test_variadic_tuple_field_round_trips_through_the_cli() -> None:
     app, seen = _make_app(Cfg)
     assert runner.invoke(app, ["--parts", "x", "--parts", "y"]).exit_code == 0
     assert seen[0].parts == ("x", "y")
+
+
+# ---------------------------------------------------------------------------
+# Tests: flags typantic and Typer inject themselves
+# ---------------------------------------------------------------------------
+
+
+class TestInjectedFlagCollisions:
+    def test_a_field_named_config_collides_with_the_injected_flag(self) -> None:
+        class Cfg(BaseModel):
+            config: Annotated[Path, Field(default=Path("tool.ini"), kw_only=True)]
+
+        with pytest.raises(ValueError, match="--config"):
+            pydantic_to_typer(Cfg, config_file=True)(lambda config: config)
+
+    def test_a_cli_name_claiming_schema_collides(self) -> None:
+        class Cfg(BaseModel):
+            s: Annotated[
+                str,
+                Field(
+                    default="x",
+                    kw_only=True,
+                    json_schema_extra={"cli_name": "--schema"},
+                ),
+            ]
+
+        with pytest.raises(ValueError, match="--schema"):
+            pydantic_to_typer(Cfg, config_file=True)(lambda config: config)
+
+    def test_without_config_file_a_field_named_config_is_just_a_flag(self) -> None:
+        class Cfg(BaseModel):
+            config: Annotated[str, Field(default="a", kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--config", "b"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].config == "b"
+
+    def test_the_implicit_off_switch_of_a_bool_is_claimed(self) -> None:
+        class Cfg(BaseModel):
+            cache: Annotated[bool, Field(default=True, kw_only=True)]
+            no_cache: Annotated[bool, Field(default=False, kw_only=True)]
+
+        with pytest.raises(ValueError, match="--no-cache"):
+            pydantic_to_typer(Cfg)(lambda config: config)
+
+    def test_a_cli_name_with_its_own_off_switch_is_not_doubled(self) -> None:
+        class Cfg(BaseModel):
+            color: Annotated[
+                bool,
+                Field(
+                    default=True,
+                    kw_only=True,
+                    json_schema_extra={"cli_name": "--color/--no-color"},
+                ),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--no-color"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].color is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: one positional order in both modes
+# ---------------------------------------------------------------------------
+
+
+class _Copy(BaseModel):
+    src: Annotated[str, Field(default="here", kw_only=False)]
+    dst: Annotated[str, Field(kw_only=False)]
+
+
+@pytest.mark.parametrize("make", [_make_app, _make_app_config])
+def test_a_required_positional_is_filled_first_in_both_modes(make) -> None:
+    app, seen = make(_Copy)
+    result = runner.invoke(app, ["A", "B"])
+    assert result.exit_code == 0, result.output
+    assert (seen[0].dst, seen[0].src) == ("A", "B")

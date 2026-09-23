@@ -55,6 +55,9 @@ class _Leaf(NamedTuple):
     key_path: tuple[str, ...]
     name_path: tuple[str, ...]
     flags: tuple[str, ...]
+    # Whether the field itself is required (no default, no parent default) --
+    # kept apart from the Typer default, which config mode relaxes to None.
+    required: bool = False
 
 
 class _Nested(NamedTuple):
@@ -76,6 +79,12 @@ _CONFIG_PARAM = "_typantic_config"
 _GENERATE_PARAM = "_typantic_generate_config"
 _SCHEMA_PARAM = "_typantic_schema"
 _CONFIG_PANEL = "Config file"
+# The flags config_file=True injects, and what each is for (collision errors).
+_CONFIG_FLAGS = {
+    "--config": "config_file=True injects to load settings from a file",
+    "--generate-config": "config_file=True injects to write a template",
+    "--schema": "config_file=True injects to print the JSON Schema",
+}
 _EXPLICIT_SOURCES = frozenset({"COMMANDLINE", "ENVIRONMENT", "PROMPT"})
 
 
@@ -504,7 +513,7 @@ def _option_decls(
     """
     long = extra.get("cli_name") or "--" + cli_name.replace("_", "-")
     short = extra.get("cli_short")
-    if is_flag and (short or "cli_name" in extra):
+    if is_flag and (short or "cli_name" in extra) and "/" not in long:
         long = f"{long}/--no-{long.removeprefix('--')}"
     if short:
         return [long, short]
@@ -608,7 +617,8 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
         )
         params.append(param)
         annotations[cli_name] = annotated
-        mapping.append(_Leaf(cli_name, key_path, path, flags))
+        required = field_info.is_required() and override is _MISSING
+        mapping.append(_Leaf(cli_name, key_path, path, flags, required))
 
     return params, annotations, mapping, nested
 
@@ -641,7 +651,10 @@ def _nested_default(field_info: FieldInfo, override: object) -> BaseModel | None
     return None
 
 
-def _check_name_collisions(mapping: list[_Leaf]) -> None:
+def _check_name_collisions(
+    mapping: list[_Leaf],
+    reserved: dict[str, str] | None = None,
+) -> None:
     """Raise a clear error if two fields claim the same parameter name or flag.
 
     A nested field's CLI name is its path joined by ``_`` (``db.host`` becomes
@@ -651,11 +664,14 @@ def _check_name_collisions(mapping: list[_Leaf]) -> None:
 
     Two fields can also claim the same *flag* through ``cli_name`` / ``cli_short``
     even when their parameter names differ. Click keeps only the last such option,
-    so the other field would silently stop being settable -- name them too.
+    so the other field would silently stop being settable -- name them too. The
+    same goes for a flag typantic injects itself (``reserved``, flag -> purpose),
+    such as ``--config``.
     """
     seen: dict[str, tuple[str, ...]] = {}
     flags: dict[str, tuple[str, ...]] = {}
-    for cli_name, _, name_path, declared in mapping:
+    for leaf in mapping:
+        cli_name, name_path, declared = leaf.cli_name, leaf.name_path, leaf.flags
         if cli_name in seen:
             first = ".".join(seen[cli_name])
             second = ".".join(name_path)
@@ -668,6 +684,12 @@ def _check_name_collisions(mapping: list[_Leaf]) -> None:
         seen[cli_name] = name_path
 
         for flag in declared:
+            if reserved and flag in reserved:
+                msg = (
+                    f"CLI flag collision: field '{'.'.join(name_path)}' declares "
+                    f"'{flag}', which {reserved[flag]}. Give the field a cli_name."
+                )
+                raise ValueError(msg)
             if flag in flags:
                 first = ".".join(flags[flag])
                 second = ".".join(name_path)
@@ -684,18 +706,21 @@ def _declared_flags(
     decls: list[str],
     *,
     is_argument: bool,
+    is_flag: bool,
 ) -> tuple[str, ...]:
-    """The flags a leaf claims, including the long flag Typer derives implicitly.
+    """The flags a leaf claims, including the ones Typer derives implicitly.
 
-    An argument is positional and claims none. A boolean's ``--x/--no-x`` decl
-    covers two flags, so it is split -- otherwise ``--no-x`` could silently
-    collide with a sibling's flag.
+    An argument is positional and claims none. A boolean's ``--x/--no-x`` covers
+    two flags, so it is split -- otherwise ``--no-x`` could silently collide with
+    a sibling's flag. With no explicit decls, Typer derives the long flag from the
+    parameter name, and for a boolean its ``--no-`` off switch as well.
     """
     if is_argument:
         return ()
-    # No explicit decls: Typer derives the long flag from the parameter name.
-    flags = decls or ["--" + cli_name.replace("_", "-")]
-    return tuple(part for decl in flags for part in decl.split("/"))
+    if not decls:
+        long = "--" + cli_name.replace("_", "-")
+        return (long, f"--no-{long.removeprefix('--')}") if is_flag else (long,)
+    return tuple(part for decl in decls for part in decl.split("/"))
 
 
 def _secret_type(base_type: object) -> type | None:
@@ -833,7 +858,12 @@ def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
         default=default,
         annotation=annotated,
     )
-    flags = _declared_flags(cli_name, decls, is_argument=is_argument)
+    flags = _declared_flags(
+        cli_name,
+        decls,
+        is_argument=is_argument,
+        is_flag=_is_bool(typer_type),
+    )
     return parameter, annotated, flags
 
 
@@ -930,11 +960,18 @@ def pydantic_to_typer(
                 subpanels=subpanels,
                 relax=bool(config_file),
             )
-            _check_name_collisions(mapping)
+            _check_name_collisions(
+                mapping,
+                _CONFIG_FLAGS if config_file else None,
+            )
+            # Required fields first, by the field's own requiredness -- not the
+            # Typer default config mode relaxes -- so switching config_file on
+            # never reorders the positional arguments a command takes.
+            required = {leaf.cli_name for leaf in mapping if leaf.required}
             new_params.sort(
                 key=lambda p: (
                     p.kind == inspect.Parameter.KEYWORD_ONLY,
-                    p.default is not inspect.Parameter.empty,
+                    p.name not in required,
                 ),
             )
 
