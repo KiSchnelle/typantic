@@ -1,4 +1,7 @@
-# typantic
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/KiSchnelle/typantic/main/logo/png/logo-dark-2x.png">
+  <img alt="typantic" src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/logo/png/logo-light-2x.png" height="72">
+</picture>
 
 [![CI](https://github.com/KiSchnelle/typantic/actions/workflows/ci.yml/badge.svg)](https://github.com/KiSchnelle/typantic/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/typantic.svg)](https://pypi.org/project/typantic/)
@@ -639,6 +642,18 @@ click **Launch** — the dashboard writes your values to a config file, runs
   of its own.
 - **Projects & history** — file jobs under a project, then search, filter, sort,
   and page through the history (a stdlib SQLite index; nothing to set up).
+- **Keep the token generated.** The printed URL carries a fresh random token;
+  `--token X` works too, but a command line is visible in `ps` to every user
+  of the machine. `--no-token` is for a loopback-only development run.
+- **One server per job store.** Servers on several login nodes can share a
+  store on a common filesystem — each job records the host its process runs
+  on, and only that host's server probes or cancels it — but they do not
+  coordinate otherwise.
+- **Jobs outlive the server**, so restarting it never kills a local job. Two
+  exceptions: a server run as a `systemd --user` service takes its jobs down
+  when the service stops (set `KillMode=process`), and one started inside a
+  Slurm allocation takes them down when the allocation ends (use the `slurm`
+  backend instead).
 - **Where things live** — each job's folder (config, log, outputs) under
   `~/.typantic/jobs`, or `$TYPANTIC_WEB_JOBS_DIR`, readable by you alone: a
   submitted config can hold a secret typed into the form. Write outputs you
@@ -650,10 +665,10 @@ click **Launch** — the dashboard writes your values to a config file, runs
 ## Requirements
 
 - Python ≥ 3.12 (tested on 3.12–3.15)
-- Pydantic ≥ 2.10
-- Typer ≥ 0.27
-- PyYAML ≥ 6.0
-- For `[web]`: FastAPI, Uvicorn, WebSockets, Pillow
+- Pydantic ≥ 2.13.5
+- Typer ≥ 0.27.2
+- PyYAML ≥ 6.0.3
+- For `[web]`: FastAPI ≥ 0.141.1, Uvicorn ≥ 0.53, WebSockets ≥ 17.1, Pillow ≥ 12.3
 
 ## License
 
