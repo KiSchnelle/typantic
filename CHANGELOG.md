@@ -329,6 +329,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there until the jobs list happened to refresh it; it now asks for the live
   status of every job still active. `PollResult` gains an optional
   `finished_at` for a backend that knows.
+- Deleting a job whose folder held files its owner may not remove -- a
+  container that ran as root leaves root-owned output -- reported success and
+  left them on disk, unseen. The job is still deleted, and the dashboard now
+  says which folder could not be removed completely (HTTP 409). Deleting a
+  project deletes everything it can before it says so.
+- An untouched array inside a list of objects (a list of mounts, each with its
+  own options) was submitted as `[]`, pinning the field instead of leaving the
+  model's default. Arrays at the top level and in nested objects were already
+  left out; arrays of objects are now cleaned the same way.
 - An ssh job's `directory: ~/work` was quoted whole, so the remote shell
   looked for a folder literally named `~`. A leading `~` now means the remote
   home.

@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import stat
 import time
@@ -25,7 +26,7 @@ from typantic.web.models import (
     JobStatus,
     LaunchRequest,
 )
-from typantic.web.store import JobStore
+from typantic.web.store import FolderNotRemovedError, JobStore
 
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
 
@@ -929,3 +930,32 @@ def test_the_history_shows_the_live_status(wired):
     assert history.projects[0].jobs[0].status is JobStatus.DONE
     assert history.ungrouped[0].id == single.id
     assert history.ungrouped[0].status is JobStatus.DONE
+
+
+def test_empty_lists_inside_a_list_of_objects_are_dropped(wired):
+    # An untouched array one level down submits [] too; inside a list of objects
+    # it was kept, pinning the field to [] instead of its default.
+    launcher, _, _ = wired
+    values = {"mounts": [{"src": "a", "opts": []}], "tags": [], "grid": [[]]}
+    preview = launcher.preview(_request(values=values))
+    assert json.loads(preview.config) == {"mounts": [{"src": "a"}], "grid": [[]]}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
+def test_a_project_delete_finishes_before_it_reports_leftovers(wired):
+    launcher, _, store = wired
+    project = store.create_project("P")
+    stuck = launcher.launch(_request(project_id=project.id))
+    other = launcher.launch(_request(project_id=project.id))
+    locked = store.job_dir(stuck.id) / "out"
+    locked.mkdir()
+    (locked / "result.txt").write_text("x")
+    locked.chmod(0o500)
+    try:
+        with pytest.raises(FolderNotRemovedError, match=stuck.id):
+            launcher.delete_project(project.id)
+        assert store.load(other.id) is None
+        assert not store.job_dir(other.id).exists()
+        assert store.get_project(project.id) is None
+    finally:
+        locked.chmod(0o700)

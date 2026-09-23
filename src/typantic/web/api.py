@@ -57,6 +57,7 @@ from typantic.web.models import (
 )
 from typantic.web.schema import SchemaError
 from typantic.web.security import token_ok
+from typantic.web.store import FolderNotRemovedError
 
 _SPA_DIR = Path(__file__).parent / "web_dist"
 _WS_POLICY_VIOLATION = 1008
@@ -73,6 +74,7 @@ _ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
     (LaunchUncertainError, 504),
     (SchedulerError, 502),
     (FileSystemError, 400),
+    (FolderNotRemovedError, 409),
     (ValidationError, 422),
 )
 
@@ -202,7 +204,9 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
 
     @app.delete("/api/jobs/{job_id}", dependencies=guard)
     def delete_job(job_id: str) -> dict[str, str]:
-        if not launcher.delete(job_id):
+        with _domain_errors():
+            deleted = launcher.delete(job_id)
+        if not deleted:
             raise HTTPException(status_code=404, detail="No such job.")
         return {"deleted": job_id}
 
@@ -270,7 +274,9 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
     @app.delete("/api/projects/{project_id}", dependencies=guard)
     def delete_project(project_id: str) -> dict[str, str]:
         # Deletes the project AND all its jobs (cancelling any still running).
-        if not launcher.delete_project(project_id):
+        with _domain_errors():
+            deleted = launcher.delete_project(project_id)
+        if not deleted:
             raise HTTPException(status_code=404, detail="No such project.")
         return {"deleted": project_id}
 

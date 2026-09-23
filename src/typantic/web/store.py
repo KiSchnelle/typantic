@@ -22,6 +22,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from typantic.web._files import PRIVATE_DIR, touch_private
+from typantic.web._paths import is_dir
 from typantic.web.models import (
     History,
     JobRecord,
@@ -99,6 +100,39 @@ def _escape_like(term: str) -> str:
     for char in ("\\", "%", "_"):
         term = term.replace(char, f"\\{char}")
     return term
+
+
+class FolderNotRemovedError(RuntimeError):
+    """A job is deleted, but files in its folder could not be removed.
+
+    A container that ran as root leaves root-owned output behind, which its
+    user cannot delete; saying nothing left it all on disk, unseen.
+    """
+
+    @classmethod
+    def for_jobs(cls, job_ids: list[str]) -> "FolderNotRemovedError":
+        """The error for several jobs whose folders were left behind."""
+        return cls(
+            f"The jobs are deleted, but the folders of {', '.join(job_ids)} could "
+            f"not be removed completely. {_ROOT_OWNED_HINT}"
+        )
+
+
+_ROOT_OWNED_HINT = (
+    "Files a container wrote as root need removing with root rights (sudo rm -r)."
+)
+
+
+def _remove_tree(directory: Path) -> list[str]:
+    """Remove ``directory`` as far as it goes; each path that would not, and why."""
+    left: list[str] = []
+
+    def keep_going(_function: object, path: str, error: BaseException) -> None:
+        reason = error.strerror if isinstance(error, OSError) else None
+        left.append(f"{path} ({reason or error})")
+
+    shutil.rmtree(directory, onexc=keep_going)
+    return left
 
 
 def default_jobs_dir() -> Path:
@@ -298,14 +332,24 @@ class JobStore:
         Returns ``True`` if the job existed. Only the store folder (log, config,
         request) is removed; an output folder the user pointed elsewhere is their
         own data and is not this store's to touch.
+
+        Raises:
+            FolderNotRemovedError: If part of the folder could not be removed.
+                The job's row is deleted by then.
         """
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             existed = cursor.rowcount > 0
         directory = self.job_dir(job_id)
-        if directory.is_dir():
-            shutil.rmtree(directory, ignore_errors=True)
+        if is_dir(directory):
+            left = _remove_tree(directory)
             existed = True
+            if left:
+                msg = (
+                    f"Job {job_id} is deleted, but its folder {directory} could not "
+                    f"be removed completely: {left[0]}. {_ROOT_OWNED_HINT}"
+                )
+                raise FolderNotRemovedError(msg)
         return existed
 
     # --- projects ---
@@ -354,17 +398,28 @@ class JobStore:
 
         Returns ``True`` if the project existed. This does not stop a running
         job's process — the launcher cancels first (see ``Launcher.delete_project``).
+
+        Raises:
+            FolderNotRemovedError: If some job folders could not be removed
+                completely; everything else is deleted by then.
         """
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id FROM jobs WHERE project_id = ?",
                 (project_id,),
             ).fetchall()
+        left: list[str] = []
         for row in rows:
-            self.delete(row["id"])
+            try:
+                self.delete(row["id"])
+            except FolderNotRemovedError:
+                left.append(row["id"])
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-            return cursor.rowcount > 0
+            existed = cursor.rowcount > 0
+        if left:
+            raise FolderNotRemovedError.for_jobs(left)
+        return existed
 
     def grouped_history(self) -> History:
         """Return job history: jobs grouped by project, plus ungrouped singles."""

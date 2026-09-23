@@ -40,7 +40,7 @@ from typantic.web.models import (
     ProjectGroup,
 )
 from typantic.web.schema import SchemaCache, normalize_for_form
-from typantic.web.store import JobStore
+from typantic.web.store import FolderNotRemovedError, JobStore
 
 logger = logging.getLogger("typantic.web")
 
@@ -71,21 +71,28 @@ def _clean_form_values(values: dict[str, Any]) -> dict[str, Any]:
     submits ``[]``, never omitted. Dropping empty lists lets the settings model
     fall back to its real default rather than pinning the field to ``[]``.
 
-    Nested objects are recursed into: an array one level down is submitted the
-    same way, and stripping only the top level made a nested field behave
-    differently from an identical top-level one for no reason the user could see.
+    Nested objects are recursed into, inside arrays too: an array one level
+    down is submitted the same way, and stripping only the top level made a
+    nested field behave differently from an identical top-level one for no
+    reason the user could see.
 
     Known limit: an empty array is therefore always read as "untouched", so a
     field whose default is non-empty cannot be *cleared* from the form. The
     submission carries no way to tell the two apart; ``--config`` can express it.
     """
     return {
-        key: _clean_form_values(cast("dict[str, Any]", value))
-        if isinstance(value, dict)
-        else value
+        key: _clean_form_value(value)
         for key, value in values.items()
         if not (isinstance(value, list) and not value)
     }
+
+
+def _clean_form_value(value: object) -> object:
+    if isinstance(value, dict):
+        return _clean_form_values(cast("dict[str, Any]", value))
+    if isinstance(value, list):
+        return [_clean_form_value(item) for item in value]
+    return value
 
 
 def _read_values(config_path: str) -> dict[str, Any]:
@@ -458,11 +465,23 @@ class Launcher:
         )
 
     def delete_project(self, project_id: str) -> bool:
-        """Delete a project and all its jobs, cancelling any still active."""
+        """Delete a project and all its jobs, cancelling any still active.
+
+        Raises:
+            FolderNotRemovedError: If some job folders could not be removed
+                completely; everything else is deleted by then.
+        """
         jobs, _ = self.store.query_jobs(project_id=project_id)
+        left: list[str] = []
         for record in jobs:
-            self.delete(record.id)
-        return self.store.delete_project(project_id)
+            try:
+                self.delete(record.id)
+            except FolderNotRemovedError:
+                left.append(record.id)
+        existed = self.store.delete_project(project_id)
+        if left:
+            raise FolderNotRemovedError.for_jobs(left)
+        return existed
 
     def get(self, job_id: str) -> JobRecord | None:
         """Return the current (refreshed) record for ``job_id``."""

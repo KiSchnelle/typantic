@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import stat
 from datetime import UTC, datetime
@@ -7,7 +8,7 @@ import pytest
 
 from typantic.web import store as store_mod
 from typantic.web.models import JobRecord, JobStatus
-from typantic.web.store import JobStore, default_jobs_dir
+from typantic.web.store import FolderNotRemovedError, JobStore, default_jobs_dir
 
 
 @pytest.fixture
@@ -340,3 +341,57 @@ def test_an_existing_permissive_store_is_left_but_warned_about(tmp_path, caplog)
 def test_a_private_store_is_not_warned_about(tmp_path, caplog):
     JobStore(tmp_path / "jobs")
     assert "chmod" not in caplog.text
+
+
+# --- search is literal ---
+
+
+def test_search_takes_underscores_and_percents_literally(store):
+    # LIKE reads _ and % as wildcards: a search for job_1 also matched job11.
+    for job_id, name in (("a", "job_1"), ("b", "job11"), ("c", "100%"), ("d", "1000")):
+        store.save(_record(job_id, name=name))
+    assert [r.name for r in store.query_jobs(search="job_1")[0]] == ["job_1"]
+    assert [r.name for r in store.query_jobs(search="100%")[0]] == ["100%"]
+
+
+# --- a delete that cannot remove everything says so ---
+
+
+def _locked_output(store, job_id):
+    """A job folder holding a file its owner may not delete (a container's, say)."""
+    locked = store.create_job_dir(job_id) / "out"
+    locked.mkdir()
+    (locked / "result.txt").write_text("x")
+    locked.chmod(0o500)
+    return locked
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
+def test_a_delete_that_leaves_files_behind_says_so(store):
+    # A container that ran as root leaves root-owned output in the job folder;
+    # the delete reported success and left it all on disk, unseen.
+    store.save(_record("j1"))
+    locked = _locked_output(store, "j1")
+    try:
+        with pytest.raises(FolderNotRemovedError, match=r"result\.txt"):
+            store.delete("j1")
+        assert store.load("j1") is None  # the job itself is gone
+        assert (locked / "result.txt").exists()
+    finally:
+        locked.chmod(0o700)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
+def test_a_project_delete_that_leaves_files_behind_says_so(store):
+    project = store.create_project("P")
+    store.save(_record("j1", project_id=project.id))
+    store.save(_record("j2", project_id=project.id))
+    locked = _locked_output(store, "j1")
+    try:
+        with pytest.raises(FolderNotRemovedError, match="j1"):
+            store.delete_project(project.id)
+        assert store.get_project(project.id) is None
+        assert store.load("j1") is None
+        assert store.load("j2") is None
+    finally:
+        locked.chmod(0o700)

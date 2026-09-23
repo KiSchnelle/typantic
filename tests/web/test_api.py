@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import os
 import pathlib
 import subprocess
 from datetime import UTC, datetime
@@ -776,3 +777,21 @@ def test_cancelling_a_job_on_another_host_is_409(env, monkeypatch):
     resp = env.client.post(f"/api/jobs/{record['id']}/cancel", headers=AUTH)
     assert resp.status_code == 409
     assert "login99" in resp.json()["detail"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
+def test_a_delete_that_leaves_files_behind_is_409(env):
+    record = _launch(env)
+    locked = env.store.job_dir(record["id"]) / "out"
+    locked.mkdir()
+    (locked / "result.txt").write_text("x")
+    locked.chmod(0o500)
+    try:
+        resp = env.client.delete(f"/api/jobs/{record['id']}", headers=AUTH)
+        assert resp.status_code == 409
+        assert "could not be removed" in resp.json()["detail"]
+        project = env.store.create_project("P")
+        resp = env.client.delete(f"/api/projects/{project.id}", headers=AUTH)
+        assert resp.status_code == 200
+    finally:
+        locked.chmod(0o700)
