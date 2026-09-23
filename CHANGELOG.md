@@ -56,6 +56,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extra="allow"` is no longer checked at all. A written-back computed field now
   reloads on an `extra="forbid"` model, because it is dropped before the model is
   built.
+- **`--generate-config` wrote a secret default as its mask**, and loading the
+  template read `'**********'` back as the value. A secret default is now written
+  as the `<DEFAULT: computed at runtime>` sentinel, which loading strips, so the
+  real default applies. A nested default instance holding a secret is treated
+  the same way as a whole.
+- A template built from a nested default instance failed its own reload: the
+  instance was dumped by *serialization* alias, which a load rejects. Model
+  instances are now written field by field under the keys a load accepts, at any
+  depth, including inside lists and dicts.
+- **An unedited template ran** with `'<REQUIRED: App name.>'` as the value, for
+  example writing into a directory literally named after the placeholder.
+  `load_config_file` (and so `--config`) now refuses a file that still holds a
+  placeholder, naming each one (`name, inputs[0], nested.source`).
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

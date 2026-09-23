@@ -285,7 +285,10 @@ nested models are expanded so their shape is visible, and any
 `default_factory` field becomes a `<DEFAULT: computed at runtime>` sentinel
 (rather than a frozen value) so it is recomputed fresh when the file is loaded —
 handy for host/time-sensitive defaults like a timestamped output folder or a CPU
-count that shouldn't be baked into a shared template:
+count that shouldn't be baked into a shared template. A secret's default gets the
+same sentinel, so it is never written to the file. A file still holding a
+`<REQUIRED: ...>` placeholder is refused on load, naming each one, rather than run
+with the placeholder text as the value:
 
 ```console
 $ myapp run --generate-config run.yaml

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, cast, get_args, get_origin
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretBytes, SecretStr
 from pydantic.fields import FieldInfo
 from pydantic_core import to_jsonable_python
 
@@ -42,6 +42,10 @@ _SUFFIXES = _YAML_SUFFIXES | {".json"}
 # not be frozen into a shared template, so the template shows this sentinel and
 # ``load_config_file`` strips it -- letting the factory run fresh on reload.
 _DEFAULT_SENTINEL = "<DEFAULT: computed at runtime>"
+
+# How a required field's placeholder starts; a loaded file still holding one was
+# never filled in.
+_REQUIRED_PREFIX = "<REQUIRED:"
 
 
 def load_config_file(path: Path) -> dict[str, Any]:
@@ -74,7 +78,32 @@ def load_config_file(path: Path) -> dict[str, Any]:
         # ValueError (not TypeError) keeps one exception type for any bad config.
         msg = f"Config file {path} must contain a mapping of settings."
         raise ValueError(msg)  # noqa: TRY004
+    unfilled = _placeholders(data)
+    if unfilled:
+        # An unedited template would otherwise run with the placeholder text as
+        # the value -- a path literally named "<REQUIRED: Output directory.>".
+        msg = f"Config file {path} still needs values for: {', '.join(unfilled)}"
+        raise ValueError(msg)
     return cast("dict[str, Any]", _strip_default_sentinels(data))
+
+
+def _placeholders(data: object, prefix: str = "") -> list[str]:
+    """The dotted paths in ``data`` still holding a ``<REQUIRED: ...>`` placeholder."""
+    if isinstance(data, dict):
+        return [
+            found
+            for key, value in cast("dict[str, Any]", data).items()
+            for found in _placeholders(value, f"{prefix}{key}.")
+        ]
+    if isinstance(data, list):
+        return [
+            found
+            for index, item in enumerate(cast("list[object]", data))
+            for found in _placeholders(item, f"{prefix.removesuffix('.')}[{index}].")
+        ]
+    if isinstance(data, str) and data.startswith(_REQUIRED_PREFIX):
+        return [prefix.removesuffix(".")]
+    return []
 
 
 def _strip_default_sentinels(data: object) -> object:
@@ -227,7 +256,7 @@ def _required_placeholder(
     ``<REQUIRED: ...>`` string. ``seen`` breaks self-referential models, which
     would otherwise recurse until the stack ran out.
     """
-    placeholder = f"<REQUIRED: {field.description or name}>"
+    placeholder = f"{_REQUIRED_PREFIX} {field.description or name}>"
     if is_model_type(base_type):
         if base_type in seen:
             return placeholder
@@ -274,12 +303,53 @@ def build_config_template(
         if field.is_required():
             base_type = extract_base_type(hints[name])
             value = _required_placeholder(name, field, base_type, seen)
-        elif field.default_factory is not None:
+        elif field.default_factory is not None or _holds_secret(field.default):
+            # A secret would be written as its mask and read back as the value;
+            # the sentinel is stripped on load, so the real default applies.
             value = _DEFAULT_SENTINEL
         else:
-            value = to_jsonable_python(field.default)
+            value = _template_value(field.default)
         _put(template, canonical_key_path(model_cls, name, field), value)
     return template
+
+
+def _holds_secret(value: object) -> bool:
+    """Whether ``value`` is a secret, or a model holding one at any depth."""
+    if isinstance(value, SecretStr | SecretBytes):
+        return True
+    if isinstance(value, BaseModel):
+        return any(
+            _holds_secret(getattr(value, name)) for name in type(value).model_fields
+        )
+    return False
+
+
+def _template_value(value: object) -> object:
+    """``value`` as a template entry that loads back into the same value.
+
+    A model instance (at any depth, including inside containers) is written field
+    by field under each field's canonical key -- the key a load accepts -- rather
+    than dumped by serialization alias, which a load rejects. Everything else is
+    serialised the way Pydantic would in JSON mode.
+    """
+    if isinstance(value, BaseModel):
+        model_cls = type(value)
+        entry: dict[str, object] = {}
+        for name, field in model_cls.model_fields.items():
+            _put(
+                entry,
+                canonical_key_path(model_cls, name, field),
+                _template_value(getattr(value, name)),
+            )
+        return entry
+    if isinstance(value, list | tuple | set | frozenset):
+        return [_template_value(item) for item in cast("list[object]", value)]
+    if isinstance(value, dict):
+        return {
+            to_jsonable_python(key): _template_value(item)
+            for key, item in cast("dict[object, object]", value).items()
+        }
+    return to_jsonable_python(value)
 
 
 def _put(template: dict[str, object], path: tuple[str, ...], value: object) -> None:

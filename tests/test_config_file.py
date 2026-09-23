@@ -16,6 +16,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SecretStr,
     computed_field,
 )
 from pydantic.alias_generators import to_camel
@@ -693,3 +694,104 @@ def test_model_lookup_through_unions_and_collections():
     assert item_model(set[_Mnt]) is _Mnt
     assert item_model(list[int]) is None
     assert item_model(list[_Mnt] | int | None) is None
+
+
+# ---------------------------------------------------------------------------
+# Templates that reload
+#
+# A secret default was written as its mask and read back as the value; a
+# nested default instance was dumped by serialization alias and failed its own
+# reload; an unedited template ran with '<REQUIRED: ...>' as real values.
+# ---------------------------------------------------------------------------
+class _Vault(BaseModel):
+    token: SecretStr = SecretStr("swordfish")
+    name: str = "vault"
+
+
+def test_a_secret_default_is_templated_as_the_sentinel_and_reloads(tmp_path: Path):
+    tmpl = tmp_path / "t.yaml"
+    result, _ = _run(_Vault, ["--generate-config", str(tmpl)])
+    assert result.exit_code == 0, result.output
+    assert "*****" not in tmpl.read_text()
+    result, seen = _run(_Vault, ["--config", str(tmpl)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].token.get_secret_value() == "swordfish"
+
+
+class _Ser(BaseModel):
+    host: str = Field(default="localhost", serialization_alias="hostName")
+    port: int = 5432
+
+
+class _Holder(BaseModel):
+    ser: _Ser = _Ser(host="prod")
+    camel: _Camel = _Camel(max_workers=4)
+
+
+def test_a_nested_default_instance_is_templated_by_its_input_keys(tmp_path: Path):
+    tmpl = tmp_path / "t.yaml"
+    result, _ = _run(_Holder, ["--generate-config", str(tmpl)])
+    assert result.exit_code == 0, result.output
+    assert yaml.safe_load(tmpl.read_text()) == {
+        "ser": {"host": "prod", "port": 5432},
+        "camel": {"max_workers": 4, "output_dir": "out"},
+    }
+    result, seen = _run(_Holder, ["--config", str(tmpl)])
+    assert result.exit_code == 0, result.output
+    assert (seen[0].ser.host, seen[0].camel.max_workers) == ("prod", 4)
+
+
+class _Locked(BaseModel):
+    password: SecretStr = SecretStr("")
+
+
+class _HoldsSecret(BaseModel):
+    db: _Locked = _Locked(password=SecretStr("parent-pass"))
+
+
+def test_a_nested_default_holding_a_secret_is_left_to_its_default(tmp_path: Path):
+    tmpl = tmp_path / "t.yaml"
+    assert _run(_HoldsSecret, ["--generate-config", str(tmpl)])[0].exit_code == 0
+    result, seen = _run(_HoldsSecret, ["--config", str(tmpl)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].db.password.get_secret_value() == "parent-pass"
+
+
+class _Todo(BaseModel):
+    name: str = Field(description="App name.")
+    inputs: list[str]
+    nested: _Mnt
+
+
+def test_an_unedited_template_is_refused_naming_every_placeholder(tmp_path: Path):
+    tmpl = tmp_path / "t.yaml"
+    assert _run(_Todo, ["--generate-config", str(tmpl)])[0].exit_code == 0
+    result, seen = _run(_Todo, ["--config", str(tmpl)])
+    assert result.exit_code == 2
+    out = " ".join(_plain(result.output).replace("│", " ").split())
+    for placeholder in ("name", "inputs[0]", "nested.source"):
+        assert placeholder in out
+    assert not seen
+
+
+def test_loading_a_file_with_a_placeholder_raises(tmp_path: Path):
+    path = tmp_path / "c.yaml"
+    path.write_text("name: '<REQUIRED: App name.>'\n")
+    with pytest.raises(ValueError, match="name"):
+        load_config_file(path)
+
+
+class _Registry(BaseModel):
+    by_color: dict[Color, _Camel] = {Color.RED: _Camel(max_workers=2)}
+
+
+def test_models_inside_a_dict_default_are_templated_by_input_keys(tmp_path: Path):
+    tmpl = tmp_path / "t.yaml"
+    generated, _ = _run(_Registry, ["--generate-config", str(tmpl)], config_file="only")
+    assert generated.exit_code == 0, generated.output
+    assert yaml.safe_load(tmpl.read_text()) == {
+        "by_color": {"red": {"max_workers": 2, "output_dir": "out"}},
+    }
+    result, seen = _run(_Registry, ["--config", str(tmpl)], config_file="only")
+    assert result.exit_code == 0, result.output
+    assert seen[0].by_color[Color.RED].max_workers == 2
