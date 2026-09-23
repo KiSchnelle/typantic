@@ -6,8 +6,11 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
+from pydantic import ValidationError
 
+from typantic.web.brand import discover_brand, resolve_brand
 from typantic.web.launcher import Launcher
+from typantic.web.models import Brand
 from typantic.web.server import (
     find_free_port,
     is_loopback_host,
@@ -55,15 +58,32 @@ def serve_command(
         typer.Option("--no-token", help="Disable auth (localhost dev only)."),
     ] = False,
     title: Annotated[
-        str,
-        typer.Option(help="Dashboard brand shown in the UI."),
-    ] = "typantic web",
+        str | None,
+        typer.Option(
+            help="The dashboard's name, in the sidebar and the browser tab "
+            "(default: the installed brand's, else typantic web).",
+        ),
+    ] = None,
+    icon: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="An SVG file: the sidebar mark and the browser tab's icon.",
+        ),
+    ] = None,
+    accent: Annotated[
+        str | None,
+        typer.Option(help="The accent colour, #rrggbb (default: typantic's cyan)."),
+    ] = None,
     log_level: Annotated[
         Literal["critical", "error", "warning", "info", "debug", "trace"],
         typer.Option(help="Uvicorn log level."),
     ] = "info",
 ) -> None:
     """Start the dashboard, printing the tokenized localhost URL to open."""
+    brand = _brand(title, icon, accent)
     launcher = Launcher(JobStore(jobs_dir))
     if not launcher.commands:
         logger.warning(
@@ -83,7 +103,7 @@ def serve_command(
     resolved_port = port or find_free_port(host)
 
     for line in startup_banner(
-        title=title,
+        title=brand.title,
         host=host,
         port=resolved_port,
         token=resolved_token,
@@ -97,6 +117,22 @@ def serve_command(
         host=host,
         port=resolved_port,
         token=resolved_token,
-        title=title,
+        brand=brand,
         log_level=log_level,
     )
+
+
+def _brand(title: str | None, icon: Path | None, accent: str | None) -> Brand:
+    """The installed brand with this run's flags applied, or a usage error."""
+    try:
+        markup = icon.read_text(encoding="utf-8") if icon is not None else None
+    except (OSError, UnicodeDecodeError) as exc:
+        msg = f"cannot be read as UTF-8 text ({exc})."
+        raise typer.BadParameter(msg, param_hint="--icon") from exc
+    try:
+        return resolve_brand(discover_brand(), title=title, icon=markup, accent=accent)
+    except ValidationError as exc:
+        error = exc.errors()[0]
+        raise typer.BadParameter(
+            error["msg"], param_hint=f"--{error['loc'][0]}"
+        ) from exc

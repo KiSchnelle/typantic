@@ -605,12 +605,38 @@ click **Launch** — the dashboard writes your values to a config file, runs
 - **It runs as you, on your machine**, on a free port with a token in the URL —
   just open the URL it prints. On a remote server, forward the port over SSH (the
   command prints a ready-to-run `ssh -N -L …` line with your user and host filled
-  in). Set the page's brand — sidebar and browser tab — with `--title`.
+  in). Name the page with `--title`, or brand it (below).
 - **Backends decide *where* a job runs**, chosen per launch in the form.
   `local` (a subprocess on this machine) is the default and needs no setup;
   `slurm` / `pbs` submit to an HPC cluster, `docker` / `podman` / `apptainer`
   run in a container, and `ssh` runs on another host. You can register your own
   under the `typantic.web_backends` entry-point group.
+- **Brand it as your own.** A package can show the dashboard under its own
+  name, mark and accent colour by registering a brand — a `Brand` or a plain
+  mapping of its fields — under the `typantic.web_brand` entry-point group:
+
+  ```python
+  # myapp/web_brand.py
+  from importlib.resources import files
+
+  BRAND = {
+      "title": "myapp",  # the tab; the sidebar wordmark splits it at its first space
+      "accent": "#5AA9FF",  # buttons, links and highlights, as #rrggbb
+      "icon": files("myapp").joinpath("mark.svg").read_text(),  # SVG, ≤ 64 KiB
+  }
+  ```
+
+  ```toml
+  [project.entry-points."typantic.web_brand"]
+  myapp = "myapp.web_brand:BRAND"
+  ```
+
+  `typantic web serve` picks it up (the first by entry-point name, if several
+  are installed), and `--title`, `--icon mark.svg` and `--accent '#ff0000'`
+  override it for a run. Without a brand the dashboard shows typantic's own
+  mark and cyan. The icon is shown as an image (the sidebar mark and the tab's
+  icon), so it cannot take the accent through `currentColor`: give it colours
+  of its own.
 - **Projects & history** — file jobs under a project, then search, filter, sort,
   and page through the history (a stdlib SQLite index; nothing to set up).
 - **Where things live** — each job's folder (config, log, outputs) under

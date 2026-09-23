@@ -4,7 +4,7 @@ from typer.testing import CliRunner
 from typantic.web import cli as cli_mod
 from typantic.web import launcher as launcher_mod
 from typantic.web.cli import app
-from typantic.web.models import CommandMeta
+from typantic.web.models import Brand, CommandMeta
 
 runner = CliRunner()
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
@@ -31,7 +31,7 @@ def test_serve_no_token(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert captured["token"] is None
     assert captured["port"] == 8123
-    assert captured["title"] == "My UI"
+    assert captured["brand"].title == "My UI"
     assert captured["log_level"] == "info"  # the default, threaded through
     assert "My UI is running" in result.output
 
@@ -136,3 +136,71 @@ def test_an_unknown_log_level_is_a_usage_error(monkeypatch, tmp_path):
     assert result.exit_code == 2
     assert "loud" in result.output
     assert started == []
+
+
+# --- the brand: discovered, then overridden by the flags ---
+
+
+def _serve(monkeypatch, tmp_path, *flags, discovered=None):
+    monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
+    monkeypatch.setattr(cli_mod, "discover_brand", lambda: discovered or Brand())
+    captured = {}
+    monkeypatch.setattr(cli_mod, "serve", lambda launcher, **k: captured.update(k))
+    args = ["serve", "--no-token", "--jobs-dir", str(tmp_path), *flags]
+    return runner.invoke(app, args), captured
+
+
+def test_the_installed_brand_is_served(monkeypatch, tmp_path):
+    result, captured = _serve(
+        monkeypatch, tmp_path, discovered=Brand(title="catchEM", accent="#5AA9FF")
+    )
+    assert result.exit_code == 0
+    assert captured["brand"] == Brand(title="catchEM", accent="#5AA9FF")
+    assert "catchEM is running" in result.output
+
+
+def test_flags_override_the_installed_brand(monkeypatch, tmp_path):
+    icon = tmp_path / "mark.svg"
+    icon.write_text("<svg/>", encoding="utf-8")
+    result, captured = _serve(
+        monkeypatch,
+        tmp_path,
+        "--title",
+        "catchEM dev",
+        "--icon",
+        str(icon),
+        "--accent",
+        "#ff0000",
+        discovered=Brand(title="catchEM", accent="#5AA9FF"),
+    )
+    assert result.exit_code == 0
+    brand = captured["brand"]
+    assert (brand.title, brand.icon, brand.accent) == (
+        "catchEM dev",
+        "<svg/>",
+        "#ff0000",
+    )
+
+
+@pytest.mark.parametrize(
+    ("flag", "content"),
+    [
+        ("--accent", None),
+        ("--icon", "<html>not an svg</html>"),
+        ("--icon", b"<svg>\xff\xfe</svg>"),  # not UTF-8
+    ],
+)
+def test_a_bad_brand_flag_is_a_usage_error(monkeypatch, tmp_path, flag, content):
+    if content is None:
+        value = "crimson"
+    else:
+        path = tmp_path / "mark.svg"
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8")
+        value = str(path)
+    result, captured = _serve(monkeypatch, tmp_path, flag, value)
+    assert result.exit_code == 2
+    assert flag in result.output
+    assert captured == {}

@@ -20,7 +20,7 @@ from typantic.web import launcher as launcher_mod
 from typantic.web.api import _tail_log, make_api
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.backends.slurm import SlurmBackend
-from typantic.web.models import CommandMeta, JobRecord, JobStatus
+from typantic.web.models import Brand, CommandMeta, JobRecord, JobStatus
 from typantic.web.security import host_name
 from typantic.web.store import JobStore
 
@@ -995,3 +995,39 @@ def test_a_truncated_log_is_streamed_from_its_start(tmp_path):
     asyncio.run(_tail_log(ws, SimpleNamespace(get=get), "j", log, interval=0))
     assert {"reset": True} in ws.sent
     assert {"log": "second\n"} in ws.sent
+
+
+# --- the brand at /api/meta ---
+
+
+def test_meta_carries_the_brand(tmp_path, monkeypatch):
+    brand = Brand(title="catchEM", accent="#5AA9FF", icon="<svg/>")
+    client = TestClient(
+        make_api(_bare_launcher(tmp_path, monkeypatch), token=None, brand=brand),
+        base_url=LOCAL,
+    )
+    data = client.get("/api/meta").json()
+    assert data["title"] == "catchEM"
+    assert (data["wordmark_lead"], data["wordmark_rest"]) == ("catchEM", "")
+    assert data["accent"] == "#5AA9FF"
+    # A data URI: the page shows it in an <img> and the tab, never inline HTML.
+    assert data["icon"] == "data:image/svg+xml;base64,PHN2Zy8+"
+
+
+def test_meta_without_a_brand_is_typantics(tmp_path, monkeypatch):
+    client = TestClient(
+        make_api(_bare_launcher(tmp_path, monkeypatch), token=None), base_url=LOCAL
+    )
+    data = client.get("/api/meta").json()
+    assert (data["title"], data["wordmark_lead"], data["wordmark_rest"]) == (
+        "typantic web",
+        "typantic",
+        "web",
+    )
+    assert data["icon"] is None
+    assert data["accent"] is None
+
+
+def test_a_title_argument_still_names_the_dashboard(env):
+    # make_api(title=...) predates the brand and keeps working.
+    assert env.client.get("/api/meta", headers=AUTH).json()["wordmark_lead"] == "Test"

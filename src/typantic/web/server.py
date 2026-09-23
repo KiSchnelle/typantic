@@ -15,6 +15,7 @@ from urllib.parse import quote
 from typantic.web import gallery
 from typantic.web.api import make_api
 from typantic.web.launcher import Launcher
+from typantic.web.models import Brand
 
 
 def find_free_port(host: str) -> int:
@@ -170,15 +171,18 @@ def serve(
     host: str,
     port: int,
     token: str | None,
-    title: str = "typantic web",
+    title: str | None = None,
     log_level: str = "info",
+    brand: Brand | None = None,
 ) -> None:
     """Run the dashboard server in the foreground (blocks until interrupted).
 
-    Thumbnails nobody has asked for in 30 days are pruned from the cache first.
+    ``brand`` is shown as given (typantic's own when ``None``), ``title``
+    overriding its name. Thumbnails nobody has asked for in 30 days are pruned
+    from the cache first.
     """
     import uvicorn  # noqa: PLC0415 - deferred so --help/--version stay light
 
     gallery.prune_thumbnails()
-    app = make_api(launcher, token=token, title=title, host=host)
+    app = make_api(launcher, token=token, title=title, host=host, brand=brand)
     uvicorn.run(app, host=host, port=port, log_level=log_level)

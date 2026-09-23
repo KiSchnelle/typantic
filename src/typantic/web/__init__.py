@@ -30,6 +30,7 @@ from typantic.web.backends import (
     SshBackend,
     load_backends,
 )
+from typantic.web.brand import discover_brand, resolve_brand
 from typantic.web.discovery import discover_commands
 from typantic.web.endpoint import add_endpoint
 from typantic.web.launcher import (
@@ -40,6 +41,7 @@ from typantic.web.launcher import (
     UnknownProjectError,
 )
 from typantic.web.models import (
+    Brand,
     CommandMeta,
     History,
     JobRecord,
@@ -61,6 +63,7 @@ from typantic.web.store import FolderNotRemovedError, JobStore, default_jobs_dir
 
 __all__ = [
     "ApptainerBackend",
+    "Brand",
     "CommandMeta",
     "ContainerBackend",
     "FolderNotRemovedError",
@@ -95,10 +98,12 @@ __all__ = [
     "UnknownProjectError",
     "add_endpoint",
     "default_jobs_dir",
+    "discover_brand",
     "discover_commands",
     "fetch_schema",
     "load_backends",
     "make_api",
     "normalize_for_form",
+    "resolve_brand",
     "serve",
 ]

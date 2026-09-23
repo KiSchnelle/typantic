@@ -8,6 +8,7 @@ serves both.
 """
 
 import asyncio
+import base64
 import codecs
 import contextlib
 import os
@@ -33,6 +34,7 @@ import typantic
 from typantic.web import filesystem, gallery
 from typantic.web.backends.base import ForeignHostError, LaunchUncertainError
 from typantic.web.backends.scheduler import SchedulerError
+from typantic.web.brand import resolve_brand
 from typantic.web.filesystem import FileSystemError
 from typantic.web.launcher import (
     JobNotTerminalError,
@@ -43,6 +45,7 @@ from typantic.web.launcher import (
 )
 from typantic.web.models import (
     ApiMeta,
+    Brand,
     CommandMeta,
     FsListing,
     History,
@@ -94,10 +97,11 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
     launcher: Launcher,
     *,
     token: str | None = None,
-    title: str = "typantic web",
+    title: str | None = None,
     extra_routers: Sequence[APIRouter] = (),
     dashboard: bool = True,
     host: str | None = None,
+    brand: Brand | None = None,
 ) -> FastAPI:
     """Build the FastAPI app over ``launcher``.
 
@@ -108,15 +112,24 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
             appropriate for a localhost dev run — and then serves only requests
             addressed to a loopback name or ``host`` (see
             :class:`~typantic.web.security.LocalHostOnly`).
-        title: The dashboard brand, surfaced at ``/api/meta``.
+        title: The dashboard's name; overrides the brand's.
         extra_routers: Extra routers to mount (each token-guarded by the caller).
         dashboard: Serve the built SPA at ``/`` if present.
         host: The host the server is bound to, served without a token as well.
+        brand: How the dashboard presents itself (typantic's own when ``None``),
+            surfaced at ``/api/meta``. Never discovered here: see
+            :mod:`typantic.web.brand`.
 
     Returns:
         The configured application (serve with uvicorn).
     """
-    app = FastAPI(title=title, version=typantic.__version__)
+    shown = resolve_brand(brand, title=title)
+    icon = (
+        f"data:image/svg+xml;base64,{base64.b64encode(shown.icon.encode()).decode()}"
+        if shown.icon is not None
+        else None
+    )
+    app = FastAPI(title=shown.title, version=typantic.__version__)
     if token is None:
         app.add_middleware(LocalHostOnly, hosts=[host] if host else [])
 
@@ -137,9 +150,13 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
     @app.get("/api/meta", dependencies=guard)
     def meta() -> ApiMeta:
         return ApiMeta(
-            title=title,
+            title=shown.title,
             version=typantic.__version__,
             backends=launcher.backends_meta(),
+            wordmark_lead=shown.lead,
+            wordmark_rest=shown.rest,
+            icon=icon,
+            accent=shown.accent,
         )
 
     @app.get("/api/commands", dependencies=guard)

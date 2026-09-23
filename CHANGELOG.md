@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refused at decoration, naming the field and pointing at
     `config_file="only"`.
 
+- **A brand for the dashboard.** A package can present `typantic web serve`
+  under its own name, mark and accent colour: it registers a `Brand`, or a
+  mapping of its fields (`title`; `icon` as SVG markup; `accent` as
+  `#rrggbb`; the wordmark's `lead` / `rest` if the title's first space is the
+  wrong split), under the new `typantic.web_brand` entry-point group. The
+  new `--icon FILE.svg` and `--accent '#rrggbb'`, and `--title`, override it
+  for a run. `/api/meta` carries it (`wordmark_lead`, `wordmark_rest`, `accent`,
+  and `icon` as a data URI). `make_api` and `serve` take a `brand=` and never
+  discover one themselves, so a test or an embedding app gets exactly the brand
+  it passes. `Brand`, `discover_brand` and `resolve_brand` are exported from
+  `typantic.web`.
 - The dashboard's thumbnail cache follows `$XDG_CACHE_HOME`, and
   `$TYPANTIC_WEB_CACHE_DIR` moves it anywhere (it was always
   `~/.cache/typantic/thumbnails`). It no longer grows forever: the server prunes

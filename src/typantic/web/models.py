@@ -4,11 +4,19 @@ These are plain pydantic models (no FastAPI, no launched-app imports), so the
 CLI, the launch backends, and the web API all share one typed surface.
 """
 
+import re
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 
 class CommandMeta(BaseModel):
@@ -207,12 +215,92 @@ class BackendMeta(BaseModel):
     options_schema: dict[str, Any] | None = None
 
 
+_ICON_MAX_BYTES = 64 * 1024
+# What may come before an SVG's root element: whitespace, an XML declaration, a
+# doctype, and comments.
+_SVG_PROLOG = re.compile(r"\s*(?:<\?xml[^>]*\?>|<!DOCTYPE[^>]*>|<!--.*?-->)", re.DOTALL)
+
+
+def _is_svg(markup: str) -> bool:
+    """Whether ``markup`` is an SVG document: ``<svg`` after any prolog."""
+    position = 0
+    while match := _SVG_PROLOG.match(markup, position):
+        position = match.end()
+    return markup[position:].lstrip().startswith("<svg")
+
+
+class Brand(BaseModel):
+    """How the dashboard presents itself: its name, wordmark, mark and accent.
+
+    A package installs one under the ``typantic.web_brand`` entry-point group
+    (see :func:`typantic.web.brand.discover_brand`), and ``typantic web serve
+    --title/--icon/--accent`` override it for a run. Unknown keys are ignored,
+    so a brand written for a later typantic still loads.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(
+        default="typantic web",
+        min_length=1,
+        description="The dashboard's name, in the browser tab.",
+    )
+    lead: str = Field(
+        default="",
+        description="The wordmark's bold part; with rest empty too, the title's "
+        "first word.",
+    )
+    rest: str = Field(
+        default="",
+        description="The wordmark's light part; by default the rest of the title.",
+    )
+    icon: str | None = Field(
+        default=None,
+        description="The mark, as SVG markup (not a path): the sidebar logo and the "
+        "browser tab's icon. At most 64 KiB.",
+    )
+    accent: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9a-fA-F]{6}$",
+        description="The accent colour, #rrggbb; typantic's cyan by default.",
+    )
+
+    @field_validator("icon")
+    @classmethod
+    def _svg_document(cls, icon: str | None) -> str | None:
+        if icon is None:
+            return None
+        if len(icon.encode()) > _ICON_MAX_BYTES:
+            msg = f"the icon is over {_ICON_MAX_BYTES // 1024} KiB"
+            raise ValueError(msg)
+        if not _is_svg(icon):
+            msg = "the icon must be SVG markup, starting <svg"
+            raise ValueError(msg)
+        return icon
+
+    @model_validator(mode="after")
+    def _fill_wordmark(self) -> Self:
+        # Split exactly as the dashboard always has: at the title's first space.
+        if not self.lead and not self.rest:
+            self.lead, _, self.rest = self.title.partition(" ")
+        return self
+
+
 class ApiMeta(BaseModel):
-    """The ``/api/meta`` payload: dashboard brand, version, and the backends."""
+    """The ``/api/meta`` payload: dashboard brand, version, and the backends.
+
+    The brand is flattened into it: ``icon`` is the brand's SVG as a data URI,
+    which the page only ever shows in an ``<img>`` or as the tab's icon, where
+    an SVG's scripts do not run.
+    """
 
     title: str
     version: str
     backends: list[BackendMeta]
+    wordmark_lead: str = ""
+    wordmark_rest: str = ""
+    icon: str | None = None
+    accent: str | None = None
 
 
 class FsEntry(BaseModel):

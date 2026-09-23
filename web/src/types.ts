@@ -46,6 +46,10 @@ export interface ApiMeta {
   title: string;
   version: string;
   backends: BackendMeta[];
+  wordmark_lead: string;
+  wordmark_rest: string;
+  icon: string | null;
+  accent: string | null;
 }
 
 export interface LaunchRequest {
