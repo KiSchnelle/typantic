@@ -111,8 +111,14 @@ class JobStore:
     """Create and enumerate job folders; index their metadata + projects in SQLite."""
 
     def __init__(self, root: Path | None = None) -> None:
-        """Open (creating if needed) the store rooted at ``root``."""
-        self.root = root or default_jobs_dir()
+        """Open (creating if needed) the store rooted at ``root``.
+
+        The root is made absolute (and ``~`` expanded) up front: a job runs with
+        its own folder as the working directory, so a relative ``--config`` path
+        would resolve a second time from inside it. It is not resolved, so a
+        symlinked root keeps the spelling that exists where jobs run.
+        """
+        self.root = (root or default_jobs_dir()).expanduser().absolute()
         self.root.mkdir(parents=True, exist_ok=True)
         self._db_path = self.root / _DB_FILE
         with self._connect() as conn:

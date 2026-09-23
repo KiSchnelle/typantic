@@ -1,5 +1,7 @@
 import json
+import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, Field
@@ -479,3 +481,27 @@ def test_cancel_keeps_the_real_outcome_of_a_just_finished_job(wired):
     assert cancelled is not None
     assert cancelled.status is JobStatus.DONE
     assert cancelled.exit_code == 0
+
+
+# --- a relative jobs root still launches (a real process, from its own folder) ---
+
+
+def test_a_job_under_a_relative_jobs_root_finds_its_config(tmp_path, monkeypatch):
+    # The job runs with its folder as cwd, so a relative --config path (and the
+    # exit marker's) resolved a second time inside it: with `--jobs-dir ./jobs`
+    # every job failed, unable to find its own config.
+    from typantic.web.backends.local import LocalBackend  # noqa: PLC0415
+
+    probe = CommandMeta(
+        app="sh", command="probe", argv=("-c", 'test -f "$2"', "sh"), title="Probe"
+    )
+    monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [probe])
+    monkeypatch.chdir(tmp_path)
+    launcher = Launcher(JobStore(Path("jobs")), backends={"local": LocalBackend()})
+    record = launcher.launch(LaunchRequest(command_key="sh/probe", backend="local"))
+    deadline = time.monotonic() + 10
+    while not record.is_terminal and time.monotonic() < deadline:
+        time.sleep(0.02)
+        record = launcher.get(record.id)
+    assert record.status is JobStatus.DONE
+    assert record.exit_code == 0

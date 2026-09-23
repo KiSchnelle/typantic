@@ -235,6 +235,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sibling folder was looked at. It now reads lazily and breadth first. The path
   picker likewise stops reading a folder after 200 000 entries and says the
   listing is cut, instead of reading millions of names to show the first page.
+- **A relative or `~` jobs root broke every launch** (`--jobs-dir ./jobs`,
+  `TYPANTIC_WEB_JOBS_DIR=~/jobs`). A job runs with its own folder as the working
+  directory, so its relative `--config` path resolved a second time from inside
+  it and the job failed at once, unable to find its config; an unexpanded `~`
+  even created a folder literally named `~`. The root is now made absolute when
+  the store opens, keeping a symlinked path as spelled.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

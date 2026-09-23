@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -282,3 +283,29 @@ def test_query_pagination(store):
     assert total == 5
     page2, _ = store.query_jobs(limit=2, offset=2)
     assert [j.id for j in page2] == ["j2", "j1"]
+
+
+# --- the jobs root is absolute, so a job's paths hold from inside its folder ---
+
+
+def test_a_relative_jobs_root_is_made_absolute(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    store = JobStore(Path("jobs"))
+    assert store.root == tmp_path / "jobs"
+    assert store.config_path("j").is_absolute()
+
+
+def test_a_tilde_jobs_root_is_expanded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # unexpanded, "~/jobs" would land in the cwd
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TYPANTIC_WEB_JOBS_DIR", "~/jobs")
+    assert JobStore().root == tmp_path / "jobs"
+    assert JobStore(Path("~/other")).root == tmp_path / "other"
+
+
+def test_a_symlinked_jobs_root_keeps_its_spelling(tmp_path):
+    # A resolved root (/scratch -> /lustre/...) may not exist where a job runs
+    # (an ssh host, a container), so the root is made absolute, not resolved.
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    assert JobStore(tmp_path / "link" / "jobs").root == tmp_path / "link" / "jobs"
