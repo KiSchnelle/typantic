@@ -1,7 +1,8 @@
 """Per-user job store: a SQLite index over one folder per job.
 
 Each job owns a folder under ``~/.typantic/jobs/<job_id>/`` holding its
-artifacts — the submitted config, the launch request, and the captured log.
+artifacts — the submitted config, the launch request, and the captured log. The
+root and every job folder are private to their owner (0700).
 Job and project *metadata* live in a single SQLite database
 (``index.sqlite3``) in the same root, which is the authoritative record and the
 thing history/project queries run against. The stored ``record_json`` column is
@@ -20,6 +21,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from typantic.web._files import PRIVATE_DIR, touch_private
 from typantic.web.models import (
     History,
     JobRecord,
@@ -119,8 +121,18 @@ class JobStore:
         symlinked root keeps the spelling that exists where jobs run.
         """
         self.root = (root or default_jobs_dir()).expanduser().absolute()
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(mode=PRIVATE_DIR, parents=True, exist_ok=True)
+        if self.root.stat().st_mode & 0o077:
+            # Left as it is: a store someone opened up did so on purpose, and
+            # changing it under them would be a surprise either way.
+            logger.warning(
+                "The job store %s can be read by other users; job configs may "
+                "hold secrets. Make it private with: chmod 700 %s",
+                self.root,
+                self.root,
+            )
         self._db_path = self.root / _DB_FILE
+        touch_private(self._db_path)  # SQLite gives its -wal/-shm files this mode
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
@@ -149,7 +161,7 @@ class JobStore:
     def create_job_dir(self, job_id: str) -> Path:
         """Create and return a fresh folder for ``job_id``."""
         path = self.job_dir(job_id)
-        path.mkdir(parents=True, exist_ok=False)
+        path.mkdir(mode=PRIVATE_DIR, exist_ok=False)
         return path
 
     def config_path(self, job_id: str) -> Path:

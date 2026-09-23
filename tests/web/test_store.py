@@ -1,4 +1,5 @@
 import sqlite3
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -309,3 +310,33 @@ def test_a_symlinked_jobs_root_keeps_its_spelling(tmp_path):
     (tmp_path / "real").mkdir()
     (tmp_path / "link").symlink_to(tmp_path / "real")
     assert JobStore(tmp_path / "link" / "jobs").root == tmp_path / "link" / "jobs"
+
+
+# --- the store is private to its owner ---
+
+
+def _mode(path):
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def test_the_store_is_private(tmp_path):
+    # A job's config can carry a secret the form took as plain text, and on a
+    # shared login node the usual 022 umask made it readable by everyone.
+    store = JobStore(tmp_path / "jobs")
+    assert _mode(store.root) == 0o700
+    assert _mode(store.root / "index.sqlite3") == 0o600
+    assert _mode(store.create_job_dir("j")) == 0o700
+
+
+def test_an_existing_permissive_store_is_left_but_warned_about(tmp_path, caplog):
+    root = tmp_path / "jobs"
+    root.mkdir()
+    root.chmod(0o755)
+    JobStore(root)
+    assert _mode(root) == 0o755
+    assert "chmod 700" in caplog.text
+
+
+def test_a_private_store_is_not_warned_about(tmp_path, caplog):
+    JobStore(tmp_path / "jobs")
+    assert "chmod" not in caplog.text

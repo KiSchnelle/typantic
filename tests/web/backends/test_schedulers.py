@@ -1,3 +1,4 @@
+import stat
 import subprocess
 from datetime import UTC, datetime
 
@@ -336,3 +337,12 @@ def test_slurm_unparsable_exit_code_is_none(tmp_path):
     result = SlurmBackend(runner).poll(_record(tmp_path, scheduler_id="1"))
     assert result.status is JobStatus.DONE
     assert result.exit_code is None
+
+
+def test_the_submit_script_is_private(tmp_path):
+    runner = FakeRunner()
+    runner.set("sbatch", stdout="1\n")
+    SlurmBackend(runner).launch(
+        ARGV, job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
+    )
+    assert stat.S_IMODE((tmp_path / "submit.sh").stat().st_mode) == 0o600

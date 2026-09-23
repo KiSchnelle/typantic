@@ -248,6 +248,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spelling. Only an `AliasPath` through a list index still gets a clear
   decoration-time error.
 
+### Security
+
+- **Breaking: the job store is private.** Each job folder holds the submitted
+  config, which can carry a secret the form took as plain text, and the job's
+  log. Under the usual 022 umask both were readable by every user of a shared
+  login node. The store root and every job folder are now created 0700, and the
+  files typantic writes there (config, launch request, log, submit script) 0600
+  -- an older file is reset when it is rewritten. An existing store is left as
+  it is, and the server warns at start with the `chmod 700` that fixes it.
+  **Migration:** if colleagues read results straight out of your job folders,
+  point the command's output folder somewhere shared instead.
+
 ## [0.7.1] - 2026-09-18
 
 ### Security

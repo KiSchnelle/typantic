@@ -1,4 +1,5 @@
 import json
+import stat
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -505,3 +506,32 @@ def test_a_job_under_a_relative_jobs_root_finds_its_config(tmp_path, monkeypatch
         record = launcher.get(record.id)
     assert record.status is JobStatus.DONE
     assert record.exit_code == 0
+
+
+# --- a job's files are private ---
+
+
+def _mode(path):
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def test_a_launched_job_is_private(wired):
+    launcher, _, store = wired
+    record = launcher.launch(_request(values={"token": "s3cret"}))
+    assert _mode(store.job_dir(record.id)) == 0o700
+    for path in (
+        store.config_path(record.id),
+        store.request_path(record.id),
+        store.log_path(record.id),
+    ):
+        assert _mode(path) == 0o600, path.name
+
+
+def test_a_restart_makes_an_old_config_private(wired):
+    launcher, backend, store = wired
+    record = launcher.launch(_request(values={"x": 1}))
+    store.config_path(record.id).chmod(0o644)  # written by an older typantic
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    launcher.get(record.id)
+    launcher.restart(record.id, _request(values={"x": 2}))
+    assert _mode(store.config_path(record.id)) == 0o600

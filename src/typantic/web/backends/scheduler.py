@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from typantic.web._files import write_private
 from typantic.web._subprocess import run_tool
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.models import JobRecord, JobStatus
@@ -160,7 +161,8 @@ class SchedulerBackend(abc.ABC):
         """Render and submit a batch script, returning the scheduler job id."""
         params = SchedulerParams.model_validate(backend_options)
         script_path = job_dir / _SUBMIT_SCRIPT
-        script_path.write_text(
+        write_private(
+            script_path,
             self._script(argv, job_dir=job_dir, log_path=log_path, params=params),
         )
         result = _run_tool(self._run, self._submit_command(script_path))

@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
+from typantic.web._files import write_private
 from typantic.web.backends import LaunchBackend, PollResult, load_backends
 from typantic.web.discovery import discover_commands
 from typantic.web.models import (
@@ -196,14 +197,19 @@ class Launcher:
 
         try:
             config_path = self.store.config_path(job_id)
-            config_path.write_text(
+            write_private(
+                config_path,
                 json.dumps(_clean_form_values(request.values), indent=2),
             )
             # The full request so the job can later be cloned or restarted.
-            self.store.request_path(job_id).write_text(
-                request.model_dump_json(indent=2)
+            write_private(
+                self.store.request_path(job_id),
+                request.model_dump_json(indent=2),
             )
+            # Created private here, so the backend's writer (a subprocess, or a
+            # scheduler's --output) inherits the mode rather than the umask.
             log_path = self.store.log_path(job_id)
+            write_private(log_path, "")
 
             argv = meta.invocation("--config", str(config_path))
             launched = backend.launch(
@@ -434,10 +440,12 @@ class Launcher:
         self._check_project(new_request.project_id)
 
         if request is not None:
-            self.store.config_path(job_id).write_text(
+            write_private(
+                self.store.config_path(job_id),
                 json.dumps(_clean_form_values(new_request.values), indent=2),
             )
-            self.store.request_path(job_id).write_text(
+            write_private(
+                self.store.request_path(job_id),
                 new_request.model_dump_json(indent=2),
             )
 
