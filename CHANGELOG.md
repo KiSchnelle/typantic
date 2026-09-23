@@ -322,6 +322,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last status until its exit marker shows how it ended, and cancelling it is
   refused (HTTP 409, naming the host). Jobs recorded before 0.8.0 carry no
   host and behave as before.
+- An ssh job's `directory: ~/work` was quoted whole, so the remote shell
+  looked for a folder literally named `~`. A leading `~` now means the remote
+  home.
 - A local job that finished in the instant between the two halves of a status
   check was recorded FAILED forever: its exit marker was read (not there yet),
   then its process looked for (gone by then). The marker is now read again
@@ -357,6 +360,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started a shell command of its own. Partition and memory must now be one
   word (no whitespace or `#`) and each extra directive one line. The form
   checks the same patterns before submitting.
+- An ssh `user`, or a docker / podman / apptainer `image`, starting with `-`
+  was read by the tool as an option (`-oProxyCommand=…`, `--privileged`) rather
+  than as the value. Such values are now refused, as the ssh `host` already
+  was.
 - **Cancelling or deleting a local job could SIGTERM an unrelated process
   group.** Deleting a job whose stored status still said RUNNING -- its process
   long gone, say across a server restart -- signalled whatever process group its

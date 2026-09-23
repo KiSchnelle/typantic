@@ -212,3 +212,39 @@ def test_cancel_survives_a_missing_container_cli(monkeypatch):
     _client(monkeypatch, reachable=False)
     monkeypatch.setattr(container_mod, "run_tool", missing)
     docker_backend().cancel(_record(JOB_DIR))
+
+
+# --- options that would be read as command-line options ---
+
+
+@pytest.mark.parametrize(
+    ("backend", "options"),
+    [
+        # user@host: "-oProxyCommand=sh -c ..." is an ssh option, not a user.
+        (SshBackend(), {"host": "h", "user": "-oProxyCommand=touch /tmp/x"}),
+        # docker run <image>: "--privileged" is a docker option, not an image.
+        (docker_backend(), {"image": "--privileged"}),
+        (podman_backend(), {"image": "-v/:/host"}),
+        (ApptainerBackend(), {"image": "--writable"}),
+    ],
+)
+def test_an_option_cannot_pose_as_a_value(backend, options):
+    with pytest.raises(ValidationError):
+        _wrap(backend, options)
+
+
+# --- ssh: a remote directory under the remote home ---
+
+
+@pytest.mark.parametrize(
+    ("directory", "cd"),
+    [
+        # Quoted whole, "~/work dir" named a folder literally called "~".
+        ("~/work dir", "cd ~/'work dir'"),
+        ("~", "cd ~"),
+        ("/abs/~x", "cd '/abs/~x'"),  # only a leading ~ is the home
+    ],
+)
+def test_ssh_directory_under_the_remote_home(directory, cd):
+    wrapped = _wrap(SshBackend(), {"host": "h", "directory": directory})
+    assert wrapped[-1] == f"{cd} && app run --config /jobs/j/submit_config.json"

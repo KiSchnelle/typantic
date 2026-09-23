@@ -30,15 +30,34 @@ class SshOptions(BaseModel):
         # argument-injection point.
         pattern=r"^[^-]",
     )
-    user: str | None = Field(default=None, description="SSH user (else ssh config).")
+    user: str | None = Field(
+        default=None,
+        description="SSH user (else ssh config).",
+        pattern=r"^[^-]",  # "-oProxyCommand=…@host" would be an ssh option
+    )
     port: int | None = Field(default=None, ge=1, le=65535, description="SSH port.")
     identity: str | None = Field(default=None, description="Path to an identity key.")
-    directory: str | None = Field(default=None, description="Remote working directory.")
+    directory: str | None = Field(
+        default=None,
+        description="Remote working directory; a leading ~ is the remote home.",
+    )
 
     @property
     def target(self) -> str:
         """The ``[user@]host`` ssh destination."""
         return f"{self.user}@{self.host}" if self.user else self.host
+
+
+def _remote_cd(directory: str) -> str:
+    """``cd`` into ``directory``, leaving a leading ``~`` for the remote shell.
+
+    Quoted whole, ``~/work`` named a folder literally called ``~``.
+    """
+    if directory == "~":
+        return "cd ~"
+    if directory.startswith("~/"):
+        return f"cd ~/{shlex.quote(directory[2:])}"
+    return f"cd {shlex.quote(directory)}"
 
 
 class SshBackend(ProcessBackend):
@@ -57,7 +76,7 @@ class SshBackend(ProcessBackend):
         opts = SshOptions.model_validate(backend_options)
         remote = shlex.join(argv)
         if opts.directory:
-            remote = f"cd {shlex.quote(opts.directory)} && {remote}"
+            remote = f"{_remote_cd(opts.directory)} && {remote}"
         ssh_argv = ["ssh"]
         if opts.port is not None:
             ssh_argv += ["-p", str(opts.port)]

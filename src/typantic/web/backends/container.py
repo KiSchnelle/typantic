@@ -39,7 +39,10 @@ class ContainerOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    image: str = Field(description="Container image to run.")
+    image: str = Field(
+        description="Container image to run.",
+        pattern=r"^[^-]",  # "--privileged" would be a run option, not an image
+    )
     volumes: list[str] = Field(
         default_factory=list,
         description="Extra -v mounts, each 'src:dst'.",

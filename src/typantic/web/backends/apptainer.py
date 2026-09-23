@@ -20,7 +20,10 @@ class ApptainerOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    image: str = Field(description="Container image: a .sif file or a docker:// URI.")
+    image: str = Field(
+        description="Container image: a .sif file or a docker:// URI.",
+        pattern=r"^[^-]",  # "--writable" would be an exec option, not an image
+    )
     binds: list[str] = Field(
         default_factory=list,
         description="Extra --bind mounts, each 'src' or 'src:dst'.",
