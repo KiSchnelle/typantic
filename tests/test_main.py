@@ -5,8 +5,9 @@ import sys
 
 import pytest
 import typer
+from pydantic import BaseModel
 
-from typantic import make_main
+from typantic import add_command, make_main
 from typantic._main import _is_autocompleting, _wants_version
 
 _PKG = "typantic"  # installed (editable), so version() resolves
@@ -27,19 +28,27 @@ def _spy_context(events):
 # ---------------------------------------------------------------------------
 # _wants_version
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "args",
-    [["--version"], ["-V"], ["version"], ["--version", "x"], ["--foo", "--version"]],
-)
+@pytest.mark.parametrize("args", [["--version"], ["-V"], ["version"]])
 def test_wants_version_true(args):
-    # A leading non-version option (--foo) is skipped, and the scan keeps going
-    # to the --version that follows it.
     assert _wants_version(args)
 
 
-@pytest.mark.parametrize("args", [[], ["run"], ["run", "--version"], ["run", "-V"]])
+@pytest.mark.parametrize(
+    "args",
+    [
+        [],
+        ["run"],
+        ["run", "--version"],
+        ["run", "-V"],
+        # A single-command app's own `version` field: `app --version 2.1` is a
+        # run, not a version request.
+        ["--version", "2.1"],
+        ["--foo", "--version"],
+    ],
+)
 def test_wants_version_false(args):
-    # --version after a subcommand token belongs to that command, not the program.
+    # Only a lone version token asks for the package version; anything else is
+    # left for Typer to parse.
     assert not _wants_version(args)
 
 
@@ -53,13 +62,12 @@ def test_is_autocompleting_detects_env(monkeypatch):
 
 
 @pytest.mark.parametrize("prog", ["my-prog", "my.tool", "my-prog.exe", "plain"])
-def test_is_autocompleting_matches_click_variable(monkeypatch, prog):
-    # The variable must be the one click itself reads, or a completion request
-    # falls through to a real run. Derive the expected name with click's own
-    # formula rather than restating it, so a click change fails this test.
-    complete_name = prog.replace("-", "_").replace(".", "_")
+def test_is_autocompleting_matches_typer_variable(monkeypatch, prog):
+    # The variable must be the one Typer itself reads, or a completion request
+    # falls through to a real run. Typer maps only "-" to "_" (click also maps
+    # "."), so "my.tool" is completed through _MY.TOOL_COMPLETE.
     monkeypatch.setattr(sys, "argv", [f"/usr/local/bin/{prog}"])
-    monkeypatch.setenv(f"_{complete_name}_COMPLETE".upper(), "source_bash")
+    monkeypatch.setenv(f"_{prog}_COMPLETE".replace("-", "_").upper(), "source_bash")
     assert _is_autocompleting()
 
 
@@ -243,3 +251,67 @@ def test_load_app_import_error_becomes_exit_1(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         make_main(loader, package_name=_PKG)()
     assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# make_main: meta flags, a version field, Ctrl-C while loading
+# ---------------------------------------------------------------------------
+class _Settings(BaseModel):
+    version: str = "1.0"
+    name: str = "x"
+
+
+def _single_command_app(seen):
+    app = typer.Typer()
+    add_command(app, _Settings, seen.append, name="go", config_file=True)
+    return app
+
+
+def test_a_version_field_is_not_mistaken_for_a_version_request(monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(sys, "argv", ["prog", "--version", "2.1"])
+    make_main(lambda: _single_command_app(seen), package_name=_PKG)()
+    capsys.readouterr()
+    assert seen[0].version == "2.1"
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        ["--help"],
+        ["--schema"],
+        ["--generate-config", "{tmp}/t.yaml"],
+        ["--generate-config={tmp}/t.yaml"],
+    ],
+)
+def test_meta_flags_skip_the_run_context_and_the_timing(
+    monkeypatch,
+    caplog,
+    capsys,
+    tmp_path,
+    meta,
+):
+    # A run context that logs to stdout would otherwise corrupt --schema's JSON,
+    # which the web launcher parses.
+    events = []
+    argv = [arg.format(tmp=tmp_path) for arg in meta]
+    monkeypatch.setattr(sys, "argv", ["prog", *argv])
+    with caplog.at_level(logging.INFO, logger=_PKG):
+        make_main(
+            lambda: _single_command_app([]),
+            package_name=_PKG,
+            run_context=_spy_context(events),
+        )()
+    capsys.readouterr()
+    assert not events
+    assert "Execution took" not in caplog.text
+
+
+def test_ctrl_c_while_loading_the_app_exits_130(monkeypatch):
+    def loader():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sys, "argv", ["prog"])
+    with pytest.raises(SystemExit) as exc:
+        make_main(loader, package_name=_PKG)()
+    assert exc.value.code == 130

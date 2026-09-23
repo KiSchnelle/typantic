@@ -23,7 +23,7 @@ from pathlib import Path
 
 import typer
 
-_VERSION_FLAGS = {"--version", "-V"}
+_VERSION_TOKENS = {"--version", "-V", "version"}
 _HELP_FLAGS = {"--help", "-h", "help"}
 # Meta-operations (introspect / template, not a real run) that exit 0 without
 # doing work; the timing log is skipped for them so a machine-readable stdout
@@ -33,18 +33,19 @@ _META_FLAGS = _HELP_FLAGS | {"--schema", "--generate-config"}
 
 
 def _wants_version(args: list[str]) -> bool:
-    """Whether a top-level ``--version`` / ``-V`` (or ``version``) was requested.
+    """Whether the whole command line is ``--version`` / ``-V`` / ``version``.
 
-    Only program-level tokens count: scanning stops at the first non-option token
-    (a subcommand), so a ``--version`` that is really a subcommand's option value
-    does not trigger the short-circuit.
+    Only a lone version token asks for the package version. Anything more is left
+    for Typer to parse: a single-command app's own ``version`` field makes
+    ``app --version 2.1`` an ordinary run, and a ``--version`` after other tokens
+    belongs to whatever they are.
     """
-    for arg in args:
-        if arg in _VERSION_FLAGS:
-            return True
-        if not arg.startswith("-"):
-            break
-    return bool(args) and args[0] == "version"
+    return len(args) == 1 and args[0] in _VERSION_TOKENS
+
+
+def _is_meta(arg: str) -> bool:
+    """Whether ``arg`` is a meta flag, as ``--flag value`` or ``--flag=value``."""
+    return arg.split("=", 1)[0] in _META_FLAGS
 
 
 def _is_autocompleting() -> bool:
@@ -52,15 +53,15 @@ def _is_autocompleting() -> bool:
 
     Completion is driven by *this* program's ``_<PROG>_COMPLETE=complete_<shell>``
     environment variable (typer 0.26 no longer injects a ``__complete`` token into
-    argv). ``<PROG>`` is derived exactly as click derives it, from ``argv[0]``'s
-    basename with ``-`` and ``.`` both mapped to ``_`` -- so a program named
-    ``my.tool`` is looked up as ``_MY_TOOL_COMPLETE``, which is the variable click
-    actually reads. Deriving it any other way makes the completion request fall
-    through to a real run.
+    argv). ``<PROG>`` is derived exactly as Typer derives it, from ``argv[0]``'s
+    basename with only ``-`` mapped to ``_`` -- so a program named ``my.tool`` is
+    completed through ``_MY.TOOL_COMPLETE``, which is the variable Typer actually
+    reads (click alone would also map the ``.``). Deriving it any other way makes
+    the completion request fall through to a real run.
     """
     prog_name = Path(sys.argv[0]).name
-    prog_token = prog_name.replace("-", "_").replace(".", "_").upper()
-    completion_request = os.environ.get(f"_{prog_token}_COMPLETE") or ""
+    completion_var = f"_{prog_name}_COMPLETE".replace("-", "_").upper()
+    completion_request = os.environ.get(completion_var) or ""
     return completion_request.startswith(("complete", "source"))
 
 
@@ -81,8 +82,10 @@ def make_main(
             from package metadata and to name the run logger.
         run_context: Optional zero-argument callable returning a context manager
             to wrap the run in -- typically a logging setup that must be torn
-            down even when the command raises. Entered *after* the version and
-            completion short-circuits, so neither pays for it.
+            down even when the command raises. Entered only for a real run: not
+            for ``--version``, shell completion, or a meta flag (``--help``,
+            ``--schema``, ``--generate-config``), whose stdout a context that logs
+            there would corrupt.
 
     Returns:
         The ``main`` callable to expose as the package's console-script entry.
@@ -103,11 +106,13 @@ def make_main(
             load_app()()
             return
 
-        invoked_meta = any(arg in _META_FLAGS for arg in args)
+        invoked_meta = any(_is_meta(arg) for arg in args)
         module_logger = logging.getLogger(package_name)
         start_time = time.monotonic()
 
-        with nullcontext() if run_context is None else run_context():
+        # A meta op prints machine-readable output (--schema's JSON, which a web
+        # front-end parses) and does no real work, so it runs without the context.
+        with nullcontext() if run_context is None or invoked_meta else run_context():
             try:
                 # Inside the guard so an import error in the (heavy) command
                 # modules is reported through the context and exits cleanly,
@@ -127,6 +132,10 @@ def make_main(
                         "Execution took %.2f minutes.",
                         (time.monotonic() - start_time) / 60,
                     )
+            except KeyboardInterrupt:
+                # Ctrl-C while the (heavy) command modules import: the shell's
+                # usual interrupted status rather than a raw traceback.
+                raise SystemExit(130) from None
             except Exception:
                 module_logger.exception(
                     "An error occurred while running the application.",

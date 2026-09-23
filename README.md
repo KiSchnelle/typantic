@@ -409,19 +409,23 @@ myapp = "myapp.cli:main"
 
 - **`--version` is answered from package metadata before `load_app()` is called**,
   so an app that imports a heavy stack (torch, say) still responds instantly.
-  That is why the app is passed as a *loader* rather than as the app itself.
+  That is why the app is passed as a *loader* rather than as the app itself. Only
+  a lone `--version` / `-V` / `version` asks for it: `myapp --version 2.1` is a run
+  of a single-command app with its own `version` field.
 - **Shell completion is handed straight to Typer**, without setting up the run
   context below.
 - **A real run is timed**, logging `Execution took N minutes.` to a logger named
   after `package_name`. Introspection flags (`--help`, `--schema`,
-  `--generate-config`) exit without a run, so they are not timed and their stdout
-  stays machine-readable.
+  `--generate-config`, in either `--flag value` or `--flag=value` form) exit
+  without a run, so they are not timed and their stdout stays machine-readable.
 - **A crash becomes exit 1 with the traceback logged**, rather than a raw
-  traceback; a non-zero `Exit` code propagates unchanged.
+  traceback; a non-zero `Exit` code propagates unchanged. Ctrl-C while the
+  command modules import exits 130.
 
 Pass `run_context` to wrap the run in a context manager — typically logging setup
-that has to be torn down even when the command raises. It is entered after the
-version and completion short-circuits, so neither pays for it:
+that has to be torn down even when the command raises. It is entered only for a
+real run — not for `--version`, shell completion, or an introspection flag, so a
+context that logs to stdout cannot corrupt `--schema`'s JSON:
 
 ```python
 main = make_main(_load_app, package_name="myapp", run_context=MyLogger.running)

@@ -91,6 +91,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so `cmd A B` filled `src`/`dst` differently in the two modes. Required
   arguments now come first in both, and config mode's `--help` also lists
   required options first.
+- `make_main` no longer enters `run_context` for `--help`, `--schema` or
+  `--generate-config`. A context that logs to stdout (a Rich console handler,
+  say) corrupted `--schema`'s JSON, which the dashboard parses. The
+  `--generate-config=x.yaml` spelling is now recognised as a meta flag too, so it
+  is no longer timed.
+- `make_main` answered a single-command app's `--version 2.1` with the package
+  version instead of running the command with its own `version` field. Only a
+  lone `--version` / `-V` / `version` is a version request now. Ctrl-C while
+  `load_app()` imports exits 130 instead of escaping as a raw `KeyboardInterrupt`.
+- Shell completion was missed for a program with a `.` in its name
+  (`my.tool`): `make_main` looked for click's variable name, but Typer reads its
+  own (`_MY.TOOL_COMPLETE`), so the completion request ran the program.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the
