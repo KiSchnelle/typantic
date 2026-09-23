@@ -91,9 +91,9 @@ The `@pydantic_to_typer(Model)` decorator:
 3. Maps `kw_only=False` → `typer.Argument`, `kw_only=True` → `typer.Option`
 4. Flattens nested `BaseModel` fields into prefixed parameters
 5. Rewrites the function's `__signature__` so Typer sees the expanded parameters
-6. At call time, re-nests the raw CLI values and passes them into `Model(...)` so all Pydantic validators run
+6. At call time, re-nests the values you actually passed (a flag, its environment variable, or a prompt — never a flag's default) and hands them to `Model(...)`, so Pydantic applies its own defaults and runs every validator
 
-Your function receives the **validated model instance** — validators, `default_factory`, union types, and everything else works exactly as in Pydantic.
+Your function receives the **validated model instance**, exactly as `Model(**what_you_passed)` would build it: `model_fields_set` holds only the fields you gave, a validator that derives a value "when unset" fires, a `default_factory` runs once per run (with the validated data, if it takes it), and a secret's default is its real value. A flag passed under a nested model with a default instance keeps that instance's other values, the ones `--help` advertises.
 
 ## Features
 

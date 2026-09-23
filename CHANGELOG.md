@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: a flag you did not pass no longer reaches the model** — in either
+  mode. Without `config_file`, typantic used to hand Pydantic every flag's
+  Click-resolved default as though you had typed it. So `model_fields_set`
+  listed every field, a validator that derives a value "when unset" never
+  fired, a nested model's `default_factory` was bypassed or frozen at import
+  time, and the model behaved differently the moment you switched on
+  `config_file=True`. Now only values you supplied (a flag, its environment
+  variable, or a prompt) are passed, and Pydantic applies its own defaults.
+  **Migration:** `model_fields_set` / `model_dump(exclude_unset=True)` now hold
+  only what was passed. If you relied on every field appearing there, use
+  `model_dump()`. There is no switch back to the old behaviour: counting
+  defaults as passed is exactly what delivered secret defaults as their mask
+  (below).
+- A factory-defaulted field's flag no longer hands Click the factory. Pydantic
+  runs it once per run, so it no longer also runs for `--help`, `--schema` and
+  `--generate-config`, or twice per `config_file=True` run.
+
+### Fixed
+
+- **A `SecretStr` / `SecretBytes` default reached your function as the mask
+  `'**********'`** when the flag was not passed without `config_file`. Click
+  renders a secret default as its masked string, and that string was then
+  treated as the value you typed. This happened at the top level and inside a
+  defaulted nested model.
+- With `config_file=True`, passing one flag of a defaulted nested model reset
+  its other leaves to the inner class's defaults, contradicting the defaults
+  `--help` showed for them. A passed flag is now written into a copy of the
+  nested default instance, unless a `--config` file defines that model itself.
+- With `config_file=True`, a required nested model whose own fields all have
+  defaults was reported as missing when neither a flag nor the file set it. It
+  now builds from those defaults, as it already did without `config_file`.
+
 ## [0.7.1] - 2026-09-18
 
 ### Security

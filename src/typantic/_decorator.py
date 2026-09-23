@@ -55,6 +55,18 @@ class _Leaf(NamedTuple):
     flags: tuple[str, ...]
 
 
+class _Nested(NamedTuple):
+    """What the collector needs to know about the nested models under a command.
+
+    ``defaults`` pairs each nested model's input-key path with the instance its
+    field defaults to (shallowest first); ``required`` lists the paths of nested
+    models that have no default at all.
+    """
+
+    defaults: list[tuple[tuple[str, ...], BaseModel]]
+    required: list[tuple[str, ...]]
+
+
 # Python identifiers for the injected config-file parameters (kept distinct from
 # any model field name); the user-facing flags are --config / --generate-config.
 _CTX_PARAM = "_typantic_ctx"
@@ -83,6 +95,32 @@ def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: object) -> N
     target[path[-1]] = value
 
 
+def _lookup(data: dict[str, Any], path: tuple[str, ...]) -> object:
+    """The value at the nested ``path`` in ``data``, or ``_MISSING``."""
+    current: object = data
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return _MISSING
+        current = cast("dict[str, Any]", current)[part]
+    return current
+
+
+def _raw_values(instance: BaseModel) -> dict[str, Any]:
+    """``instance`` as the input mapping that rebuilds it, nested models included.
+
+    Keyed by each field's input key, so the mapping validates back into the same
+    values; nested models become mappings too, so a flag several levels down can
+    still be written into it.
+    """
+    model_cls = type(instance)
+    raw: dict[str, Any] = {}
+    for name, field in model_cls.model_fields.items():
+        value = getattr(instance, name)
+        key = _field_input_key(model_cls, name, field)
+        raw[key] = _raw_values(value) if isinstance(value, BaseModel) else value
+    return raw
+
+
 def _construct(model_cls: type[BaseModel], data: dict[str, Any]) -> BaseModel:
     """Build the model from ``data``, reporting errors as Typer parameter errors."""
     try:
@@ -96,61 +134,84 @@ def _construct(model_cls: type[BaseModel], data: dict[str, Any]) -> BaseModel:
         raise typer.BadParameter("\n  ".join(messages)) from exc
 
 
-def _collect_flat(
+def _collect(
+    ctx: typer.Context,
+    base: dict[str, Any],
     mapping: list[_Leaf],
     kwargs: dict[str, object],
-    deferred: set[str],
+    nested: _Nested,
 ) -> dict[str, Any]:
-    """Re-nest the flat CLI kwargs into the model's input mapping.
+    """Build the model's input mapping from ``base`` and the flags actually passed.
 
-    A ``deferred`` parameter still holding ``None`` was never supplied, so its key
-    is omitted and Pydantic runs its validated-data ``default_factory`` instead.
+    Only values the user supplied (on the command line, through an environment
+    variable, or at a prompt) are written -- never a flag's default. Pydantic then
+    applies its own defaults, so ``model_fields_set`` holds exactly what was
+    given, validators that derive a value "when unset" fire, factories run in
+    Pydantic (once, with the validated data where they take it), and a secret's
+    default is its real value rather than the mask Click renders it as.
+
+    A passed flag under a defaulted nested model is written into a copy of that
+    default instance, so the leaves you did not pass keep the values ``--help``
+    advertised for them -- unless ``base`` (a ``--config`` file) already defines
+    that model. A nested model with no default is given an empty mapping when its
+    parent is present, so its own field defaults build it.
     """
-    data: dict[str, Any] = {}
-    for cli_name, key_path, _, _flags in mapping:
-        if cli_name in kwargs:
-            if cli_name in deferred and kwargs[cli_name] is None:
-                continue
-            _set_nested(data, key_path, kwargs[cli_name])
+    data = base
+    passed = [
+        leaf
+        for leaf in mapping
+        if leaf.cli_name in kwargs and _value_is_explicit(ctx, leaf.cli_name)
+    ]
+    for path, default in nested.defaults:
+        touched = any(leaf.key_path[: len(path)] == path for leaf in passed)
+        if touched and not isinstance(_lookup(data, path), dict):
+            _set_nested(data, path, _raw_values(default))
+    for leaf in passed:
+        _set_nested(data, leaf.key_path, kwargs[leaf.cli_name])
+    for path in nested.required:
+        parent_present = len(path) == 1 or isinstance(_lookup(data, path[:-1]), dict)
+        if parent_present and _lookup(data, path) is _MISSING:
+            _set_nested(data, path, {})
     return data
 
 
-def _collect_with_config(
-    model_cls: type[BaseModel],
-    ctx: typer.Context,
-    config: Path | None,
-    mapping: list[_Leaf],
-    kwargs: dict[str, object],
-) -> dict[str, Any]:
-    """Merge a ``--config`` file (base) with the CLI flags that override it.
+def _load_base(model_cls: type[BaseModel], config: Path | None) -> dict[str, Any]:
+    """The ``--config`` file's settings, the base the passed flags override.
 
-    With no ``--config`` every supplied flag is used; with one, the file is the
-    base and only explicitly-passed flags (not defaults) override it. Relaxed
-    required fields left unset are skipped so Pydantic reports them as missing.
     An unknown key in the file is rejected up front -- a silently-dropped typo
     would let a run proceed with the default in place of the intended value.
     """
-    data: dict[str, Any] = {}
-    if config is not None:
-        try:
-            data = dict(load_config_file(config))
-        except (OSError, ValueError) as exc:
-            # A missing or malformed file is a bad --config value, not a crash:
-            # report it the way every other parameter error is reported.
-            raise typer.BadParameter(str(exc)) from exc
-        unknown = unknown_config_keys(model_cls, data)
-        if unknown:
-            listed = ", ".join(sorted(unknown))
-            msg = f"Unknown setting(s) {listed} in config file {config}"
-            raise typer.BadParameter(msg)
-    for cli_name, key_path, _, _flags in mapping:
-        if cli_name in kwargs and _value_is_explicit(ctx, cli_name):
-            _set_nested(data, key_path, kwargs[cli_name])
+    if config is None:
+        return {}
+    try:
+        data = dict(load_config_file(config))
+    except (OSError, ValueError) as exc:
+        # A missing or malformed file is a bad --config value, not a crash:
+        # report it the way every other parameter error is reported.
+        raise typer.BadParameter(str(exc)) from exc
+    unknown = unknown_config_keys(model_cls, data)
+    if unknown:
+        listed = ", ".join(sorted(unknown))
+        msg = f"Unknown setting(s) {listed} in config file {config}"
+        raise typer.BadParameter(msg)
     return data
 
 
+def _context_param() -> tuple[inspect.Parameter, object]:
+    """The injected Typer context, which tells a passed flag from its default."""
+    return (
+        inspect.Parameter(
+            _CTX_PARAM,
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation=typer.Context,
+        ),
+        typer.Context,
+    )
+
+
 def _config_file_params() -> tuple[list[inspect.Parameter], dict[str, object]]:
-    """Build the injected ``--config`` / ``--generate-config`` params and context."""
+    """Build the injected ``--config`` / ``--generate-config`` / ``--schema`` params."""
     config_ann = Annotated[
         Path | None,
         typer.Option(
@@ -197,18 +258,11 @@ def _config_file_params() -> tuple[list[inspect.Parameter], dict[str, object]]:
             default=False,
             annotation=schema_ann,
         ),
-        inspect.Parameter(
-            _CTX_PARAM,
-            keyword_only,
-            default=None,
-            annotation=typer.Context,
-        ),
     ]
     annotations: dict[str, object] = {
         _CONFIG_PARAM: config_ann,
         _GENERATE_PARAM: generate_ann,
         _SCHEMA_PARAM: schema_ann,
-        _CTX_PARAM: typer.Context,
     }
     return params, annotations
 
@@ -402,7 +456,7 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
     list[inspect.Parameter],
     dict[str, object],
     list[_Leaf],
-    set[str],
+    _Nested,
 ]:
     """Expand a model's fields into Typer parameters.
 
@@ -429,15 +483,15 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
             defaults.
 
     Returns:
-        A ``(parameters, annotations, mapping, deferred)`` tuple: ``mapping``
-        pairs each flattened parameter name with its nested input-key path, and
-        ``deferred`` names the parameters whose ``None`` must be dropped so
-        Pydantic can run their validated-data ``default_factory``.
+        A ``(parameters, annotations, mapping, nested)`` tuple: ``mapping`` pairs
+        each flattened parameter name with its nested input-key path, and
+        ``nested`` records which nested models have a default instance and which
+        have no default at all (see :func:`_collect`).
     """
     params: list[inspect.Parameter] = []
     annotations: dict[str, object] = {}
     mapping: list[_Leaf] = []
-    deferred: set[str] = set()
+    nested = _Nested(defaults=[], required=[])
 
     resolved_hints = _model_hints(model_cls)
     nested_seen = seen | {model_cls}
@@ -451,6 +505,11 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
         override = getattr(defaults, name) if defaults is not None else _MISSING
 
         if _is_model_type(base_type) and base_type not in nested_seen:
+            nested_default = _nested_default(field_info, override)
+            if nested_default is not None:
+                nested.defaults.append((key_path, nested_default))
+            elif field_info.is_required():
+                nested.required.append(key_path)
             sub = _build_params(
                 base_type,
                 subpanels=subpanels,
@@ -458,12 +517,13 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
                 prefix=path,
                 key_prefix=key_path,
                 seen=nested_seen,
-                defaults=_nested_default(field_info, override),
+                defaults=nested_default,
             )
             params.extend(sub[0])
             annotations.update(sub[1])
             mapping.extend(sub[2])
-            deferred |= sub[3]
+            nested.defaults.extend(sub[3].defaults)
+            nested.required.extend(sub[3].required)
             continue
 
         cli_name = "_".join(path)
@@ -479,15 +539,8 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
         params.append(param)
         annotations[cli_name] = annotated
         mapping.append(_Leaf(cli_name, key_path, path, flags))
-        if (
-            override is _MISSING
-            and not field_info.is_required()
-            and field_info.default_factory is not None
-            and _factory_takes_data(field_info.default_factory)
-        ):
-            deferred.add(cli_name)
 
-    return params, annotations, mapping, deferred
+    return params, annotations, mapping, nested
 
 
 def _nested_default(field_info: FieldInfo, override: object) -> BaseModel | None:
@@ -660,21 +713,13 @@ def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
         # nested class's own field default.
         default = default_override
         show_default = "None" if default is None else True
-    elif field_info.default_factory is not None and _factory_takes_data(
-        field_info.default_factory,
-    ):
-        # A factory taking the validated data cannot run at the Click layer -- it
-        # needs the model's other fields. Default to None and drop the key when it
-        # is still None, so Pydantic runs the factory itself; handing Click the
-        # callable would make it call a 1-arg factory with none (TypeError).
-        default = None
-        show_default = "computed at runtime"
     elif field_info.default_factory is not None:
-        # Pass the factory itself as the default so Click re-evaluates it on
-        # every invocation (correct for time/identity-sensitive factories such
-        # as ``datetime.now`` or ``uuid4``). A single frozen evaluation would be a
-        # misleading help sample for those, so show a sentinel instead.
-        default = field_info.default_factory
+        # Pydantic runs the factory -- once per run, with the validated data where
+        # it takes it -- because an unpassed flag never reaches the model. Handing
+        # Click the callable would only run it again (on --help and --schema too)
+        # or, for a factory taking the data, call it with no argument. A frozen
+        # sample would mislead for time/identity factories, so show a sentinel.
+        default = None
         show_default = "computed at runtime"
     else:
         default = field_info.default
@@ -808,9 +853,9 @@ def pydantic_to_typer(
             new_params: list[inspect.Parameter] = []
             new_annotations: dict[str, object] = {}
             mapping: list[_Leaf] = []
-            deferred: set[str] = set()
+            nested = _Nested(defaults=[], required=[])
         else:
-            new_params, new_annotations, mapping, deferred = _build_params(
+            new_params, new_annotations, mapping, nested = _build_params(
                 model_cls,
                 subpanels=subpanels,
                 relax=bool(config_file),
@@ -827,11 +872,15 @@ def pydantic_to_typer(
             extra_params, extra_annotations = _config_file_params()
             new_params.extend(extra_params)
             new_annotations.update(extra_annotations)
+        ctx_param, ctx_annotation = _context_param()
+        new_params.append(ctx_param)
+        new_annotations[_CTX_PARAM] = ctx_annotation
 
         @wraps(func)
         def wrapper(**kwargs: object) -> object:
+            ctx = cast("typer.Context", kwargs.pop(_CTX_PARAM))
+            base: dict[str, Any] = {}
             if config_file:
-                ctx = cast("typer.Context", kwargs.pop(_CTX_PARAM))
                 generate = cast("Path | None", kwargs.pop(_GENERATE_PARAM))
                 config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
                 schema = cast("bool", kwargs.pop(_SCHEMA_PARAM))
@@ -855,9 +904,8 @@ def pydantic_to_typer(
                         "to create one."
                     )
                     raise typer.BadParameter(msg)
-                data = _collect_with_config(model_cls, ctx, config, mapping, kwargs)
-            else:
-                data = _collect_flat(mapping, kwargs, deferred)
+                base = _load_base(model_cls, config)
+            data = _collect(ctx, base, mapping, kwargs, nested)
             return func(_construct(model_cls, data))
 
         wrapper.__signature__ = inspect.Signature(new_params)  # type: ignore[attr-defined]

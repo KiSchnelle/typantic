@@ -4,6 +4,7 @@ import datetime
 import decimal
 import inspect
 import re
+import types
 import typing
 from collections.abc import Callable
 from enum import IntEnum, StrEnum
@@ -21,15 +22,17 @@ from pydantic import (
     Field,
     SecretBytes,
     SecretStr,
+    model_validator,
 )
 from pydantic.alias_generators import to_camel
 from typer.testing import CliRunner
 
 from typantic import add_command, pydantic_to_typer
 from typantic._decorator import (
-    _collect_flat,
+    _collect,
     _factory_takes_data,
     _Leaf,
+    _Nested,
     _numeric_bounds,
     _panel_for_field,
 )
@@ -193,6 +196,8 @@ class TestSignature:
             "seed",
             "threshold",
             "dry_run",
+            # The injected context, which tells a passed flag from its default.
+            "_typantic_ctx",
         ]
 
     def test_required_field_has_no_default(self) -> None:
@@ -206,14 +211,12 @@ class TestSignature:
         sig = inspect.signature(self._callback(app))
         assert sig.parameters["count"].default == 1
 
-    def test_default_factory_passed_as_callable(self) -> None:
-        # The factory is passed through to Click as a callable default so it is
-        # re-evaluated on every invocation, while still resolving to its value.
+    def test_default_factory_is_left_to_pydantic(self) -> None:
+        # Click never sees the factory: an unpassed flag never reaches the model,
+        # so Pydantic runs it -- once per run -- and Click must not run it again.
         app, _ = _make_app(FullConfig)
         sig = inspect.signature(self._callback(app))
-        factory = sig.parameters["threshold"].default
-        assert callable(factory)
-        assert factory() == 0.5
+        assert sig.parameters["threshold"].default is None
 
     def test_none_default_for_optional(self) -> None:
         app, _ = _make_app(FullConfig)
@@ -775,6 +778,201 @@ class TestLazyFactory:
 
 
 # ---------------------------------------------------------------------------
+# Tests: only what the user supplied reaches the model
+#
+# Default mode used to hand pydantic every Click-resolved default as though the
+# user had typed it: a secret default arrived as its mask, model_fields_set held
+# every field, "derive when unset" validators never fired, and nested factories
+# were bypassed. Both modes now pass only values the user actually supplied.
+# ---------------------------------------------------------------------------
+
+
+class _Derived(BaseModel):
+    input: Annotated[str, Field(kw_only=True)]
+    output: Annotated[str | None, Field(default=None, kw_only=True)]
+
+    @model_validator(mode="after")
+    def _derive_output(self) -> "_Derived":
+        if "output" not in self.model_fields_set:
+            self.output = f"{self.input}.out"
+        return self
+
+
+class TestOnlySuppliedValues:
+    @pytest.mark.parametrize("make", [_make_app, _make_app_config])
+    def test_secret_default_reaches_the_handler_unmasked(self, make) -> None:
+        class Cfg(BaseModel):
+            token: Annotated[
+                SecretStr,
+                Field(default=SecretStr("swordfish"), kw_only=True),
+            ]
+
+        app, seen = make(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0, result.output
+        assert seen[0].token.get_secret_value() == "swordfish"
+
+    def test_nested_secret_default_reaches_the_handler_unmasked(self) -> None:
+        class Db(BaseModel):
+            password: Annotated[SecretStr, Field(default=SecretStr(""), kw_only=True)]
+
+        class Cfg(BaseModel):
+            db: Annotated[
+                Db,
+                Field(default=Db(password=SecretStr("parent-pass")), kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0, result.output
+        assert seen[0].db.password.get_secret_value() == "parent-pass"
+
+    @pytest.mark.parametrize("make", [_make_app, _make_app_config])
+    def test_fields_set_holds_only_what_was_passed(self, make) -> None:
+        class Cfg(BaseModel):
+            a: Annotated[int, Field(default=1, kw_only=True)]
+            b: Annotated[int, Field(default=2, kw_only=True)]
+
+        app, seen = make(Cfg)
+        result = runner.invoke(app, ["--a", "5"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].model_fields_set == {"a"}
+
+    @pytest.mark.parametrize("make", [_make_app, _make_app_config])
+    def test_validator_deriving_an_unset_value_fires(self, make) -> None:
+        app, seen = make(_Derived)
+        result = runner.invoke(app, ["--input", "scan"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].output == "scan.out"
+
+    def test_an_explicit_value_still_beats_the_derivation(self) -> None:
+        app, seen = _make_app(_Derived)
+        result = runner.invoke(app, ["--input", "scan", "--output", "mine"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].output == "mine"
+
+    def test_nested_data_taking_factory_sees_the_passed_flag(self) -> None:
+        class Cfg(BaseModel):
+            name: Annotated[str, Field(default="app", kw_only=True)]
+            db: Annotated[
+                _Database,
+                Field(
+                    default_factory=lambda data: _Database(host=f"{data['name']}-db"),
+                    kw_only=True,
+                ),
+            ]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--name", "api"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].db.host == "api-db"
+
+    def test_nested_model_factory_runs_fresh_on_every_invocation(self) -> None:
+        made = iter(range(100))
+
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database,
+                Field(
+                    default_factory=lambda: _Database(port=next(made)),
+                    kw_only=True,
+                ),
+            ]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, []).exit_code == 0
+        assert runner.invoke(app, []).exit_code == 0
+        assert seen[0].db.port != seen[1].db.port
+
+    def test_factory_runs_once_per_run_and_never_for_meta_flags(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        calls = {"n": 0}
+
+        def ticket() -> int:
+            calls["n"] += 1
+            return calls["n"]
+
+        class Cfg(BaseModel):
+            t: Annotated[int, Field(default_factory=ticket, kw_only=True)]
+
+        app, _ = _make_app_config(Cfg)
+        metas = (
+            ["--help"],
+            ["--schema"],
+            ["--generate-config", str(tmp_path / "t.yaml")],
+        )
+        for meta in metas:
+            calls["n"] = 0
+            assert runner.invoke(app, meta).exit_code == 0
+            assert calls["n"] == 0, meta
+        calls["n"] = 0
+        assert runner.invoke(app, []).exit_code == 0
+        assert calls["n"] == 1
+
+    def test_one_nested_flag_keeps_its_siblings_from_the_outer_default(self) -> None:
+        # The --help default of a defaulted nested instance must be what a run
+        # gets for the leaves you did not pass, in config mode as in default mode.
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database,
+                Field(default=_Database(host="prod", port=9999), kw_only=True),
+            ]
+
+        app, seen = _make_app_config(Cfg)
+        result = runner.invoke(app, ["--db-port", "1"])
+        assert result.exit_code == 0, result.output
+        assert (seen[0].db.host, seen[0].db.port) == ("prod", 1)
+
+    def test_a_deeper_default_instance_survives_an_explicit_leaf(self) -> None:
+        class Pool(BaseModel):
+            size: Annotated[int, Field(default=1, kw_only=True)]
+            timeout: Annotated[int, Field(default=1, kw_only=True)]
+
+        class Db(BaseModel):
+            pool: Annotated[Pool, Field(default=Pool(size=5, timeout=10), kw_only=True)]
+
+        class Cfg(BaseModel):
+            db: Db
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--db-pool-size", "7"])
+        assert result.exit_code == 0, result.output
+        assert (seen[0].db.pool.size, seen[0].db.pool.timeout) == (7, 10)
+
+    def test_a_config_file_nested_value_is_not_overwritten_by_the_default(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database,
+                Field(default=_Database(host="prod", port=9999), kw_only=True),
+            ]
+
+        config = tmp_path / "c.yaml"
+        config.write_text("db:\n  host: file\n")
+        app, seen = _make_app_config(Cfg)
+        result = runner.invoke(app, ["--config", str(config), "--db-port", "1"])
+        assert result.exit_code == 0, result.output
+        # The file defines db, so it is the base; pydantic's own class default
+        # fills what the file leaves out.
+        assert (seen[0].db.host, seen[0].db.port) == ("file", 1)
+
+    def test_required_nested_model_builds_from_its_defaults_in_config_mode(
+        self,
+    ) -> None:
+        class Cfg(BaseModel):
+            db: _Database
+
+        app, seen = _make_app_config(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0, result.output
+        assert (seen[0].db.host, seen[0].db.port) == ("localhost", 5432)
+
+
+# ---------------------------------------------------------------------------
 # Tests: SecretStr
 # ---------------------------------------------------------------------------
 
@@ -1122,26 +1320,30 @@ def test_numeric_bounds_ignores_non_ge_le_constraints() -> None:
     assert _numeric_bounds(M.model_fields["x"]) == (None, None)
 
 
-def test_collect_flat_skips_cli_names_absent_from_kwargs() -> None:
+class _PassedEverything:
+    """A stand-in context under which every parameter was typed by the user."""
+
+    @staticmethod
+    def get_parameter_source(_name: str) -> object:
+        return types.SimpleNamespace(name="COMMANDLINE")
+
+
+def _collect_passed(mapping, kwargs):
+    ctx = typing.cast("typer.Context", _PassedEverything())
+    return _collect(ctx, {}, mapping, kwargs, _Nested(defaults=[], required=[]))
+
+
+def test_collect_skips_cli_names_absent_from_kwargs() -> None:
     mapping = [_Leaf("a", ("a",), ("a",), ()), _Leaf("b", ("b",), ("b",), ())]
     # "b" is not among the supplied kwargs, so it is skipped, not defaulted in.
-    assert _collect_flat(mapping, {"a": 1}, set()) == {"a": 1}
+    assert _collect_passed(mapping, {"a": 1}) == {"a": 1}
 
 
-def test_collect_flat_keys_values_by_input_key_not_field_name() -> None:
+def test_collect_keys_values_by_input_key_not_field_name() -> None:
     # The flag follows the field name; the value is re-nested under the alias, so
     # an aliased model actually receives it.
     mapping = [_Leaf("threshold", ("thr",), ("threshold",), ())]
-    assert _collect_flat(mapping, {"threshold": 0.9}, set()) == {"thr": 0.9}
-
-
-def test_collect_flat_drops_deferred_none_so_pydantic_runs_the_factory() -> None:
-    # A validated-data default_factory cannot run at the Click layer, so its
-    # untouched None is dropped rather than passed through as a real value.
-    mapping = [_Leaf("b", ("b",), ("b",), ())]
-    assert _collect_flat(mapping, {"b": None}, {"b"}) == {}
-    # An explicitly-supplied value still wins.
-    assert _collect_flat(mapping, {"b": 7}, {"b"}) == {"b": 7}
+    assert _collect_passed(mapping, {"threshold": 0.9}) == {"thr": 0.9}
 
 
 def test_extract_base_type_passes_through_parameterless_generics() -> None:
@@ -1581,16 +1783,21 @@ def test_nested_default_seeds_a_deeper_level() -> None:
 
 def test_nested_factory_returning_a_non_model_falls_back() -> None:
     # A factory that does not produce an instance leaves the class's own field
-    # defaults in place rather than seeding from a non-model.
+    # defaults in place for the flags rather than seeding from a non-model.
     class Inner(BaseModel):
-        x: Annotated[int, Field(default=1, kw_only=True)]
+        x: Annotated[int, Field(default=7, kw_only=True)]
 
     class Cfg(BaseModel):
         inner: Annotated[Inner, Field(default_factory=dict, kw_only=True)]
 
     app, seen = _make_app(Cfg)
+    assert "7" in _plain(runner.invoke(app, ["--help"]).output)
+    # Nothing passed: the run gets exactly what Pydantic's own default gives.
     assert runner.invoke(app, []).exit_code == 0
-    assert seen[0].inner.x == 1
+    assert seen[0].inner == Cfg().inner
+    # A passed leaf builds the model from the class defaults it advertised.
+    assert runner.invoke(app, ["--inner-x", "5"]).exit_code == 0
+    assert seen[1].inner == Inner(x=5)
 
 
 def test_set_and_variadic_tuple_map_to_a_repeatable_flag() -> None:
