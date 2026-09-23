@@ -121,3 +121,18 @@ def test_serve_default_token_and_port(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert "token=" in result.output
     assert "55555" in result.output
+
+
+def test_an_unknown_log_level_is_a_usage_error(monkeypatch, tmp_path):
+    # It was accepted, the banner printed, and uvicorn then failed with a
+    # KeyError traceback.
+    monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
+    started = []
+    monkeypatch.setattr(cli_mod, "serve", lambda launcher, **k: started.append(k))
+    result = runner.invoke(
+        app,
+        ["serve", "--no-token", "--jobs-dir", str(tmp_path), "--log-level", "loud"],
+    )
+    assert result.exit_code == 2
+    assert "loud" in result.output
+    assert started == []

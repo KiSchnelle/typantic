@@ -338,6 +338,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own options) was submitted as `[]`, pinning the field instead of leaving the
   model's default. Arrays at the top level and in nested objects were already
   left out; arrays of objects are now cleaned the same way.
+- The `ssh -N -L` line the dashboard prints for an IPv6 bind (`--host ::1`)
+  read `8000:::1:8000`, which ssh rejects; the address is now bracketed.
+- `typantic web serve --log-level` took any word, printed the startup banner,
+  then failed with a `KeyError` traceback for a level uvicorn does not know. It
+  is now a choice, checked before anything starts (a usage error, exit 2).
 - An ssh job's `directory: ~/work` was quoted whole, so the remote shell
   looked for a folder literally named `~`. A leading `~` now means the remote
   home.

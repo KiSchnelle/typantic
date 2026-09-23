@@ -3,7 +3,7 @@
 import getpass
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
@@ -59,10 +59,8 @@ def serve_command(
         typer.Option(help="Dashboard brand shown in the UI."),
     ] = "typantic web",
     log_level: Annotated[
-        str,
-        typer.Option(
-            help="Uvicorn log level: critical, error, warning, info, debug, or trace.",
-        ),
+        Literal["critical", "error", "warning", "info", "debug", "trace"],
+        typer.Option(help="Uvicorn log level."),
     ] = "info",
 ) -> None:
     """Start the dashboard, printing the tokenized localhost URL to open."""

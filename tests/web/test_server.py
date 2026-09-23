@@ -159,3 +159,9 @@ def test_serve_prunes_the_thumbnail_cache_first(tmp_path, monkeypatch):
         Launcher(JobStore(tmp_path / "jobs")), host="127.0.0.1", port=9000, token=None
     )
     assert not stale.exists()
+
+
+def test_ssh_forward_command_brackets_an_ipv6_bind():
+    # 8000:::1:8000 is no -L spec ssh understands; the address needs brackets.
+    cmd = server.ssh_forward_command("::1", 8000, user="alice", server="node01")
+    assert cmd == "ssh -N -L 8000:[::1]:8000 alice@node01"

@@ -112,9 +112,10 @@ def ssh_forward_command(host: str, port: int, *, user: str, server: str) -> str:
 
     ``user`` and ``server`` are the serving host's own login and name, so the
     line is copy-paste ready; edit them if you reach the host under a different
-    name.
+    name. An IPv6 bind is bracketed, as ``-L`` needs it.
     """
-    return f"ssh -N -L {port}:{host}:{port} {user}@{server}"
+    target = f"[{host}]" if _is_ipv6(host) else host
+    return f"ssh -N -L {port}:{target}:{port} {user}@{server}"
 
 
 def startup_banner(
