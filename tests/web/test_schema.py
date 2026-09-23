@@ -1,9 +1,13 @@
+import json
 import subprocess
 import sys
 import threading
+from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 import pytest
+from pydantic import BaseModel, Field
 
 from typantic.web import schema as schema_mod
 from typantic.web.models import CommandMeta
@@ -212,15 +216,19 @@ def test_normalize_nullable_scalar_keeps_constraints_and_default():
     }
 
 
-def test_normalize_nullable_ref_drops_null_default():
-    # A $ref branch has no scalar `type` to make nullable, so the invalid null
-    # default is dropped and the model's own None default applies on omission.
+def test_normalize_keeps_none_choosable_for_an_unresolvable_ref():
+    # Without the root $defs the ref may be a model: None must stay a choice, so
+    # the union and its null default are kept rather than collapsed away.
     node = {
         "anyOf": [{"$ref": "#/$defs/E"}, {"type": "null"}],
         "default": None,
         "title": "E",
     }
-    assert normalize_for_form(node) == {"$ref": "#/$defs/E", "title": "E"}
+    assert normalize_for_form(node) == {
+        "anyOf": [{"$ref": "#/$defs/E"}, {"type": "null", "title": "None"}],
+        "default": None,
+        "title": "E",
+    }
 
 
 def test_normalize_nullable_array_keeps_type_and_drops_null_default():
@@ -336,3 +344,119 @@ def test_concurrent_first_loads_fetch_once(monkeypatch):
         thread.join()
     assert results == [{"type": "object"}, {"type": "object"}]
     assert len(calls) == 1
+
+
+# --- None-able form fields ---
+#
+# Collapsing `X | None` to X made RJSF fill in a non-null starting value for an
+# optional model, tuple or single Literal (so an untouched form submitted it),
+# or refuse to submit an enum whose kept null default it would not accept.
+
+
+class _Color(StrEnum):
+    RED = "red"
+    BLUE = "blue"
+
+
+class _Denoise(BaseModel):
+    strength: float = 0.5
+
+
+class _Cat(BaseModel):
+    kind: Literal["cat"] = "cat"
+    lives: int = 9
+
+
+class _Dog(BaseModel):
+    kind: Literal["dog"] = "dog"
+
+
+class _Nullables(BaseModel):
+    denoise: _Denoise | None = None
+    mode: Literal["fast", "slow"] | None = None
+    only: Literal["x"] | None = None
+    pair: tuple[int, int] | None = None
+    color: _Color | None = None
+    pet: _Cat | _Dog | None = Field(default=None, discriminator="kind")
+    seed: int | None = None
+
+
+def _props():
+    return normalize_for_form(_Nullables.model_json_schema())["properties"]
+
+
+_NONE = {"type": "null", "title": "None"}
+
+
+def test_an_optional_model_keeps_none_as_its_untouched_choice():
+    assert _props()["denoise"] == {
+        "anyOf": [{"$ref": "#/$defs/_Denoise"}, _NONE],
+        "default": None,
+    }
+
+
+def test_an_optional_fixed_tuple_keeps_none_and_gets_draft07_items():
+    pair = _props()["pair"]
+    assert pair["anyOf"][1] == _NONE
+    assert pair["anyOf"][0]["items"] == [{"type": "integer"}, {"type": "integer"}]
+    assert pair["default"] is None
+
+
+def test_an_optional_discriminated_union_keeps_none():
+    pet = _props()["pet"]
+    assert pet["anyOf"][1] == _NONE
+    assert pet["default"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "choices"),
+    [("mode", ["fast", "slow"]), ("only", ["x"]), ("color", ["red", "blue"])],
+)
+def test_an_optional_choice_is_a_plain_select_left_empty(field, choices):
+    # No null default: RJSF's select starts empty, the key is omitted on submit,
+    # and the model's own None default applies -- a null default outside the
+    # enum is what made AJV refuse to submit.
+    prop = _props()[field]
+    assert prop["enum"] == choices
+    assert prop["type"] == "string"
+    assert "default" not in prop
+    assert "anyOf" not in prop
+
+
+def test_an_optional_scalar_still_collapses_to_a_nullable_type():
+    assert _props()["seed"]["type"] == ["integer", "null"]
+
+
+def test_a_field_named_prefixitems_is_not_renamed():
+    class Odd(BaseModel):
+        prefixItems: int = 1  # noqa: N815 - the name is the point
+        other: dict[str, list[int]] = {"prefixItems": [1]}
+
+    schema = normalize_for_form(Odd.model_json_schema())
+    assert set(schema["properties"]) == {"prefixItems", "other"}
+    assert schema["properties"]["other"]["default"] == {"prefixItems": [1]}
+
+
+def test_the_dashboard_form_fixture_is_this_normalisation():
+    # web/src/form.test.ts checks, with RJSF itself, that an untouched form built
+    # from this schema submits None for every optional field. That only means
+    # something while the fixture is exactly what the server sends.
+    fixture = (
+        Path(__file__).parents[2]
+        / "web"
+        / "src"
+        / "__fixtures__"
+        / "nullable-form.schema.json"
+    )
+    expected = normalize_for_form(_Nullables.model_json_schema())
+    assert json.loads(fixture.read_text()) == expected
+
+
+def test_a_choice_of_mixed_types_keeps_its_enum_without_a_type():
+    class Mixed(BaseModel):
+        pick: Literal[1, "a"] | None = None
+
+    prop = normalize_for_form(Mixed.model_json_schema())["properties"]["pick"]
+    assert prop["enum"] == [1, "a"]
+    assert "type" not in prop
+    assert "default" not in prop

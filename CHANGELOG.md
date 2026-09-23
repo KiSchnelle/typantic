@@ -42,6 +42,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `model_dump()`. There is no switch back to the old behaviour: counting
   defaults as passed is exactly what delivered secret defaults as their mask
   (below).
+- **Breaking (form schema): an optional field left untouched now submits
+  `None`.** Collapsing `X | None` to `X` for form rendering let RJSF fill in a
+  value nobody chose, or refuse to submit at all:
+  - An optional model (`denoise: Denoise | None = None`) was sent as
+    `{"strength": 0.5}`.
+  - A one-value `Literal["x"] | None` was sent as `"x"`.
+  - An optional discriminated union was sent as its first branch.
+  - `Literal["fast", "slow"] | None`, a model with a required field, and
+    `tuple[int, int] | None` could not be submitted until something was typed.
+
+  Now:
+  - An optional choice (a `Literal`, or an `Enum` via `$ref`) is a plain select
+    that starts empty.
+  - An optional model, fixed tuple or nested union keeps a two-way choice whose
+    `None` option is selected until you pick the other.
+  - Plain optional scalars and lists render exactly as before.
+
+  This changes the shape `normalize_for_form` returns (and so `add_endpoint`'s
+  `/schema` route). It was verified against RJSF 6 itself in the dashboard's
+  new vitest suite.
 - The dashboard's path picker takes a relative path from your home directory
   (it used the server's working directory, which you never see). It keeps a
   path as you spelled it rather than resolving symlinks: the path you pick is
@@ -170,6 +190,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Latin-1 job name, say) made the whole jobs list answer HTTP 500. Scheduler
   tools now run the same way as `--schema`: no stdin, output decoded with
   replacement, and the process group killed on timeout.
+- A form field literally named `prefixItems` was renamed to `items`, because the
+  schema rewrite ran on property names and data keywords too. It now touches
+  only positions that hold schemas.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

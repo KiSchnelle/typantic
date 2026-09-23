@@ -127,62 +127,122 @@ def fetch_schema(meta: CommandMeta) -> dict[str, object]:
     return cast("dict[str, object]", normalize_for_form(schema))
 
 
-def normalize_for_form(node: object) -> object:
+def normalize_for_form(schema: object) -> object:
     """Rewrite Pydantic's 2020-12 JSON Schema into the shape form renderers want.
 
     RJSF's field generator speaks Draft-07, so two Pydantic idioms trip it up:
 
-    - ``X | None`` becomes ``anyOf: [X, {"type": "null"}]``, which renders as an
-      ``Option 1 / Option 2`` selector. We collapse a nullable union to its
-      single non-null branch (keeping the field's title/description/default) so
-      it renders as one optional field. A nullable scalar keeps its
-      nullability as ``type: [X, "null"]`` so the kept ``None`` default stays
-      valid; see :func:`_collapse_nullable_union`.
+    - ``X | None`` becomes ``anyOf: [X, {"type": "null"}]``, which RJSF renders
+      as an ``Option 1 / Option 2`` selector. How that is rewritten depends on
+      ``X`` -- see :func:`_collapse_nullable_union`. The rule throughout: an
+      untouched field must submit what the model's own default would give.
     - A fixed tuple (e.g. ``tuple[int, int]``) becomes ``prefixItems: [...]``,
-      which the renderer cannot handle ("Missing items definition"). We move it
-      to the Draft-07 array form ``items: [...]`` so each element gets its own
-      input.
+      which the renderer cannot handle ("Missing items definition"). It moves to
+      the Draft-07 array form ``items: [...]`` so each element gets its own input.
+
+    Only positions that hold schemas are rewritten -- ``properties`` values,
+    ``items``, the branches of a union, ``$defs`` entries -- never a property
+    *name* or a data keyword such as ``default`` or ``enum``, so a field called
+    ``prefixItems`` keeps its name. The root ``$defs`` resolve a ``$ref`` branch,
+    which is what tells an optional model from an optional enum.
 
     The transform is purely for form rendering; the launched CLI still validates
     the real values authoritatively.
     """
-    if isinstance(node, list):
-        return [normalize_for_form(item) for item in node]
-    if not isinstance(node, dict):
-        return node
+    if isinstance(schema, list):
+        return [normalize_for_form(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    defs = schema.get("$defs")
+    return _normalize(schema, defs if isinstance(defs, dict) else {})
 
-    result: dict[str, object] = dict(node)
-    result = _collapse_nullable_union(result)
-    if "prefixItems" in result and "items" not in result:
+
+# Keywords whose value is a mapping of name -> schema, or a list of schemas.
+_SCHEMA_MAPS = frozenset({"properties", "patternProperties", "$defs", "definitions"})
+_SCHEMA_LISTS = frozenset({"anyOf", "oneOf", "allOf", "prefixItems"})
+# Keywords whose value is one schema (``items`` may also be a list of them).
+_SCHEMA_ONE = frozenset({"items", "additionalProperties", "not", "contains"})
+
+
+def _normalize(node: dict[str, object], defs: dict[str, object]) -> dict[str, object]:
+    """Normalise one schema object and every schema nested in it."""
+    result = _collapse_nullable_union(dict(node), defs)
+    array = result.get("type") == "array"
+    if array and "prefixItems" in result and "items" not in result:
         result["items"] = result.pop("prefixItems")
-    return {key: normalize_for_form(value) for key, value in result.items()}
+    return {key: _normalize_keyword(key, value, defs) for key, value in result.items()}
+
+
+def _normalize_keyword(key: str, value: object, defs: dict[str, object]) -> object:
+    """Normalise a keyword's value if (and only if) it holds schemas."""
+    if key in _SCHEMA_MAPS and isinstance(value, dict):
+        return {
+            name: _normalize_any(sub, defs)
+            for name, sub in cast("dict[str, object]", value).items()
+        }
+    if (key in _SCHEMA_LISTS or key in _SCHEMA_ONE) and isinstance(value, list):
+        return [_normalize_any(sub, defs) for sub in cast("list[object]", value)]
+    if key in _SCHEMA_ONE:
+        return _normalize_any(value, defs)
+    return value
+
+
+def _normalize_any(value: object, defs: dict[str, object]) -> object:
+    """``_normalize`` a schema object; leave anything else (``true``) alone."""
+    if isinstance(value, dict):
+        return _normalize(cast("dict[str, object]", value), defs)
+    return value
 
 
 def _drop_null_default(node: dict[str, object]) -> None:
-    """Remove a ``default: null`` the collapsed non-null schema can no longer hold.
-
-    Once the ``{"type": "null"}`` branch is gone, a ``null`` default is invalid
-    against the remaining type, which makes RJSF/AJV reject the untouched field.
-    Dropping it lets the settings model apply its own ``None`` default when the
-    field is omitted on submit.
-    """
+    """Remove a ``default: null`` the rewritten schema can no longer hold."""
     if "default" in node and node["default"] is None:
         del node["default"]
 
 
-def _collapse_nullable_union(node: dict[str, object]) -> dict[str, object]:
-    """Fold ``anyOf``/``oneOf`` that carries a ``{"type": "null"}`` branch.
+def _resolve(branch: dict[str, object], defs: dict[str, object]) -> dict[str, object]:
+    """``branch``'s ``$ref`` target from the root ``$defs``, else ``branch`` itself."""
+    ref = branch.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        target = defs.get(ref.removeprefix("#/$defs/"))
+        if isinstance(target, dict):
+            return cast("dict[str, object]", target)
+    return branch
 
-    One non-null branch left -> inline it (the field's own title/description/
-    default win). Several left -> keep the union but drop the null branch.
 
-    A single scalar branch keeps its nullability as ``type: [X, "null"]``:
-    RJSF renders that as the plain non-null input (``getSchemaType`` picks the
-    non-null type) while AJV still accepts ``null``, so the field's kept ``None``
-    default and an empty input both validate. A bare ``type: number`` carrying
-    ``default: null`` would instead fail validation and block submit. Non-scalar
-    branches ($ref/enum, array, object) have no scalar ``type`` to make nullable,
-    so their invalid ``null`` default is dropped instead.
+def _choices(schema: dict[str, object]) -> list[object] | None:
+    """The fixed values of a ``Literal`` / ``Enum`` schema (a ``const`` is one)."""
+    enum = schema.get("enum")
+    if isinstance(enum, list):
+        return cast("list[object]", enum)
+    if "const" in schema:
+        return [schema["const"]]
+    return None
+
+
+def _collapse_nullable_union(
+    node: dict[str, object],
+    defs: dict[str, object],
+) -> dict[str, object]:
+    """Rewrite an ``anyOf``/``oneOf`` that carries a ``{"type": "null"}`` branch.
+
+    Several non-null branches: keep the union, drop the null branch and its now
+    invalid null default. One non-null branch ``X``, by what ``X`` is:
+
+    - a plain scalar: inline it as ``type: [X, "null"]``. RJSF renders the
+      single input, and AJV accepts both the kept ``None`` default and an empty
+      input -- a bare ``type`` with a null default would block submit.
+    - a choice (a ``Literal``, or a ``$ref`` to an ``Enum``): inline it as
+      ``enum`` + ``type`` with no default. RJSF's select starts empty, the key
+      is omitted on submit, and the model's ``None`` applies; a null default
+      outside the enum is what made AJV refuse the untouched form.
+    - an array of one item schema: inline it without the null default; an
+      untouched array is dropped on submit and ``None`` applies.
+    - anything else -- a model (``$ref`` or inline object), a fixed tuple, a
+      nested union: keep the union, with the null branch titled "None" and the
+      null default kept. RJSF otherwise fills in a model's nested defaults, a
+      tuple's slots or a union's first branch, and the untouched form submits a
+      value the user never chose instead of ``None``.
     """
     for union_key in ("anyOf", "oneOf"):
         variants = node.get(union_key)
@@ -195,13 +255,41 @@ def _collapse_nullable_union(node: dict[str, object]) -> dict[str, object]:
             continue  # no null branch; leave a genuine union alone
         siblings = {k: v for k, v in node.items() if k != union_key}
         if len(non_null) == 1 and isinstance(non_null[0], dict):
-            merged = {**non_null[0], **siblings}
-            branch_type = merged.get("type")
-            if isinstance(branch_type, str) and branch_type in _NULLABLE_SCALAR_TYPES:
-                merged["type"] = [branch_type, "null"]
-            else:
-                _drop_null_default(merged)
-            return merged
+            return _collapse_one(
+                cast("dict[str, object]", non_null[0]), siblings, union_key, defs
+            )
         _drop_null_default(siblings)
         return {**siblings, union_key: non_null}
     return node
+
+
+def _collapse_one(
+    branch: dict[str, object],
+    siblings: dict[str, object],
+    union_key: str,
+    defs: dict[str, object],
+) -> dict[str, object]:
+    """Rewrite ``X | None`` for its one non-null branch ``X`` (see above)."""
+    target = _resolve(branch, defs)
+    choices = _choices(target)
+    if choices is not None:
+        merged = {**siblings, "enum": choices}
+        if "type" in target:
+            merged["type"] = target["type"]
+        _drop_null_default(merged)
+        return merged
+    branch_type = target.get("type")
+    if "$ref" not in branch and branch_type in _NULLABLE_SCALAR_TYPES:
+        return {**branch, **siblings, "type": [branch_type, "null"]}
+    if (
+        "$ref" not in branch
+        and branch_type == "array"
+        and isinstance(
+            branch.get("items"),
+            dict,
+        )
+    ):
+        merged = {**branch, **siblings}
+        _drop_null_default(merged)
+        return merged
+    return {**siblings, union_key: [branch, {"type": "null", "title": "None"}]}

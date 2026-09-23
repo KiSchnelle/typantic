@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "_Cat": {
+      "properties": {
+        "kind": {
+          "const": "cat",
+          "default": "cat",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lives": {
+          "default": 9,
+          "title": "Lives",
+          "type": "integer"
+        }
+      },
+      "title": "_Cat",
+      "type": "object"
+    },
+    "_Color": {
+      "enum": [
+        "red",
+        "blue"
+      ],
+      "title": "_Color",
+      "type": "string"
+    },
+    "_Denoise": {
+      "properties": {
+        "strength": {
+          "default": 0.5,
+          "title": "Strength",
+          "type": "number"
+        }
+      },
+      "title": "_Denoise",
+      "type": "object"
+    },
+    "_Dog": {
+      "properties": {
+        "kind": {
+          "const": "dog",
+          "default": "dog",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "title": "_Dog",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "denoise": {
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_Denoise"
+        },
+        {
+          "type": "null",
+          "title": "None"
+        }
+      ]
+    },
+    "mode": {
+      "title": "Mode",
+      "enum": [
+        "fast",
+        "slow"
+      ],
+      "type": "string"
+    },
+    "only": {
+      "title": "Only",
+      "enum": [
+        "x"
+      ],
+      "type": "string"
+    },
+    "pair": {
+      "default": null,
+      "title": "Pair",
+      "anyOf": [
+        {
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array",
+          "items": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        {
+          "type": "null",
+          "title": "None"
+        }
+      ]
+    },
+    "color": {
+      "enum": [
+        "red",
+        "blue"
+      ],
+      "type": "string"
+    },
+    "pet": {
+      "default": null,
+      "title": "Pet",
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "cat": "#/$defs/_Cat",
+              "dog": "#/$defs/_Dog"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/_Cat"
+            },
+            {
+              "$ref": "#/$defs/_Dog"
+            }
+          ]
+        },
+        {
+          "type": "null",
+          "title": "None"
+        }
+      ]
+    },
+    "seed": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "default": null,
+      "title": "Seed"
+    }
+  },
+  "title": "_Nullables",
+  "type": "object"
+}
