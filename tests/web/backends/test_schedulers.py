@@ -1,3 +1,4 @@
+import os
 import stat
 import subprocess
 from datetime import UTC, datetime
@@ -635,3 +636,12 @@ def test_pbs_keeps_the_last_status_when_qstat_cannot_answer(tmp_path):
     runner.set("qstat", returncode=1, stderr="Connection refused")
     record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
     assert PbsBackend(runner).poll(record).status is JobStatus.RUNNING
+
+
+def test_a_finished_scheduler_job_reports_when_it_finished(tmp_path):
+    marker = tmp_path / ".typantic-exit"
+    marker.write_text("0\n")
+    ended = datetime(2026, 9, 20, 3, 14, 15, tzinfo=UTC)
+    os.utime(marker, (ended.timestamp(), ended.timestamp()))
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    assert SlurmBackend(FakeRunner()).poll(record).finished_at == ended

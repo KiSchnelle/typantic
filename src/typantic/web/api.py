@@ -276,7 +276,7 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
 
     @app.get("/api/history", dependencies=guard)
     def history() -> History:
-        return launcher.store.grouped_history()
+        return launcher.history()
 
     @app.get("/api/fs", dependencies=guard)
     def browse(path: Annotated[str | None, Query()] = None) -> FsListing:

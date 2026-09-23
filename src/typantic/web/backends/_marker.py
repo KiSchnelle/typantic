@@ -6,7 +6,11 @@ server, the job's process and the scheduler's memory of the job, so it is the
 first thing a poll reads.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
+
+from typantic.web.backends.base import PollResult
+from typantic.web.models import JobStatus
 
 EXIT_MARKER = ".typantic-exit"
 # The marker's name before 0.8.0, which an app could collide with; a job launched
@@ -26,13 +30,26 @@ def _read_exit_code(path: Path) -> int | None:
         return None
 
 
-def read_exit_code(job_dir: Path) -> int | None:
-    """The exit code a finished job recorded in ``job_dir``, else ``None``."""
+def finished(job_dir: Path) -> PollResult | None:
+    """How the job in ``job_dir`` ended, from its exit marker; ``None`` if not yet.
+
+    The marker's mtime is when the job finished, which a server that was not
+    running at the time would otherwise only know as the moment it noticed.
+    """
     for name in (EXIT_MARKER, _LEGACY_EXIT_MARKER):
-        code = _read_exit_code(job_dir / name)
+        path = job_dir / name
+        code = _read_exit_code(path)
         if code is not None:
-            return code
+            status = JobStatus.DONE if code == 0 else JobStatus.FAILED
+            return PollResult(status=status, exit_code=code, finished_at=_mtime(path))
     return None
+
+
+def _mtime(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return None
 
 
 def clear_exit_code(job_dir: Path) -> None:

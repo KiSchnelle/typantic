@@ -25,11 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from typantic.web._files import write_private
 from typantic.web._subprocess import run_tool
-from typantic.web.backends._marker import (
-    EXIT_MARKER,
-    clear_exit_code,
-    read_exit_code,
-)
+from typantic.web.backends._marker import EXIT_MARKER, clear_exit_code, finished
 from typantic.web.backends.base import Launched, LaunchUncertainError, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
@@ -282,11 +278,10 @@ class SchedulerBackend(abc.ABC):
         job_id = record.scheduler_id
         if job_id is None:
             return PollResult(status=JobStatus.FAILED)
-        code = read_exit_code(Path(record.job_dir))
-        if code is not None:
+        ended = finished(Path(record.job_dir))
+        if ended is not None:
             self._gone_since.pop(job_id, None)
-            status = JobStatus.DONE if code == 0 else JobStatus.FAILED
-            return PollResult(status=status, exit_code=code)
+            return ended
         state = self._query(job_id)
         if isinstance(state, PollResult):
             self._gone_since.pop(job_id, None)

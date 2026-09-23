@@ -322,6 +322,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last status until its exit marker shows how it ended, and cancelling it is
   refused (HTTP 409, naming the host). Jobs recorded before 0.8.0 carry no
   host and behave as before.
+- A job's finish time was when a server first noticed it had finished: a job
+  that ended overnight with no server running showed the next morning. It is
+  now when the job wrote its exit marker. The history page (`/api/history`)
+  also showed stored rows as they were, so a finished job read as running
+  there until the jobs list happened to refresh it; it now asks for the live
+  status of every job still active. `PollResult` gains an optional
+  `finished_at` for a backend that knows.
 - An ssh job's `directory: ~/work` was quoted whole, so the remote shell
   looked for a folder literally named `~`. A leading `~` now means the remote
   home.

@@ -901,3 +901,31 @@ def test_a_job_records_the_host_it_was_started_on(wired):
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
     launcher.get(record.id)
     assert launcher.restart(record.id).host == "login01"
+
+
+# --- when a job finished, and a history that is current ---
+
+
+def test_refresh_keeps_the_time_the_backend_says_the_job_finished(wired):
+    launcher, backend, _ = wired
+    record = launcher.launch(_request())
+    ended = datetime(2026, 9, 20, 3, 14, 15, tzinfo=UTC)
+    backend.poll_result = PollResult(
+        status=JobStatus.DONE, exit_code=0, finished_at=ended
+    )
+    assert launcher.refresh(record).finished_at == ended
+
+
+def test_the_history_shows_the_live_status(wired):
+    # /api/history listed stored rows as they were, so a job that had finished
+    # showed as running there until the jobs list happened to refresh it.
+    launcher, backend, store = wired
+    project = store.create_project("P")
+    grouped = launcher.launch(_request(project_id=project.id))
+    single = launcher.launch(_request())
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    history = launcher.history()
+    assert history.projects[0].jobs[0].id == grouped.id
+    assert history.projects[0].jobs[0].status is JobStatus.DONE
+    assert history.ungrouped[0].id == single.id
+    assert history.ungrouped[0].status is JobStatus.DONE

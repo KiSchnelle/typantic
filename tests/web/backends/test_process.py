@@ -5,11 +5,12 @@ import socket
 import subprocess
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from typantic.web.backends import process as proc
-from typantic.web.backends._marker import _read_exit_code
+from typantic.web.backends._marker import _read_exit_code, finished
 from typantic.web.backends.base import ForeignHostError
 from typantic.web.backends.local import LocalBackend
 from typantic.web.backends.process import (
@@ -455,3 +456,31 @@ def test_a_job_on_this_host_is_probed_as_usual(tmp_path, monkeypatch):
         update={"host": socket.gethostname()}
     )
     assert LocalBackend().poll(record).status is JobStatus.RUNNING
+
+
+# --- a job finished when its marker was written, not when a server noticed ---
+
+
+def test_a_finished_job_reports_when_it_finished(tmp_path):
+    # A job that ended overnight, with no server running, was stamped with the
+    # time a server first saw it finished.
+    marker = tmp_path / ".typantic-exit"
+    marker.write_text("0\n")
+    ended = datetime(2026, 9, 20, 3, 14, 15, tzinfo=UTC)
+    os.utime(marker, (ended.timestamp(), ended.timestamp()))
+    result = LocalBackend().poll(_record(tmp_path, pid=None))
+    assert result.finished_at == ended
+
+
+def test_a_marker_that_vanishes_after_it_was_read_has_no_finish_time(
+    tmp_path, monkeypatch
+):
+    # A restart clears the marker; one read an instant before still counts.
+    (tmp_path / ".typantic-exit").write_text("0\n")
+
+    def gone(*_args, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(Path, "stat", gone)
+    result = finished(tmp_path)
+    assert (result.status, result.finished_at) == (JobStatus.DONE, None)

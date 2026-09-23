@@ -32,10 +32,12 @@ from typantic.web.models import (
     TERMINAL_STATUSES,
     BackendMeta,
     CommandMeta,
+    History,
     JobRecord,
     JobStatus,
     LaunchPreview,
     LaunchRequest,
+    ProjectGroup,
 )
 from typantic.web.schema import SchemaCache, normalize_for_form
 from typantic.web.store import JobStore
@@ -391,11 +393,10 @@ class Launcher:
             # Every terminal state gets stamped, CANCELLED included: a job
             # cancelled outside the dashboard (scancel, kill) reaches it through
             # this path too, and would otherwise show a finish time of "never".
-            finished_at = (
-                datetime.now(UTC)
-                if result.status in TERMINAL_STATUSES
-                else current.finished_at
-            )
+            # The backend's time wins where it has one (the exit marker's).
+            finished_at = current.finished_at
+            if result.status in TERMINAL_STATUSES:
+                finished_at = result.finished_at or datetime.now(UTC)
             updated = current.model_copy(
                 update={
                     "status": result.status,
@@ -441,6 +442,20 @@ class Launcher:
             offset=offset,
         )
         return [self.refresh(record) for record in records], total
+
+    def history(self) -> History:
+        """Job history grouped by project, with active jobs' status refreshed."""
+        history = self.store.grouped_history()
+        return History(
+            projects=[
+                ProjectGroup(
+                    project=group.project,
+                    jobs=[self.refresh(job) for job in group.jobs],
+                )
+                for group in history.projects
+            ],
+            ungrouped=[self.refresh(job) for job in history.ungrouped],
+        )
 
     def delete_project(self, project_id: str) -> bool:
         """Delete a project and all its jobs, cancelling any still active."""

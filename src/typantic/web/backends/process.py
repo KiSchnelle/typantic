@@ -24,11 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from typantic.web.backends._marker import (
-    EXIT_MARKER,
-    clear_exit_code,
-    read_exit_code,
-)
+from typantic.web.backends._marker import EXIT_MARKER, clear_exit_code, finished
 from typantic.web.backends.base import ForeignHostError, Launched, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
@@ -164,12 +160,12 @@ class ProcessBackend:
     def poll(self, record: JobRecord) -> PollResult:
         """Resolve status from the exit-code marker, else the pid's liveness."""
         job_dir = Path(record.job_dir)
-        exit_code = read_exit_code(job_dir)
-        if exit_code is None and _elsewhere(record):
+        ended = finished(job_dir)
+        if ended is None and _elsewhere(record):
             # This host's process table knows nothing of the pid; the exit
             # marker, on the shared filesystem, will tell how the job ended.
             return PollResult(status=record.status, exit_code=record.exit_code)
-        if exit_code is None:
+        if ended is None:
             if record.pid is not None and _process_running(
                 record.pid,
                 record.pid_start,
@@ -177,14 +173,13 @@ class ProcessBackend:
                 return PollResult(status=JobStatus.RUNNING)
             # The wrapper writes the marker just before it exits, so a job that
             # finished between the two checks has one now.
-            exit_code = read_exit_code(job_dir)
-            if exit_code is None:
+            ended = finished(job_dir)
+            if ended is None:
                 # Gone without recording an exit code: crashed or was killed.
                 return PollResult(status=JobStatus.FAILED)
         if record.pid is not None:
             _reap(record.pid)  # the wrapper is done; don't leave a zombie
-        status = JobStatus.DONE if exit_code == 0 else JobStatus.FAILED
-        return PollResult(status=status, exit_code=exit_code)
+        return ended
 
     def cancel(self, record: JobRecord) -> None:
         """SIGTERM the job's process group, if that process is still our job."""

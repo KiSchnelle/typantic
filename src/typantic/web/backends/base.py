@@ -7,6 +7,7 @@ branches on backend identity — each backend reports its own initial
 :class:`~typantic.web.models.JobStatus` via :attr:`Launched.status`.
 """
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -55,10 +56,14 @@ class PollResult(BaseModel):
     Attributes:
         status: The normalised status.
         exit_code: The process/job exit code once finished, else ``None``.
+        finished_at: When the job finished, where the backend can tell (the
+            time its exit marker was written); else the launcher records the
+            time it first saw the job finished.
     """
 
     status: JobStatus
     exit_code: int | None = None
+    finished_at: datetime | None = None
 
 
 class LaunchBackend(Protocol):
