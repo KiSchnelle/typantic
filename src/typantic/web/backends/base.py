@@ -21,13 +21,15 @@ class Launched(BaseModel):
     ``status`` is the job's initial state (a local process is RUNNING at once; a
     scheduler job is QUEUED). Exactly one handle (``pid`` or ``scheduler_id``) is
     set, depending on the backend family. ``pid_start`` accompanies ``pid``: the
-    process start-time that tells a live pid apart from a recycled one.
+    process start-time that tells a live pid apart from a recycled one. ``host``
+    names the machine the pid lives on, which only that machine can look up.
     """
 
     status: JobStatus
     pid: int | None = None
     pid_start: int | None = None
     scheduler_id: str | None = None
+    host: str | None = None
 
 
 class LaunchUncertainError(RuntimeError):
@@ -36,6 +38,14 @@ class LaunchUncertainError(RuntimeError):
     A submission that timed out may still have been accepted: ``sbatch`` can
     hang after the controller queued the job. The launcher then keeps the job's
     folder, which a job that does run needs for its config and log.
+    """
+
+
+class ForeignHostError(RuntimeError):
+    """The job's process runs on another host, where alone it can be signalled.
+
+    A job store shared by servers on several login nodes (a home on NFS) lists
+    every server's jobs; a pid means something only on the host that started it.
     """
 
 

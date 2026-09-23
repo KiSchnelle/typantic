@@ -313,6 +313,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepted it); the job then failed on start, with nowhere to write its log.
   The folder is kept, and the dashboard answers HTTP 504 saying the job may
   have been queued.
+- **A job store shared by servers on several login nodes** (a home directory
+  on NFS) had each server misread the others' local, ssh and container jobs: a
+  pid means something only on the host that started it, so a server found
+  another's running job "gone" and recorded it FAILED for good, and a cancel
+  could signal an unrelated process with the same pid. Jobs now record their
+  host (`JobRecord.host`, an additive field). Another host's job keeps its
+  last status until its exit marker shows how it ended, and cancelling it is
+  refused (HTTP 409, naming the host). Jobs recorded before 0.8.0 carry no
+  host and behave as before.
 - A local job that finished in the instant between the two halves of a status
   check was recorded FAILED forever: its exit marker was read (not there yet),
   then its process looked for (gone by then). The marker is now read again

@@ -165,6 +165,9 @@ class JobRecord(BaseModel):
     pid: int | None = None
     pid_start: int | None = None
     scheduler_id: str | None = None
+    # The machine a process-family job's pid lives on; None for a scheduler job,
+    # and for one recorded before 0.8.0.
+    host: str | None = None
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime
     finished_at: datetime | None = None

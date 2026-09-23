@@ -18,6 +18,7 @@ import contextlib
 import os
 import shlex
 import signal
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -28,7 +29,7 @@ from typantic.web.backends._marker import (
     clear_exit_code,
     read_exit_code,
 )
-from typantic.web.backends.base import Launched, PollResult
+from typantic.web.backends.base import ForeignHostError, Launched, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
 _PROC = Path("/proc")
@@ -109,6 +110,11 @@ def _process_running(pid: int, pid_start: int | None = None) -> bool:
     return True
 
 
+def _elsewhere(record: JobRecord) -> bool:
+    """Whether the job's process runs on another host than this one."""
+    return record.host is not None and record.host != socket.gethostname()
+
+
 class ProcessBackend:
     """Spawn and track jobs as detached local subprocesses."""
 
@@ -151,6 +157,7 @@ class ProcessBackend:
         return Launched(
             pid=process.pid,
             pid_start=_pid_start_time(process.pid),
+            host=socket.gethostname(),
             status=JobStatus.RUNNING,
         )
 
@@ -158,6 +165,10 @@ class ProcessBackend:
         """Resolve status from the exit-code marker, else the pid's liveness."""
         job_dir = Path(record.job_dir)
         exit_code = read_exit_code(job_dir)
+        if exit_code is None and _elsewhere(record):
+            # This host's process table knows nothing of the pid; the exit
+            # marker, on the shared filesystem, will tell how the job ended.
+            return PollResult(status=record.status, exit_code=record.exit_code)
         if exit_code is None:
             if record.pid is not None and _process_running(
                 record.pid,
@@ -188,7 +199,17 @@ class ProcessBackend:
         it still runs with the start time recorded at launch (where ``/proc``
         tells), and still leads its own process group -- as the job's shell does,
         having been started in a new session.
+
+        Raises:
+            ForeignHostError: If the job runs on another host: its pid names
+                nothing, or something else, here.
         """
+        if _elsewhere(record):
+            msg = (
+                f"Job {record.id} runs on {record.host}; cancel it from a "
+                f"dashboard on that host."
+            )
+            raise ForeignHostError(msg)
         pid = record.pid
         if pid is None or not _process_running(pid, record.pid_start):
             return False

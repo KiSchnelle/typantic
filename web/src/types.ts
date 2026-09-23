@@ -75,6 +75,7 @@ export interface JobRecord {
   pid: number | null;
   pid_start: number | null;
   scheduler_id: string | null;
+  host: string | null;
   status: JobStatus;
   created_at: string;
   finished_at: string | null;

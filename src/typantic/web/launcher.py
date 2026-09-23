@@ -296,6 +296,7 @@ class Launcher:
             pid=launched.pid,
             pid_start=launched.pid_start,
             scheduler_id=launched.scheduler_id,
+            host=launched.host,
             status=launched.status,
             created_at=created_at,
         )
@@ -641,6 +642,7 @@ class Launcher:
                         "pid": launched.pid,
                         "pid_start": launched.pid_start,
                         "scheduler_id": launched.scheduler_id,
+                        "host": launched.host,
                         "finished_at": None,
                         "exit_code": None,
                     },

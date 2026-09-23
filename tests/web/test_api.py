@@ -761,3 +761,18 @@ def test_a_refused_cancel_is_502(env, monkeypatch):
     resp = env.client.post(f"/api/jobs/{record['id']}/cancel", headers=AUTH)
     assert resp.status_code == 502
     assert "Cancel failed" in resp.json()["detail"]
+
+
+def test_cancelling_a_job_on_another_host_is_409(env, monkeypatch):
+    from typantic.web.backends.base import ForeignHostError  # noqa: PLC0415
+
+    record = _launch(env)
+
+    def elsewhere(_record):
+        msg = "Job runs on login99; cancel it from the dashboard there."
+        raise ForeignHostError(msg)
+
+    monkeypatch.setattr(env.backend, "cancel", elsewhere)
+    resp = env.client.post(f"/api/jobs/{record['id']}/cancel", headers=AUTH)
+    assert resp.status_code == 409
+    assert "login99" in resp.json()["detail"]

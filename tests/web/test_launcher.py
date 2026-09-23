@@ -52,7 +52,7 @@ class FakeBackend:
         self.launched.append((argv, backend_options))
         if self.writes_log:
             log_path.write_text("hello\n")
-        return Launched(pid=pid, status=self.next_status)
+        return Launched(pid=pid, status=self.next_status, host="login01")
 
     def poll(self, record):
         self.poll_count += 1
@@ -891,3 +891,13 @@ def test_delete_goes_ahead_when_the_cancel_fails(wired, caplog):
     assert launcher.delete(record.id) is True
     assert store.load(record.id) is None
     assert "may still be running" in caplog.text
+
+
+def test_a_job_records_the_host_it_was_started_on(wired):
+    launcher, backend, store = wired
+    record = launcher.launch(_request())
+    assert record.host == "login01"
+    assert store.load(record.id).host == "login01"
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    launcher.get(record.id)
+    assert launcher.restart(record.id).host == "login01"

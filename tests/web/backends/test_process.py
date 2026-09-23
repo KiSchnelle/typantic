@@ -1,12 +1,16 @@
 import os
 import select
 import signal
+import socket
 import subprocess
 import time
 from datetime import UTC, datetime
 
+import pytest
+
 from typantic.web.backends import process as proc
 from typantic.web.backends._marker import _read_exit_code
+from typantic.web.backends.base import ForeignHostError
 from typantic.web.backends.local import LocalBackend
 from typantic.web.backends.process import (
     _process_running,
@@ -402,3 +406,52 @@ def test_process_running_start_unreadable_falls_through(monkeypatch):
     monkeypatch.setattr(proc, "_pid_start_time", lambda _pid: None)
     monkeypatch.setattr(proc.os, "kill", lambda *_a, **_k: None)
     assert _process_running(4242, 555) is True
+
+
+# --- a job belongs to the host its process runs on ---
+
+
+def _elsewhere(record):
+    update = {"host": "login99.elsewhere", "status": JobStatus.RUNNING}
+    return record.model_copy(update=update)
+
+
+def test_a_local_job_records_its_host(tmp_path):
+    launched = LocalBackend().launch(
+        ["true"], job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
+    )
+    assert launched.host == socket.gethostname()
+
+
+def test_a_job_on_another_host_keeps_its_last_status(tmp_path, monkeypatch):
+    # A store shared across login nodes: this host's process table says nothing
+    # about a pid on another, and read it as dead -- recorded FAILED for good.
+    def no_probe(*_args):
+        raise AssertionError("probed a pid that lives on another host")
+
+    monkeypatch.setattr(proc, "_process_running", no_probe)
+    record = _elsewhere(_record(tmp_path, pid=4242))
+    assert LocalBackend().poll(record).status is JobStatus.RUNNING
+
+
+def test_a_job_on_another_host_is_read_from_its_marker(tmp_path):
+    (tmp_path / ".typantic-exit").write_text("0\n")
+    result = LocalBackend().poll(_elsewhere(_record(tmp_path, pid=4242)))
+    assert (result.status, result.exit_code) == (JobStatus.DONE, 0)
+
+
+def test_cancel_refuses_a_job_on_another_host(tmp_path, monkeypatch):
+    sent = _signals(monkeypatch)
+    monkeypatch.setattr(proc, "_process_running", lambda *_a: True)
+    monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid)
+    with pytest.raises(ForeignHostError, match=r"login99\.elsewhere"):
+        LocalBackend().cancel(_elsewhere(_record(tmp_path, pid=4242)))
+    assert sent == []
+
+
+def test_a_job_on_this_host_is_probed_as_usual(tmp_path, monkeypatch):
+    monkeypatch.setattr(proc, "_process_running", lambda *_a: True)
+    record = _record(tmp_path, pid=4242).model_copy(
+        update={"host": socket.gethostname()}
+    )
+    assert LocalBackend().poll(record).status is JobStatus.RUNNING

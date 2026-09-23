@@ -13,6 +13,7 @@ batch script and track it by job id.
 
 from typantic.web.backends.apptainer import ApptainerBackend
 from typantic.web.backends.base import (
+    ForeignHostError,
     LaunchBackend,
     Launched,
     LaunchUncertainError,
@@ -34,6 +35,7 @@ from typantic.web.backends.ssh import SshBackend
 __all__ = [
     "ApptainerBackend",
     "ContainerBackend",
+    "ForeignHostError",
     "LaunchBackend",
     "LaunchUncertainError",
     "Launched",
