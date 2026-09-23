@@ -5,15 +5,16 @@ here once the optional ``[web]`` extra is installed (see ``typantic.web.cli``);
 without the extra, invoking them prints an install hint.
 """
 
-from importlib.metadata import version
 from typing import Annotated
 
 import typer
 
+import typantic
+
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(version("typantic"))
+        typer.echo(typantic.__version__)
         raise typer.Exit
 
 

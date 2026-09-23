@@ -11,7 +11,6 @@ import asyncio
 import codecs
 import contextlib
 from collections.abc import Iterator, Sequence
-from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
@@ -29,6 +28,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+import typantic
 from typantic.web import filesystem, gallery
 from typantic.web.backends.scheduler import SchedulerError
 from typantic.web.filesystem import FileSystemError
@@ -106,7 +106,7 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
     Returns:
         The configured application (serve with uvicorn).
     """
-    app = FastAPI(title=title, version=version("typantic"))
+    app = FastAPI(title=title, version=typantic.__version__)
 
     def require_token(
         authorization: Annotated[str | None, Header()] = None,
@@ -126,7 +126,7 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
     def meta() -> ApiMeta:
         return ApiMeta(
             title=title,
-            version=version("typantic"),
+            version=typantic.__version__,
             backends=launcher.backends_meta(),
         )
 

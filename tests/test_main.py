@@ -1,4 +1,6 @@
 import contextlib
+import importlib
+import importlib.metadata
 import logging
 import os
 import sys
@@ -7,6 +9,7 @@ import pytest
 import typer
 from pydantic import BaseModel
 
+import typantic
 from typantic import add_command, make_main
 from typantic._main import _is_autocompleting, _wants_version
 
@@ -315,3 +318,21 @@ def test_ctrl_c_while_loading_the_app_exits_130(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         make_main(loader, package_name=_PKG)()
     assert exc.value.code == 130
+
+
+# ---------------------------------------------------------------------------
+# import typantic without installed package metadata
+# ---------------------------------------------------------------------------
+def test_importing_typantic_needs_no_package_metadata(monkeypatch):
+    # A frozen app (PyInstaller) or a bare source tree has no dist-info; the
+    # import must not fail over a version string.
+    def missing(_name):
+        raise importlib.metadata.PackageNotFoundError(_name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    try:
+        assert importlib.reload(typantic).__version__ == "0+unknown"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(typantic)
+    assert typantic.__version__ != "0+unknown"

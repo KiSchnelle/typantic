@@ -130,6 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `strict=True` model with a `set` or `tuple[X, ...]` field could not run: the
   CLI gathers repeated values into a list, which strict mode rejects. The list is
   now rebuilt into the declared collection first.
+- `import typantic` raised `PackageNotFoundError` where the package has no
+  installed metadata (a PyInstaller-frozen app, a bare source tree).
+  `typantic.__version__` is `"0+unknown"` there, and `typantic --version` and
+  the dashboard read the version from it.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the
