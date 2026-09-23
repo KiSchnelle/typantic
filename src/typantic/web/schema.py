@@ -10,12 +10,17 @@ own process; the web process only ever sees JSON.
 import json
 import shutil
 import subprocess
+import threading
 from typing import cast
 
+from typantic.web._subprocess import run_tool
 from typantic.web.models import CommandMeta
 
 # Importing a heavy settings module can be slow the first time.
 _SCHEMA_TIMEOUT_S = 120.0
+# How much of a failing app's stderr goes into the error: its tail, where the
+# traceback's last line is, not the whole of it.
+_STDERR_TAIL = 4000
 
 # Scalar JSON Schema types a nullable field can keep as ``type: [X, "null"]``
 # when its union is collapsed. Array/object/$ref branches are excluded: RJSF's
@@ -32,24 +37,44 @@ class SchemaCache:
     """Lazily fetches and caches each command's JSON Schema by command key.
 
     Schemas are stable for an installed version, so a process-lifetime cache is
-    enough; the launcher and API share one instance.
+    enough; the launcher and API share one instance. Requests run on a thread
+    pool, so two guards apply: concurrent first requests for one command share
+    a single fetch (each spawns the app, which may import a heavy stack), and a
+    fetch that was already running when :meth:`clear` refreshed the cache does
+    not store its now-stale result.
     """
 
     def __init__(self) -> None:
         """Create an empty schema cache."""
         self._cache: dict[str, dict[str, object]] = {}
+        self._lock = threading.Lock()  # guards the three fields below
+        self._fetching: dict[str, threading.Lock] = {}
+        self._generation = 0
 
     def get(self, meta: CommandMeta) -> dict[str, object]:
         """Return the command's JSON Schema, fetching and caching on first use."""
-        cached = self._cache.get(meta.key)
-        if cached is None:
-            cached = fetch_schema(meta)
-            self._cache[meta.key] = cached
-        return cached
+        with self._lock:
+            cached = self._cache.get(meta.key)
+            if cached is not None:
+                return cached
+            fetching = self._fetching.setdefault(meta.key, threading.Lock())
+        with fetching:
+            with self._lock:
+                cached = self._cache.get(meta.key)
+                if cached is not None:
+                    return cached  # fetched while this request waited its turn
+                generation = self._generation
+            schema = fetch_schema(meta)
+            with self._lock:
+                if generation == self._generation:
+                    self._cache[meta.key] = schema
+            return schema
 
     def clear(self) -> None:
         """Drop all cached schemas (e.g. after an app is upgraded)."""
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
+            self._generation += 1
 
 
 def fetch_schema(meta: CommandMeta) -> dict[str, object]:
@@ -63,8 +88,8 @@ def fetch_schema(meta: CommandMeta) -> dict[str, object]:
         rendering.
 
     Raises:
-        SchemaError: If the executable is missing, the process fails, times out,
-            or its stdout is not valid JSON.
+        SchemaError: If the executable is missing or cannot be run, the process
+            fails or times out, or its stdout is not valid JSON.
     """
     executable = shutil.which(meta.app)
     if executable is None:
@@ -73,22 +98,22 @@ def fetch_schema(meta: CommandMeta) -> dict[str, object]:
 
     argv = [executable, *meta.argv, "--schema"]
     try:
-        result = subprocess.run(  # noqa: S603 - argv is trusted entry-point metadata
-            argv,
-            capture_output=True,
-            text=True,
-            timeout=_SCHEMA_TIMEOUT_S,
-            check=True,
-        )
+        result = run_tool(argv, timeout=_SCHEMA_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
         msg = f"Timed out fetching schema for {meta.key!r} after {_SCHEMA_TIMEOUT_S}s."
         raise SchemaError(msg) from exc
-    except subprocess.CalledProcessError as exc:
+    except OSError as exc:
+        # A stale shebang (a moved venv) or a file without the executable bit.
         msg = (
-            f"Fetching schema for {meta.key!r} failed "
-            f"(exit {exc.returncode}): {exc.stderr}"
+            f"{meta.app!r} could not be run to fetch the schema for {meta.key!r}: {exc}"
         )
         raise SchemaError(msg) from exc
+    if result.returncode != 0:
+        msg = (
+            f"Fetching schema for {meta.key!r} failed "
+            f"(exit {result.returncode}): {result.stderr[-_STDERR_TAIL:]}"
+        )
+        raise SchemaError(msg)
 
     try:
         schema = json.loads(result.stdout)

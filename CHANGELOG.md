@@ -152,6 +152,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole picker listing, or a job's gallery, fail with HTTP 500. Such names are
   now skipped. Creating a folder rejects control characters and undecodable
   names, which would otherwise make a folder no listing could show.
+- Opening a command's form in the dashboard answered HTTP 500 instead of
+  explaining itself in two cases: the app printed a single byte that is not
+  UTF-8 to stderr (a native library's warning, even with a valid schema on
+  stdout), or its executable could not be run (a stale shebang after a venv
+  moved). The `--schema` child also inherited the server's stdin, so an app
+  that prompted hung until the 120 s timeout. Commands now run with no stdin
+  and their output is decoded with replacement. A failure to run is reported,
+  and a failing app's stderr is trimmed to its tail. A timeout kills the app's
+  whole process group, not just the first process.
+- `POST /api/commands/refresh` after upgrading an app could be undone by a
+  schema fetch already in flight, which stored the old form and served it until
+  the next refresh. Several tabs opening the same uncached command also each
+  spawned the app. Concurrent first requests now share one fetch, and a fetch
+  that straddles a refresh does not store its stale result.
+- A scheduler tool (`sacct`, `qstat`) printing a byte that is not UTF-8 (a
+  Latin-1 job name, say) made the whole jobs list answer HTTP 500. Scheduler
+  tools now run the same way as `--schema`: no stdin, output decoded with
+  replacement, and the process group killed on timeout.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from typantic.web._subprocess import run_tool
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
@@ -57,13 +58,9 @@ class SchedulerError(RuntimeError):
 
 
 def _default_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - fixed scheduler tool names, no shell
-        argv,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=_TOOL_TIMEOUT_S,
-    )
+    # No stdin, output decoded with replacement (a Latin-1 job name from sacct
+    # must not raise), and a timeout kills the tool's whole process group.
+    return run_tool(argv, timeout=_TOOL_TIMEOUT_S)
 
 
 def _run_tool(run: Runner, argv: list[str]) -> subprocess.CompletedProcess[str]:
