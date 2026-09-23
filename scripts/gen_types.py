@@ -33,6 +33,7 @@ from typantic.web.models import (
     FsListing,
     History,
     JobImage,
+    JobImages,
     JobPage,
     JobRecord,
     JobStatus,
@@ -60,6 +61,7 @@ _MODELS: tuple[type[BaseModel], ...] = (
     FsEntry,
     FsListing,
     JobImage,
+    JobImages,
 )
 
 _HEADER = """\

@@ -236,3 +236,10 @@ class JobImage(BaseModel):
     name: str
     root: int
     url: str
+
+
+class JobImages(BaseModel):
+    """A job's output images, newest first, and whether more exist than listed."""
+
+    images: list[JobImage]
+    truncated: bool = False

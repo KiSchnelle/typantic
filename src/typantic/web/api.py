@@ -44,7 +44,7 @@ from typantic.web.models import (
     CommandMeta,
     FsListing,
     History,
-    JobImage,
+    JobImages,
     JobPage,
     JobRecord,
     JobStatus,
@@ -218,11 +218,11 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
         return record
 
     @app.get("/api/jobs/{job_id}/images", dependencies=guard)
-    def job_images(job_id: str) -> dict[str, list[JobImage]]:
+    def job_images(job_id: str) -> JobImages:
         record = launcher.get(job_id)
         if record is None:
             raise HTTPException(status_code=404, detail="No such job.")
-        return {"images": gallery.list_images(record, job_id)}
+        return gallery.list_images(record, job_id)
 
     @app.get("/api/jobs/{job_id}/image", dependencies=guard)
     def job_image(
@@ -243,10 +243,12 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
         if w is not None:
             thumb = gallery.thumbnail(target, w)
             if thumb is not None:
+                # The URL carries the source's mtime and the width, so a given
+                # URL always means the same thumbnail.
                 return FileResponse(
                     thumb,
                     media_type="image/webp",
-                    headers={"Cache-Control": "private, max-age=300"},
+                    headers={"Cache-Control": "private, max-age=86400, immutable"},
                 )
         return FileResponse(target)
 

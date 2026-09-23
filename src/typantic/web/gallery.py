@@ -13,10 +13,11 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote
 
 from typantic.web._paths import expand, is_dir, is_file, resolved, utf8
-from typantic.web.models import JobImage, JobRecord
+from typantic.web.models import JobImage, JobImages, JobRecord
 
 _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _IMAGE_LIMIT = 300  # most images returned to the UI
@@ -24,6 +25,9 @@ _IMAGE_SCAN_CAP = 20000  # most directory entries visited before giving up
 _IMAGE_MAX_DEPTH = 8  # deepest sub-folder walked
 
 _THUMB_CACHE = Path.home() / ".cache" / "typantic" / "thumbnails"
+# Part of every thumbnail's cache key: bump it when the rendering changes, so an
+# existing cache never serves thumbnails an older renderer produced.
+_THUMB_VERSION = "2"
 THUMB_MIN_WIDTH = 16
 THUMB_MAX_WIDTH = 1024
 
@@ -53,16 +57,23 @@ def artifact_roots(record: JobRecord) -> list[Path]:
     return roots
 
 
-def scan_images(root: Path) -> list[Path]:
+class ImageScan(NamedTuple):
+    """The images under one root, newest first, and whether a cap cut it short."""
+
+    images: list[tuple[int, Path]]  # (mtime_ns, path)
+    capped: bool
+
+
+def scan_images(root: Path) -> ImageScan:
     """Image files under ``root``, newest first, with a bounded, cycle-safe walk.
 
     Uses an explicit stack (not ``rglob``) so it can cap depth and total entries
     and skip symlinked directories — a symlink cycle or a huge output tree can
-    never stall or blow up the scan. Sorting by mtime keeps the most recent
-    images under the ``_IMAGE_LIMIT`` cap.
+    never stall or blow up the scan.
     """
-    candidates: list[tuple[float, Path]] = []
+    candidates: list[tuple[int, Path]] = []
     scanned = 0
+    capped = False
     stack: list[tuple[Path, int]] = [(root, 0)]
     while stack:
         directory, depth = stack.pop()
@@ -73,6 +84,7 @@ def scan_images(root: Path) -> list[Path]:
         for entry in entries:
             scanned += 1
             if scanned > _IMAGE_SCAN_CAP:
+                capped = True
                 stack.clear()
                 break
             if not utf8(entry.name):
@@ -85,31 +97,46 @@ def scan_images(root: Path) -> list[Path]:
                     entry.is_file(follow_symlinks=False)
                     and Path(entry.name).suffix.lower() in _IMAGE_EXTS
                 ):
-                    candidates.append((entry.stat().st_mtime, Path(entry.path)))
+                    candidates.append((entry.stat().st_mtime_ns, Path(entry.path)))
             except OSError:
                 continue
     candidates.sort(key=lambda item: item[0], reverse=True)
-    return [path for _, path in candidates]
+    return ImageScan(candidates, capped)
 
 
-def list_images(record: JobRecord, job_id: str) -> list[JobImage]:
-    """Find output images across a job's artifact roots (bounded), newest first."""
-    found: list[JobImage] = []
+def list_images(record: JobRecord, job_id: str) -> JobImages:
+    """A job's output images across its artifact roots: once each, newest first.
+
+    Every root is scanned before anything is cut, so a job folder full of
+    images cannot crowd out a newer ``output_folder``; an image reached from two
+    roots (an ``output_folder`` that contains the job folder) is listed once,
+    from the first. Each URL carries the file's mtime, so a rewritten image is
+    fetched afresh rather than served from the browser's cache.
+    """
+    found: list[tuple[int, int, Path, Path]] = []  # (mtime_ns, root index, root, path)
+    seen: set[Path] = set()
+    truncated = False
     for index, root in enumerate(artifact_roots(record)):
         if not is_dir(root):
             continue
-        for file in scan_images(root):
-            if len(found) >= _IMAGE_LIMIT:
-                return found
-            rel = file.relative_to(root).as_posix()
-            found.append(
-                JobImage(
-                    name=rel,
-                    root=index,
-                    url=f"/api/jobs/{job_id}/image?root={index}&path={quote(rel)}",
-                ),
-            )
-    return found
+        scan = scan_images(root)
+        truncated = truncated or scan.capped
+        for mtime_ns, path in scan.images:
+            if path not in seen:
+                seen.add(path)
+                found.append((mtime_ns, index, root, path))
+    found.sort(key=lambda item: item[0], reverse=True)  # stable: roots keep order
+    if len(found) > _IMAGE_LIMIT:
+        truncated = True
+    images = [
+        JobImage(
+            name=(rel := path.relative_to(root).as_posix()),
+            root=index,
+            url=f"/api/jobs/{job_id}/image?root={index}&path={quote(rel)}&v={mtime_ns}",
+        )
+        for mtime_ns, index, root, path in found[:_IMAGE_LIMIT]
+    ]
+    return JobImages(images=images, truncated=truncated)
 
 
 def resolve_artifact(record: JobRecord, root: int, path: str) -> Path | None:
@@ -137,10 +164,13 @@ def thumbnail(source: Path, width: int) -> Path | None:
     from PIL import Image, ImageOps  # noqa: PLC0415
 
     try:
-        mtime = source.stat().st_mtime_ns
+        stat = source.stat()
     except OSError:
         return None
-    key = hashlib.sha256(f"{source}|{mtime}|{width}".encode()).hexdigest()[:32]
+    # The size catches a rewrite a coarse (1 s) mtime cannot see; the version
+    # retires every cached thumbnail when the rendering below changes.
+    fingerprint = f"{_THUMB_VERSION}|{source}|{stat.st_mtime_ns}|{stat.st_size}|{width}"
+    key = hashlib.sha256(fingerprint.encode()).hexdigest()[:32]
     cached = _THUMB_CACHE / f"{key}.webp"
     if is_file(cached):
         return cached
@@ -157,6 +187,11 @@ def thumbnail(source: Path, width: int) -> Path | None:
                 # alpha and keeps the colour beneath it, turning a transparent PNG
                 # (black under a clear background) into a solid black tile.
                 upright = ImageOps.exif_transpose(img) or img
+                if upright.mode.startswith("I;16"):
+                    # A browser scales 16-bit samples down to 8 bits for display;
+                    # convert("RGB") clips them, so a detector image or a 12-bit
+                    # capture came out almost pure white.
+                    upright = upright.point(lambda value: value / 256)
                 if upright.mode in ("RGBA", "LA", "PA") or "transparency" in (
                     upright.info
                 ):

@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refused at decoration, naming the field and pointing at
     `config_file="only"`.
 
+- `GET /api/jobs/{id}/images` reports `truncated` when a job has more output
+  images than the gallery lists. The dashboard then shows the newest and says
+  so. (The response was already an object holding `images`; the field is
+  additive.)
+
 ### Changed
 
 - **Breaking: a flag you did not pass no longer reaches the model** — in either
@@ -193,6 +198,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A form field literally named `prefixItems` was renamed to `items`, because the
   schema rewrite ran on property names and data keywords too. It now touches
   only positions that hold schemas.
+- 16-bit grayscale images (detector frames, 12-bit captures) got almost
+  pure-white gallery thumbnails. Their samples were clipped to 8 bits rather
+  than scaled the way a browser displays the full-size image.
+- Gallery thumbnails were cached by path, mtime and width only. A renderer fix
+  (like the one above) kept serving old tiles, and an image rewritten in place
+  within one mtime tick kept its stale thumbnail. The cache key now includes a
+  renderer version and the file size. Image URLs also carry the file's mtime, so
+  a rewritten image (a `loss.png` updated while the job runs) no longer shows the
+  browser's cached copy.
+- The gallery listed an image twice when the command's `output_folder` contained
+  the job folder, halving the effective limit. It listed all of the job
+  folder's images before any from `output_folder`, so a busy job folder could
+  hide newer outputs entirely. Images are now gathered from every folder, listed
+  once each, and cut to the limit newest first.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

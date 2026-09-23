@@ -146,6 +146,8 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   const [request, setRequest] = useState<LaunchRequest | null>(null);
   const [log, setLog] = useState("");
   const [images, setImages] = useState<JobImage[]>([]);
+  // More images exist than the server listed (the newest are shown).
+  const [imagesTruncated, setImagesTruncated] = useState(false);
   // Bumped on restart so the log-tail and image effects re-run even though the
   // job id is unchanged.
   const [runEpoch, setRunEpoch] = useState(0);
@@ -279,7 +281,11 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
     let active = true;
     const load = () =>
       fetchImages(id)
-        .then((r) => active && setImages(r.images))
+        .then((r) => {
+          if (!active) return;
+          setImages(r.images);
+          setImagesTruncated(r.truncated);
+        })
         .catch(() => undefined);
     load();
     // One final load lands on the terminal transition; then stop polling.
@@ -447,7 +453,8 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
       {images.length > 0 && (
         <div className="mt-6">
           <h3 className="mb-2 text-sm font-semibold text-slate-300">
-            Output images ({images.length})
+            Output images ({images.length}
+            {imagesTruncated ? ", newest shown" : ""})
           </h3>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {images.map((img) => (

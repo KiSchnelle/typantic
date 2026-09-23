@@ -80,20 +80,21 @@ def test_scan_images_newest_first_recursive(tmp_path):
     _png(tmp_path / "old.png", mtime=100)
     _png(tmp_path / "sub" / "new.png", mtime=200)
     (tmp_path / "notes.txt").write_text("x")
-    found = gallery.scan_images(tmp_path)
-    assert [p.name for p in found] == ["new.png", "old.png"]
+    scan = gallery.scan_images(tmp_path)
+    assert [path.name for _, path in scan.images] == ["new.png", "old.png"]
+    assert not scan.capped
 
 
 def test_scan_images_missing_root(tmp_path):
-    assert gallery.scan_images(tmp_path / "nope") == []
+    assert gallery.scan_images(tmp_path / "nope").images == []
 
 
 def test_scan_images_depth_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(gallery, "_IMAGE_MAX_DEPTH", 0)
     _png(tmp_path / "top.png")
     _png(tmp_path / "deep" / "img.png")
-    found = gallery.scan_images(tmp_path)
-    assert [p.name for p in found] == ["top.png"]
+    scan = gallery.scan_images(tmp_path)
+    assert [path.name for _, path in scan.images] == ["top.png"]
 
 
 def test_scan_images_scan_cap(tmp_path, monkeypatch):
@@ -101,7 +102,9 @@ def test_scan_images_scan_cap(tmp_path, monkeypatch):
     _png(tmp_path / "a.png")
     _png(tmp_path / "b.png")
     _png(tmp_path / "c.png")
-    assert len(gallery.scan_images(tmp_path)) <= 1
+    scan = gallery.scan_images(tmp_path)
+    assert len(scan.images) <= 1
+    assert scan.capped
 
 
 def test_scan_images_entry_error_is_skipped(tmp_path, monkeypatch):
@@ -112,8 +115,8 @@ def test_scan_images_entry_error_is_skipped(tmp_path, monkeypatch):
         def is_dir(self, *, follow_symlinks=True):
             raise OSError
 
-    monkeypatch.setattr(gallery.os, "scandir", lambda _p: [BadEntry()])
-    assert gallery.scan_images(tmp_path) == []
+    monkeypatch.setattr(gallery.os, "scandir", lambda _p: iter([BadEntry()]))
+    assert gallery.scan_images(tmp_path).images == []
 
 
 # --- list_images ---
@@ -122,7 +125,7 @@ def test_scan_images_entry_error_is_skipped(tmp_path, monkeypatch):
 def test_list_images(tmp_path):
     _png(tmp_path / "a.png", mtime=100)
     record = _record(tmp_path)
-    images = gallery.list_images(record, "job1")
+    images = gallery.list_images(record, "job1").images
     assert images[0].name == "a.png"
     assert images[0].root == 0
     assert "job1/image?root=0&path=a.png" in images[0].url
@@ -134,7 +137,7 @@ def test_list_images_skips_non_dir_root(tmp_path):
     ghost = tmp_path / "ghost"  # external, absolute, never created -> a non-dir root
     _png(job / "a.png")
     record = _record(job, {"output_folder": str(ghost)})
-    images = gallery.list_images(record, "job1")
+    images = gallery.list_images(record, "job1").images
     assert [img.root for img in images] == [0]
 
 
@@ -142,7 +145,9 @@ def test_list_images_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(gallery, "_IMAGE_LIMIT", 1)
     _png(tmp_path / "a.png", mtime=100)
     _png(tmp_path / "b.png", mtime=200)
-    assert len(gallery.list_images(_record(tmp_path), "j")) == 1
+    listing = gallery.list_images(_record(tmp_path), "j")
+    assert len(listing.images) == 1
+    assert listing.truncated
 
 
 # --- resolve_artifact ---
@@ -242,7 +247,8 @@ def test_a_bad_output_folder_is_skipped_not_fatal(tmp_path, output):
     _png(job / "a.png")
     record = _record(job, {"output_folder": output})
     assert gallery.artifact_roots(record) == [job.resolve()]
-    assert [image.name for image in gallery.list_images(record, "j")] == ["a.png"]
+    listing = gallery.list_images(record, "j")
+    assert [image.name for image in listing.images] == ["a.png"]
 
 
 def test_an_undecodable_config_leaves_only_the_job_folder(tmp_path):
@@ -270,7 +276,8 @@ def test_the_gallery_survives_path_checks_that_raise(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "is_file", refuse)
     monkeypatch.setattr(Path, "is_dir", refuse)
-    assert [image.name for image in gallery.list_images(record, "j")] == ["a.png"]
+    listing = gallery.list_images(record, "j")
+    assert [image.name for image in listing.images] == ["a.png"]
     assert gallery.resolve_artifact(record, 0, "a.png") == (job / "a.png").resolve()
 
 
@@ -293,5 +300,90 @@ def test_a_name_that_is_not_utf8_is_skipped(tmp_path, monkeypatch):
     _png(job / "a.png")
     _png(job / "b.png")
     monkeypatch.setattr(gallery.os, "scandir", scandir)
-    names = [image.name for image in gallery.list_images(_record(job), "j")]
+    names = [image.name for image in gallery.list_images(_record(job), "j").images]
     assert names == ["a.png"]
+
+
+# --- the gallery lists each image once, newest first, and says when it stops ---
+
+
+def test_an_ancestor_output_folder_does_not_list_images_twice(tmp_path):
+    job = tmp_path / "jobs" / "job"
+    _png(job / "a.png")
+    record = _record(job, {"output_folder": str(tmp_path)})
+    names = [image.name for image in gallery.list_images(record, "j").images]
+    assert names == ["a.png"]
+
+
+def test_images_are_newest_first_across_folders(tmp_path):
+    job, out = tmp_path / "job", tmp_path / "out"
+    _png(job / "old.png", mtime=100)
+    _png(out / "new.png", mtime=200)
+    record = _record(job, {"output_folder": str(out)})
+    names = [image.name for image in gallery.list_images(record, "j").images]
+    assert names == ["new.png", "old.png"]
+
+
+def test_a_full_job_folder_does_not_hide_the_output_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(gallery, "_IMAGE_LIMIT", 1)
+    job, out = tmp_path / "job", tmp_path / "out"
+    _png(job / "old.png", mtime=100)
+    _png(out / "new.png", mtime=200)
+    listing = gallery.list_images(_record(job, {"output_folder": str(out)}), "j")
+    assert [image.name for image in listing.images] == ["new.png"]
+    assert listing.truncated
+
+
+def test_a_capped_scan_is_reported_as_truncated(tmp_path, monkeypatch):
+    monkeypatch.setattr(gallery, "_IMAGE_SCAN_CAP", 1)
+    _png(tmp_path / "a.png")
+    _png(tmp_path / "b.png")
+    assert gallery.list_images(_record(tmp_path), "j").truncated
+
+
+def test_an_image_url_changes_when_the_file_is_rewritten(tmp_path):
+    _png(tmp_path / "a.png", mtime=100)
+    first = gallery.list_images(_record(tmp_path), "j").images[0].url
+    _png(tmp_path / "a.png", mtime=200)
+    second = gallery.list_images(_record(tmp_path), "j").images[0].url
+    assert first != second
+    assert "&v=" in second
+
+
+# --- thumbnails ---
+
+
+def test_a_16_bit_grayscale_thumbnail_is_not_washed_out(tmp_path):
+    # A browser shows a 0..65535 ramp black to white; clipping it to 8 bits made
+    # the thumbnail almost pure white.
+    src = tmp_path / "ramp.png"
+    ramp = Image.new("I;16", (256, 16))
+    ramp.putdata([x * 257 for _ in range(16) for x in range(256)])
+    ramp.save(src)
+    thumb = gallery.thumbnail(src, 64)
+    assert thumb is not None
+    with Image.open(thumb) as img:
+        pixels = img.convert("L").get_flattened_data()
+        mean = sum(pixels) / len(pixels)
+    assert 100 < mean < 156
+
+
+def test_a_file_rewritten_with_the_same_mtime_gets_a_new_thumbnail(tmp_path):
+    # Coarse-mtime filesystems can leave the mtime unchanged across a rewrite; the
+    # size is part of the cache key too.
+    src = tmp_path / "a.png"
+    Image.new("RGB", (8, 8), "black").save(src)
+    stamp = src.stat().st_mtime_ns
+    first = gallery.thumbnail(src, 32)
+    Image.new("RGB", (64, 64), "white").save(src)
+    os.utime(src, ns=(stamp, stamp))
+    second = gallery.thumbnail(src, 32)
+    assert first != second
+
+
+def test_a_new_renderer_does_not_serve_old_thumbnails(tmp_path, monkeypatch):
+    src = tmp_path / "a.png"
+    _png(src)
+    first = gallery.thumbnail(src, 32)
+    monkeypatch.setattr(gallery, "_THUMB_VERSION", "next")
+    assert gallery.thumbnail(src, 32) != first

@@ -6,7 +6,7 @@ import type {
   CommandMeta,
   FsListing,
   History,
-  JobImage,
+  JobImages,
   JobPage,
   JobQuery,
   JobRecord,
@@ -93,7 +93,7 @@ export function createDir(path: string, name: string): Promise<FsListing> {
   return postJson("/api/fs/mkdir", { path, name });
 }
 
-export function fetchImages(id: string): Promise<{ images: JobImage[] }> {
+export function fetchImages(id: string): Promise<JobImages> {
   return getJson(`/api/jobs/${id}/images`);
 }
 

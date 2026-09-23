@@ -122,3 +122,8 @@ export interface JobImage {
   root: number;
   url: string;
 }
+
+export interface JobImages {
+  images: JobImage[];
+  truncated: boolean;
+}
