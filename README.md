@@ -613,6 +613,11 @@ click **Launch** — the dashboard writes your values to a config file, runs
   under the `typantic.web_backends` entry-point group.
 - **Projects & history** — file jobs under a project, then search, filter, sort,
   and page through the history (a stdlib SQLite index; nothing to set up).
+- **Where things live** — each job's folder (config, log, outputs) under
+  `~/.typantic/jobs`, or `$TYPANTIC_WEB_JOBS_DIR`. Gallery thumbnails are
+  cached in `~/.cache/typantic/thumbnails` (`$XDG_CACHE_HOME` is honoured, and
+  `$TYPANTIC_WEB_CACHE_DIR` overrides both); the server prunes thumbnails nobody
+  has opened in 30 days when it starts.
 
 ## Requirements
 

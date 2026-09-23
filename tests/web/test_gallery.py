@@ -1,5 +1,8 @@
+import io
 import json
 import os
+import stat
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +28,30 @@ def _record(job_dir, config=None):
         log_path=str(job_dir / "job.log"),
         created_at=datetime.now(UTC),
     )
+
+
+class _Listing:
+    """A stand-in for ``os.scandir``: usable in a with-block, read lazily."""
+
+    def __init__(self, entries):
+        self._entries = iter(entries)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._entries)
+
+
+def _open(data):
+    """A rendered thumbnail (bytes) opened as an image."""
+    return Image.open(io.BytesIO(data))
 
 
 def _png(path, mtime=None):
@@ -115,7 +142,7 @@ def test_scan_images_entry_error_is_skipped(tmp_path, monkeypatch):
         def is_dir(self, *, follow_symlinks=True):
             raise OSError
 
-    monkeypatch.setattr(gallery.os, "scandir", lambda _p: iter([BadEntry()]))
+    monkeypatch.setattr(gallery.os, "scandir", lambda _p: _Listing([BadEntry()]))
     assert gallery.scan_images(tmp_path).images == []
 
 
@@ -180,26 +207,27 @@ def test_resolve_artifact_missing_file(tmp_path):
 
 
 def test_thumbnail_creates_and_caches(tmp_path, monkeypatch):
-    monkeypatch.setattr(gallery, "_THUMB_CACHE", tmp_path / "cache")
     source = tmp_path / "a.png"
     _png(source)
     first = gallery.thumbnail(source, 32)
     assert first is not None
-    assert first.suffix == ".webp"
-    assert first.is_file()
-    second = gallery.thumbnail(source, 32)
-    assert second == first  # cache hit
+    assert _open(first).format == "WEBP"
+    assert [p.suffix for p in gallery._cache_dir().iterdir()] == [".webp"]
+
+    def no_render(*_args):
+        raise AssertionError("rendered again despite the cache")
+
+    monkeypatch.setattr(gallery, "_render", no_render)
+    assert gallery.thumbnail(source, 32) == first  # served from the cache
 
 
-def test_thumbnail_corrupt_image(tmp_path, monkeypatch):
-    monkeypatch.setattr(gallery, "_THUMB_CACHE", tmp_path / "cache")
+def test_thumbnail_corrupt_image(tmp_path):
     bad = tmp_path / "bad.png"
     bad.write_text("not an image")
     assert gallery.thumbnail(bad, 32) is None
 
 
-def test_thumbnail_missing_source(tmp_path, monkeypatch):
-    monkeypatch.setattr(gallery, "_THUMB_CACHE", tmp_path / "cache")
+def test_thumbnail_missing_source(tmp_path):
     assert gallery.thumbnail(tmp_path / "ghost.png", 32) is None
 
 
@@ -214,7 +242,7 @@ def test_transparent_png_thumbnails_onto_white_not_black(tmp_path):
 
     thumb = gallery.thumbnail(src, 32)
     assert thumb is not None
-    assert Image.open(thumb).convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+    assert _open(thumb).convert("RGB").getpixel((0, 0)) == (255, 255, 255)
 
 
 def test_thumbnail_applies_exif_orientation(tmp_path):
@@ -229,13 +257,13 @@ def test_thumbnail_applies_exif_orientation(tmp_path):
 
     thumb = gallery.thumbnail(src, 64)
     assert thumb is not None
-    w, h = Image.open(thumb).size
+    w, h = _open(thumb).size
     assert h > w  # transposed; without exif_transpose this would still be wide
 
 
 def test_tests_never_touch_the_real_thumbnail_cache():
     real = Path.home() / ".cache" / "typantic" / "thumbnails"
-    assert real != gallery._THUMB_CACHE
+    assert gallery._cache_dir() != real
 
 
 # --- a bad path never takes the gallery down ---
@@ -294,7 +322,9 @@ def test_a_name_that_is_not_utf8_is_skipped(tmp_path, monkeypatch):
 
     def scandir(directory):
         entries = list(real_scandir(directory))
-        return [Named(e, "caf\udce9.png") if e.name == "b.png" else e for e in entries]
+        return _Listing(
+            Named(e, "caf\udce9.png") if e.name == "b.png" else e for e in entries
+        )
 
     job = tmp_path / "job"
     _png(job / "a.png")
@@ -362,7 +392,7 @@ def test_a_16_bit_grayscale_thumbnail_is_not_washed_out(tmp_path):
     ramp.save(src)
     thumb = gallery.thumbnail(src, 64)
     assert thumb is not None
-    with Image.open(thumb) as img:
+    with _open(thumb) as img:
         pixels = img.convert("L").get_flattened_data()
         mean = sum(pixels) / len(pixels)
     assert 100 < mean < 156
@@ -384,6 +414,235 @@ def test_a_file_rewritten_with_the_same_mtime_gets_a_new_thumbnail(tmp_path):
 def test_a_new_renderer_does_not_serve_old_thumbnails(tmp_path, monkeypatch):
     src = tmp_path / "a.png"
     _png(src)
-    first = gallery.thumbnail(src, 32)
+    gallery.thumbnail(src, 32)
+    (cached,) = gallery._cache_dir().iterdir()
+    cached.write_bytes(b"rendered by the old renderer")
+    assert gallery.thumbnail(src, 32) == b"rendered by the old renderer"
     monkeypatch.setattr(gallery, "_THUMB_VERSION", "next")
-    assert gallery.thumbnail(src, 32) != first
+    assert gallery.thumbnail(src, 32) != b"rendered by the old renderer"
+
+
+def test_a_palette_image_is_shrunk_smoothly(tmp_path):
+    # Pillow shrinks a palette image nearest-neighbour, which turns a fine
+    # pattern into noise; the browser's view of it averages the two colours.
+    src = tmp_path / "checker.png"
+    img = Image.new("P", (64, 64))
+    img.putpalette([255, 0, 0, 0, 0, 255])
+    img.putdata([(x + y) % 2 for y in range(64) for x in range(64)])
+    img.save(src)
+    with Image.open(src) as check:
+        assert check.mode == "P"
+    thumb = gallery.thumbnail(src, 16)
+    assert thumb is not None
+    red, _, blue = _open(thumb).convert("RGB").getpixel((8, 8))
+    assert 64 < red < 192
+    assert 64 < blue < 192
+
+
+def test_a_colour_keyed_png_leaves_no_fringe(tmp_path):
+    # A colour key (PNG tRNS on an RGB image) stops matching once pixels are
+    # blended, so it must become transparency before the image is shrunk:
+    # otherwise the keyed black bleeds into its neighbours as a dark fringe.
+    src = tmp_path / "keyed.png"
+    img = Image.new("RGB", (64, 64), (0, 0, 0))
+    img.paste((255, 0, 0), (32, 0, 64, 64))
+    img.save(src, transparency=(0, 0, 0))
+    thumb = gallery.thumbnail(src, 16)
+    assert thumb is not None
+    darkest = min(_open(thumb).convert("L").get_flattened_data())
+    assert darkest > 60  # red over white is ~76 in L; black would be ~0
+
+
+# --- thumbnails: bounded work, and an answer whatever the cache does ---
+
+
+def test_an_image_over_the_pixel_limit_is_not_decoded(tmp_path, monkeypatch):
+    # Pillow refuses only twice its limit at open and decodes anything below
+    # that in full -- a 150 MP plot is a 600 MB decode for one tile.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 3000)
+    src = tmp_path / "huge.png"
+    Image.new("RGB", (64, 64)).save(src)  # 4096 px: over the limit, under twice it
+    with pytest.warns(Image.DecompressionBombWarning):
+        assert gallery.thumbnail(src, 32) is None
+
+
+def test_a_large_jpeg_is_measured_after_draft(tmp_path, monkeypatch):
+    # A JPEG decodes at a fraction of its size, so the limit applies to that.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 3000)
+    src = tmp_path / "huge.jpg"
+    Image.new("RGB", (64, 64), (200, 30, 30)).save(src)
+    with pytest.warns(Image.DecompressionBombWarning):
+        thumb = gallery.thumbnail(src, 16)
+    assert thumb is not None
+    assert _open(thumb).size == (16, 16)
+
+
+def test_a_missing_webp_encoder_is_no_thumbnail(tmp_path, monkeypatch):
+    # A Pillow built without libwebp raises KeyError on save.
+    Image.init()  # registers every plugin, so the removal below sticks
+    monkeypatch.delitem(Image.SAVE, "WEBP")
+    src = tmp_path / "a.png"
+    _png(src)
+    assert gallery.thumbnail(src, 32) is None
+
+
+def test_an_unwritable_cache_still_returns_the_thumbnail(tmp_path, monkeypatch):
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    monkeypatch.setenv("TYPANTIC_WEB_CACHE_DIR", str(blocker))
+    src = tmp_path / "a.png"
+    _png(src)
+    thumb = gallery.thumbnail(src, 32)
+    assert thumb is not None
+    assert _open(thumb).format == "WEBP"
+
+
+def test_a_failed_cache_write_leaves_no_temporary_file(tmp_path, monkeypatch):
+    src = tmp_path / "a.png"
+    _png(src)
+
+    def refuse(*_args):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    assert gallery.thumbnail(src, 32) is not None
+    assert list(gallery._cache_dir().iterdir()) == []
+
+
+def test_the_thumbnail_cache_is_private(tmp_path):
+    src = tmp_path / "a.png"
+    _png(src)
+    gallery.thumbnail(src, 32)
+    cache = gallery._cache_dir()
+    assert stat.S_IMODE(cache.stat().st_mode) == 0o700
+    (cached,) = cache.iterdir()
+    assert stat.S_IMODE(cached.stat().st_mode) == 0o600
+
+
+# --- where the thumbnail cache lives ---
+
+
+def test_the_cache_follows_typantic_web_cache_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPANTIC_WEB_CACHE_DIR", str(tmp_path / "c"))
+    src = tmp_path / "a.png"
+    _png(src)
+    gallery.thumbnail(src, 32)
+    assert gallery._cache_dir() == tmp_path / "c" / "thumbnails"
+    assert len(list((tmp_path / "c" / "thumbnails").iterdir())) == 1
+
+
+def test_the_cache_dir_expands_a_tilde(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TYPANTIC_WEB_CACHE_DIR", "~/c")
+    assert gallery._cache_dir() == tmp_path / "c" / "thumbnails"
+
+
+def test_the_cache_follows_xdg_cache_home(tmp_path, monkeypatch):
+    monkeypatch.delenv("TYPANTIC_WEB_CACHE_DIR")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert gallery._cache_dir() == tmp_path / "xdg" / "typantic" / "thumbnails"
+
+
+@pytest.mark.parametrize("xdg", [None, "", "relative/cache"])
+def test_the_cache_defaults_to_dot_cache(tmp_path, monkeypatch, xdg):
+    # The XDG spec: an unset, empty or relative XDG_CACHE_HOME means ~/.cache.
+    monkeypatch.delenv("TYPANTIC_WEB_CACHE_DIR")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    if xdg is None:
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    else:
+        monkeypatch.setenv("XDG_CACHE_HOME", xdg)
+    assert gallery._cache_dir() == tmp_path / ".cache" / "typantic" / "thumbnails"
+
+
+# --- pruning thumbnails nobody asked for in a month ---
+
+
+def _age(path, days):
+    stamp = time.time() - days * 86400
+    os.utime(path, (stamp, stamp))
+
+
+def test_prune_removes_thumbnails_unused_for_thirty_days():
+    cache = gallery._cache_dir()
+    cache.mkdir(parents=True)
+    (cache / "old.webp").write_bytes(b"x")
+    (cache / "tmpabc.tmp").write_bytes(b"x")  # left behind by a killed render
+    (cache / "new.webp").write_bytes(b"x")
+    (cache / "folder").mkdir()
+    _age(cache / "old.webp", 31)
+    _age(cache / "tmpabc.tmp", 31)
+    _age(cache / "folder", 31)
+    assert gallery.prune_thumbnails() == 2
+    assert sorted(p.name for p in cache.iterdir()) == ["folder", "new.webp"]
+
+
+def test_a_thumbnail_in_use_survives_the_prune(tmp_path):
+    src = tmp_path / "a.png"
+    _png(src)
+    gallery.thumbnail(src, 32)
+    (cached,) = gallery._cache_dir().iterdir()
+    _age(cached, 40)
+    gallery.thumbnail(src, 32)  # served from the cache: that counts as use
+    assert gallery.prune_thumbnails() == 0
+    assert cached.exists()
+
+
+def test_prune_without_a_cache_is_a_no_op():
+    assert gallery.prune_thumbnails() == 0
+
+
+def test_prune_skips_what_it_cannot_remove(monkeypatch):
+    cache = gallery._cache_dir()
+    cache.mkdir(parents=True)
+    (cache / "old.webp").write_bytes(b"x")
+    _age(cache / "old.webp", 31)
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(gallery.os, "unlink", refuse)
+    assert gallery.prune_thumbnails() == 0
+
+
+# --- scans read lazily and breadth first ---
+
+
+def test_a_scan_stops_reading_at_its_cap(tmp_path, monkeypatch):
+    # A folder with millions of entries must not be read into memory whole
+    # before the cap applies.
+    monkeypatch.setattr(gallery, "_IMAGE_SCAN_CAP", 5)
+
+    class Entry:
+        def __init__(self, index):
+            self.name = f"{index}.txt"
+            self.path = str(tmp_path / self.name)
+
+        def is_dir(self, *, follow_symlinks=True):
+            return False
+
+        def is_file(self, *, follow_symlinks=True):
+            return True
+
+    def endless():
+        for index in range(50):
+            yield Entry(index)
+        raise AssertionError("read past the scan cap")
+
+    monkeypatch.setattr(gallery.os, "scandir", lambda _p: _Listing(endless()))
+    assert gallery.scan_images(tmp_path).capped
+
+
+def test_a_capped_scan_still_sees_every_shallow_folder(tmp_path, monkeypatch):
+    # Depth first, the first deep subtree used the whole budget and a sibling
+    # folder's images were never reached.
+    monkeypatch.setattr(gallery, "_IMAGE_SCAN_CAP", 12)
+    for side in ("x", "y"):
+        _png(tmp_path / side / f"{side}.png")
+        deep = tmp_path / side / "deep"
+        deep.mkdir()
+        for index in range(20):
+            (deep / f"{index}.txt").write_text("x")
+    scan = gallery.scan_images(tmp_path)
+    assert scan.capped
+    assert sorted(path.name for _, path in scan.images) == ["x.png", "y.png"]

@@ -6,12 +6,20 @@ directory, so a command's default relative output lands there) are shown as a
 thumbnail grid. An absolute ``output_folder`` in the submitted config, if the
 command has one, is scanned too. Thumbnails are generated with Pillow and cached
 on disk; the walk is bounded and cycle-safe.
+
+The thumbnail cache lives in ``$TYPANTIC_WEB_CACHE_DIR/thumbnails``, else in
+``$XDG_CACHE_HOME/typantic/thumbnails`` (``~/.cache`` when that is unset), and
+the server prunes thumbnails nobody has asked for in 30 days when it starts.
 """
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import tempfile
+import time
+from collections import deque
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
@@ -24,7 +32,8 @@ _IMAGE_LIMIT = 300  # most images returned to the UI
 _IMAGE_SCAN_CAP = 20000  # most directory entries visited before giving up
 _IMAGE_MAX_DEPTH = 8  # deepest sub-folder walked
 
-_THUMB_CACHE = Path.home() / ".cache" / "typantic" / "thumbnails"
+_ENV_CACHE_DIR = "TYPANTIC_WEB_CACHE_DIR"
+_THUMB_MAX_AGE_DAYS = 30  # a thumbnail unused this long is pruned at server start
 # Part of every thumbnail's cache key: bump it when the rendering changes, so an
 # existing cache never serves thumbnails an older renderer produced.
 _THUMB_VERSION = "2"
@@ -67,41 +76,51 @@ class ImageScan(NamedTuple):
 def scan_images(root: Path) -> ImageScan:
     """Image files under ``root``, newest first, with a bounded, cycle-safe walk.
 
-    Uses an explicit stack (not ``rglob``) so it can cap depth and total entries
-    and skip symlinked directories — a symlink cycle or a huge output tree can
-    never stall or blow up the scan.
+    Walks breadth first with an explicit queue (not ``rglob``), so it can cap
+    depth and total entries and skip symlinked directories: a symlink cycle or a
+    huge output tree can never stall or blow up the scan. Each folder is read
+    lazily, so the cap stops the reading too, and breadth first means a deep
+    subtree cannot use up the budget before a shallow sibling folder is seen.
     """
-    candidates: list[tuple[int, Path]] = []
-    scanned = 0
-    capped = False
-    stack: list[tuple[Path, int]] = [(root, 0)]
-    while stack:
-        directory, depth = stack.pop()
+    images: list[tuple[int, Path]] = []
+    budget = _IMAGE_SCAN_CAP
+    queue: deque[tuple[Path, int]] = deque([(root, 0)])
+    while queue:
+        directory, depth = queue.popleft()
         try:
-            entries = list(os.scandir(directory))
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if budget == 0:
+                        return ImageScan(_newest_first(images), capped=True)
+                    budget -= 1
+                    _visit(entry, depth, images, queue)
         except OSError:
             continue
-        for entry in entries:
-            scanned += 1
-            if scanned > _IMAGE_SCAN_CAP:
-                capped = True
-                stack.clear()
-                break
-            if not utf8(entry.name):
-                continue  # its path cannot be put in a URL
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    if depth < _IMAGE_MAX_DEPTH:
-                        stack.append((Path(entry.path), depth + 1))
-                elif (
-                    entry.is_file(follow_symlinks=False)
-                    and Path(entry.name).suffix.lower() in _IMAGE_EXTS
-                ):
-                    candidates.append((entry.stat().st_mtime_ns, Path(entry.path)))
-            except OSError:
-                continue
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return ImageScan(candidates, capped)
+    return ImageScan(_newest_first(images), capped=False)
+
+
+def _visit(
+    entry: os.DirEntry[str],
+    depth: int,
+    images: list[tuple[int, Path]],
+    queue: deque[tuple[Path, int]],
+) -> None:
+    """Collect ``entry`` if it is an image, or queue it if it is a folder."""
+    if not utf8(entry.name):
+        return  # its path cannot be put in a URL
+    with contextlib.suppress(OSError):
+        if entry.is_dir(follow_symlinks=False):
+            if depth < _IMAGE_MAX_DEPTH:
+                queue.append((Path(entry.path), depth + 1))
+        elif (
+            entry.is_file(follow_symlinks=False)
+            and Path(entry.name).suffix.lower() in _IMAGE_EXTS
+        ):
+            images.append((entry.stat().st_mtime_ns, Path(entry.path)))
+
+
+def _newest_first(images: list[tuple[int, Path]]) -> list[tuple[int, Path]]:
+    return sorted(images, key=lambda item: item[0], reverse=True)
 
 
 def list_images(record: JobRecord, job_id: str) -> JobImages:
@@ -153,16 +172,15 @@ def resolve_artifact(record: JobRecord, root: int, path: str) -> Path | None:
     return target
 
 
-def thumbnail(source: Path, width: int) -> Path | None:
-    """Return a cached, downscaled WebP copy of ``source`` (longest edge ``width``).
+def thumbnail(source: Path, width: int) -> bytes | None:
+    """A downscaled WebP of ``source`` (longest edge ``width``), cached on disk.
 
-    Cached by the source's path + mtime + width, so each thumbnail is built once
-    and reused. Returns ``None`` if Pillow can't render the image or the cache
-    can't be written, so the caller falls back to the full-resolution original.
+    Cached by the source's path, mtime, size and width, so each thumbnail is
+    rendered once; a cache that cannot be written costs a re-render next time,
+    not the thumbnail. ``None`` means the image cannot be thumbnailed (Pillow
+    cannot read it, or it is too large to decode). The caller must not fall back
+    to the original, which may be hundreds of megabytes.
     """
-    # Deferred so importing typantic.web doesn't pull in Pillow until needed.
-    from PIL import Image, ImageOps  # noqa: PLC0415
-
     try:
         stat = source.stat()
     except OSError:
@@ -171,42 +189,123 @@ def thumbnail(source: Path, width: int) -> Path | None:
     # retires every cached thumbnail when the rendering below changes.
     fingerprint = f"{_THUMB_VERSION}|{source}|{stat.st_mtime_ns}|{stat.st_size}|{width}"
     key = hashlib.sha256(fingerprint.encode()).hexdigest()[:32]
-    cached = _THUMB_CACHE / f"{key}.webp"
-    if is_file(cached):
-        return cached
+    cached = _cache_dir() / f"{key}.webp"
+    data = _read_cached(cached)
+    if data is None:
+        data = _render(source, width)
+        if data is not None:
+            _write_cached(cached, data)
+    return data
+
+
+def _cache_dir() -> Path:
+    """Where thumbnails are cached, from the environment at the time of asking."""
+    override = os.environ.get(_ENV_CACHE_DIR)
+    if override:
+        return (expand(override) or Path(override)) / "thumbnails"
+    # The XDG spec: an unset, empty or relative XDG_CACHE_HOME means ~/.cache.
+    xdg = os.environ.get("XDG_CACHE_HOME", "")
+    base = Path(xdg) if os.path.isabs(xdg) else Path.home() / ".cache"  # noqa: PTH117
+    return base / "typantic" / "thumbnails"
+
+
+def _read_cached(path: Path) -> bytes | None:
     try:
-        _THUMB_CACHE.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=_THUMB_CACHE, suffix=".webp")
-        os.close(fd)
-        try:
-            with Image.open(source) as img:
-                img.draft("RGB", (width, width))
-                # A browser shows the full-size image already rotated by its EXIF
-                # tag and composited over the page. Match both, or the thumbnail
-                # disagrees with the image it links to: convert("RGB") alone drops
-                # alpha and keeps the colour beneath it, turning a transparent PNG
-                # (black under a clear background) into a solid black tile.
-                upright = ImageOps.exif_transpose(img) or img
-                if upright.mode.startswith("I;16"):
-                    # A browser scales 16-bit samples down to 8 bits for display;
-                    # convert("RGB") clips them, so a detector image or a 12-bit
-                    # capture came out almost pure white.
-                    upright = upright.point(lambda value: value / 256)
-                if upright.mode in ("RGBA", "LA", "PA") or "transparency" in (
-                    upright.info
-                ):
-                    canvas = Image.new("RGBA", upright.size, (255, 255, 255, 255))
-                    rgb = Image.alpha_composite(
-                        canvas,
-                        upright.convert("RGBA"),
-                    ).convert("RGB")
-                else:
-                    rgb = upright.convert("RGB")
-                rgb.thumbnail((width, width), Image.Resampling.LANCZOS)
-                rgb.save(tmp, "WEBP", quality=80, method=4)
-            Path(tmp).replace(cached)
-        finally:
-            Path(tmp).unlink(missing_ok=True)
-    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        data = path.read_bytes()
+    except OSError:
         return None
-    return cached
+    with contextlib.suppress(OSError):
+        os.utime(path)  # in use: keeps it out of the next prune
+    return data
+
+
+def _write_cached(path: Path, data: bytes) -> None:
+    """Store a rendered thumbnail atomically, or skip it if the cache is unwritable."""
+    try:
+        # Thumbnails show a job's outputs, so the cache is as private as the
+        # job store: the folder is 0700, and mkstemp creates each file 0600.
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    except OSError:
+        return
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+        Path(tmp).replace(path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            Path(tmp).unlink()
+
+
+def _render(source: Path, width: int) -> bytes | None:
+    """``source`` as a WebP at most ``width`` px on its longest edge, or ``None``.
+
+    The image is shrunk right after decoding, so rotating and compositing work
+    on the small copy rather than on the full-size image.
+    """
+    # Deferred so importing typantic.web doesn't pull in Pillow until needed.
+    from PIL import Image, ImageOps  # noqa: PLC0415
+
+    try:
+        with Image.open(source) as img:
+            # A JPEG decodes at a fraction of its size; ask for twice the
+            # thumbnail, which is what Image.thumbnail() itself would ask for.
+            img.draft("RGB", (2 * width, 2 * width))
+            limit = Image.MAX_IMAGE_PIXELS
+            if limit is not None and img.width * img.height > limit:
+                # Pillow refuses only twice its limit, and decodes anything
+                # below that in full: 150 MP is a 600 MB decode for one tile.
+                return None
+            small: Image.Image = img
+            if img.mode.startswith("I;16"):
+                # A browser scales 16-bit samples down to 8 bits for display;
+                # convert("L") clips them, so a detector image or a 12-bit
+                # capture came out almost pure white. Pillow cannot shrink I;16.
+                small = img.point(lambda value: value / 256).convert("L")
+            elif img.mode in ("1", "P", "PA") or "transparency" in img.info:
+                # Pillow shrinks palette and bilevel images nearest-neighbour,
+                # and a colour key (PNG tRNS) stops matching once pixels blend.
+                alpha = img.mode == "PA" or "transparency" in img.info
+                small = img.convert("RGBA" if alpha else "RGB")
+            small.thumbnail((width, width), Image.Resampling.LANCZOS)
+            # A browser shows the full-size image already rotated by its EXIF
+            # tag and composited over the page. Match both, or the thumbnail
+            # disagrees with the image it links to: convert("RGB") alone drops
+            # alpha and keeps the colour beneath it, turning a transparent PNG
+            # (black under a clear background) into a solid black tile.
+            ImageOps.exif_transpose(small, in_place=True)
+            if small.mode in ("RGBA", "LA"):
+                white = Image.new("RGBA", small.size, (255, 255, 255, 255))
+                small = Image.alpha_composite(white, small.convert("RGBA"))
+            out = io.BytesIO()
+            small.convert("RGB").save(out, "WEBP", quality=80, method=4)
+    except (KeyError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        # KeyError: this Pillow was built without a WebP encoder.
+        return None
+    return out.getvalue()
+
+
+def prune_thumbnails(max_age_days: float = _THUMB_MAX_AGE_DAYS) -> int:
+    """Delete cached thumbnails nobody has asked for in ``max_age_days``.
+
+    Serving a thumbnail from the cache refreshes its mtime, so what is pruned is
+    what nobody looked at. Anything that cannot be read or removed is left.
+
+    Returns:
+        How many files were removed.
+    """
+    cutoff = time.time() - max_age_days * 86400
+    removed = 0
+    with contextlib.suppress(OSError), os.scandir(_cache_dir()) as entries:
+        for entry in entries:
+            try:
+                stale = (
+                    entry.is_file(follow_symlinks=False)
+                    and entry.stat(follow_symlinks=False).st_mtime < cutoff
+                )
+                if stale:
+                    os.unlink(entry.path)  # noqa: PTH108 - a DirEntry's path
+                    removed += 1
+            except OSError:
+                continue
+    return removed

@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refused at decoration, naming the field and pointing at
     `config_file="only"`.
 
+- The dashboard's thumbnail cache follows `$XDG_CACHE_HOME`, and
+  `$TYPANTIC_WEB_CACHE_DIR` moves it anywhere (it was always
+  `~/.cache/typantic/thumbnails`). It no longer grows forever: the server prunes
+  thumbnails nobody has opened in 30 days when it starts. The cache folder is
+  now private (0700), like the files in it.
 - `GET /api/jobs/{id}/images` reports `truncated` when a job has more output
   images than the gallery lists. The dashboard then shows the newest and says
   so. (The response was already an object holding `images`; the field is
@@ -72,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path as you spelled it rather than resolving symlinks: the path you pick is
   what the job's config receives, and a resolved one (`/scratch/…` turned into
   `/lustre/…`) may not exist where the job runs.
+- A gallery thumbnail that cannot be rendered now answers HTTP 415, and the
+  tile shows the file's name. It used to stream the full-size original into a
+  384 px tile, which for a detector frame or a large plot meant hundreds of
+  megabytes per tile. Clicking the tile still opens the original.
 - A factory-defaulted field's flag no longer hands Click the factory. Pydantic
   runs it once per run, so it no longer also runs for `--help`, `--schema` and
   `--generate-config`, or twice per `config_file=True` run.
@@ -212,6 +221,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folder's images before any from `output_folder`, so a busy job folder could
   hide newer outputs entirely. Images are now gathered from every folder, listed
   once each, and cut to the limit newest first.
+- Rendering one thumbnail of a large image made up to five full-size copies
+  of it (rotated, composited, converted) before shrinking it. It
+  now shrinks straight after decoding. An image larger than Pillow's
+  decompression-bomb limit (89.5 megapixels) is no longer decoded at all:
+  Pillow only warns below twice that limit, and decoded it in full. A large
+  JPEG, which decodes at a fraction of its size, still gets its thumbnail.
+- A thumbnail cache that could not be written (a full disk, a read-only home)
+  sent every tile the full-size original. The rendered thumbnail is now served
+  from memory. A Pillow built without WebP support no longer answers HTTP 500.
+- The gallery read each folder's whole listing before its entry cap applied,
+  and walked depth first, so one deep subtree could use up the budget before a
+  sibling folder was looked at. It now reads lazily and breadth first. The path
+  picker likewise stops reading a folder after 200 000 entries and says the
+  listing is cut, instead of reading millions of names to show the first page.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

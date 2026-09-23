@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import pathlib
 import subprocess
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from starlette.websockets import WebSocketDisconnect
 
-from typantic.web import _paths, gallery
+from typantic.web import _paths
 from typantic.web import api as api_mod
 from typantic.web import filesystem as fs_mod
 from typantic.web import launcher as launcher_mod
@@ -299,8 +300,7 @@ def test_restart_missing(env):
 # --- images ---
 
 
-def test_job_images_and_image(env, monkeypatch):
-    monkeypatch.setattr(gallery, "_THUMB_CACHE", env.store.root / "cache")
+def test_job_images_and_image(env):
     record = _launch(env)
     Image.new("RGB", (8, 8)).save(env.store.job_dir(record["id"]) / "out.png")
 
@@ -311,15 +311,18 @@ def test_job_images_and_image(env, monkeypatch):
     assert env.client.get(url, headers=AUTH).status_code == 200
     thumb = env.client.get(url + "&w=32", headers=AUTH)
     assert thumb.headers["content-type"] == "image/webp"
+    assert thumb.headers["cache-control"] == "private, max-age=86400, immutable"
+    assert Image.open(io.BytesIO(thumb.content)).size == (8, 8)
 
 
-def test_job_image_thumbnail_falls_back_to_full(env, monkeypatch):
-    monkeypatch.setattr(gallery, "_THUMB_CACHE", env.store.root / "cache")
+def test_a_thumbnail_that_cannot_be_rendered_is_415_not_the_original(env):
+    # The original may be hundreds of megabytes; streaming it into a 384 px
+    # tile is what the thumbnail exists to avoid.
     record = _launch(env)
-    # a .png that Pillow can't decode -> thumbnail None -> serve the original
     (env.store.job_dir(record["id"]) / "broken.png").write_text("not an image")
-    url = f"/api/jobs/{record['id']}/image?root=0&path=broken.png&w=32"
-    assert env.client.get(url, headers=AUTH).status_code == 200
+    url = f"/api/jobs/{record['id']}/image?root=0&path=broken.png"
+    assert env.client.get(url + "&w=32", headers=AUTH).status_code == 415
+    assert env.client.get(url, headers=AUTH).status_code == 200  # the file itself
 
 
 def test_job_images_missing_job(env):
@@ -701,3 +704,35 @@ def test_non_ascii_token_is_rejected_not_a_server_error(env):
     # ordinary 401 into an unhandled 500.
     resp = env.client.get("/api/commands", params={"token": "pässwörd"})
     assert resp.status_code == 401
+
+
+def test_browse_stops_reading_a_huge_directory(env, tmp_path, monkeypatch):
+    # A folder with millions of entries must not be read into memory whole to
+    # show the first page; the total then counts what was read.
+    monkeypatch.setattr(fs_mod, "_BROWSE_READ_CAP", 5)
+    monkeypatch.setattr(fs_mod, "_BROWSE_ENTRY_CAP", 3)
+
+    class Entry:
+        def __init__(self, index):
+            self.name = f"f{index}"
+
+        def is_dir(self):
+            return False
+
+    def endless():
+        for index in range(50):
+            yield Entry(index)
+        raise AssertionError("read past the browse cap")
+
+    class Scan:
+        def __enter__(self):
+            return endless()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(fs_mod.os, "scandir", lambda _p: Scan())
+    data = env.client.get(f"/api/fs?path={tmp_path}", headers=AUTH).json()
+    assert data["total"] == 5
+    assert data["truncated"]
+    assert len(data["entries"]) == 3

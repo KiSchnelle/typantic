@@ -12,6 +12,7 @@ import socket
 import subprocess
 from urllib.parse import quote
 
+from typantic.web import gallery
 from typantic.web.api import make_api
 from typantic.web.launcher import Launcher
 
@@ -171,8 +172,12 @@ def serve(
     title: str = "typantic web",
     log_level: str = "info",
 ) -> None:
-    """Run the dashboard server in the foreground (blocks until interrupted)."""
+    """Run the dashboard server in the foreground (blocks until interrupted).
+
+    Thumbnails nobody has asked for in 30 days are pruned from the cache first.
+    """
     import uvicorn  # noqa: PLC0415 - deferred so --help/--version stay light
 
+    gallery.prune_thumbnails()
     app = make_api(launcher, token=token, title=title)
     uvicorn.run(app, host=host, port=port, log_level=log_level)

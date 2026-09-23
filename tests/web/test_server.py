@@ -1,6 +1,9 @@
+import os
+import time
+
 import uvicorn
 
-from typantic.web import server
+from typantic.web import gallery, server
 from typantic.web.launcher import Launcher
 from typantic.web.store import JobStore
 
@@ -143,3 +146,16 @@ def test_serve_runs_uvicorn(tmp_path, monkeypatch):
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 9000
     assert captured["app"] is not None
+
+
+def test_serve_prunes_the_thumbnail_cache_first(tmp_path, monkeypatch):
+    stale = gallery._cache_dir() / "stale.webp"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"x")
+    old = time.time() - 31 * 86400
+    os.utime(stale, (old, old))
+    monkeypatch.setattr(uvicorn, "run", lambda _app, **_kwargs: None)
+    server.serve(
+        Launcher(JobStore(tmp_path / "jobs")), host="127.0.0.1", port=9000, token=None
+    )
+    assert not stale.exists()

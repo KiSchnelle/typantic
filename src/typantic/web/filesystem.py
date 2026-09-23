@@ -21,6 +21,9 @@ class FileSystemError(Exception):
 _BROWSE_ENTRY_CAP = 50000
 """Payload ceiling for one directory listing (the picker virtualises the list)."""
 
+_BROWSE_READ_CAP = 200000
+"""Most entries read from one directory; past it, a listing's ``total`` is a floor."""
+
 # Reserved / traversal-prone names, plus separators, that must never be a single
 # new-folder component. Rejecting these keeps ``parent / name`` inside ``parent``.
 _INVALID_DIR_NAMES = frozenset({"", ".", ".."})
@@ -50,9 +53,15 @@ def browse_directory(path: str | None) -> FsListing:
 
     listed: list[tuple[bool, str]] = []
     error: str | None = None
+    unread = False
     try:
         with os.scandir(base) as scan:
-            for entry in scan:
+            for count, entry in enumerate(scan):
+                if count == _BROWSE_READ_CAP:
+                    # A folder of millions of files is not read whole to show
+                    # the first page; the picker says the list is cut.
+                    unread = True
+                    break
                 if not utf8(entry.name):
                     continue  # cannot be listed, picked, or put in a URL
                 try:
@@ -74,7 +83,7 @@ def browse_directory(path: str | None) -> FsListing:
         entries=entries,
         error=error,
         total=len(listed),
-        truncated=len(listed) > _BROWSE_ENTRY_CAP,
+        truncated=unread or len(listed) > _BROWSE_ENTRY_CAP,
     )
 
 

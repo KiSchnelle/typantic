@@ -24,7 +24,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -233,24 +233,27 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
             int | None,
             Query(ge=gallery.THUMB_MIN_WIDTH, le=gallery.THUMB_MAX_WIDTH),
         ] = None,
-    ) -> FileResponse:
+    ) -> Response:
         record = launcher.get(job_id)
         if record is None:
             raise HTTPException(status_code=404, detail="No such job.")
         target = gallery.resolve_artifact(record, root, path)
         if target is None:
             raise HTTPException(status_code=404, detail="No such image.")
-        if w is not None:
-            thumb = gallery.thumbnail(target, w)
-            if thumb is not None:
-                # The URL carries the source's mtime and the width, so a given
-                # URL always means the same thumbnail.
-                return FileResponse(
-                    thumb,
-                    media_type="image/webp",
-                    headers={"Cache-Control": "private, max-age=86400, immutable"},
-                )
-        return FileResponse(target)
+        if w is None:
+            return FileResponse(target)
+        thumb = gallery.thumbnail(target, w)
+        if thumb is None:
+            # Not the original instead: it may be hundreds of megabytes, which is
+            # what a thumbnail exists to avoid. The tile shows the file's name.
+            raise HTTPException(status_code=415, detail="No thumbnail for this image.")
+        # The URL carries the source's mtime and the width, so a given URL
+        # always means the same thumbnail.
+        return Response(
+            thumb,
+            media_type="image/webp",
+            headers={"Cache-Control": "private, max-age=86400, immutable"},
+        )
 
     @app.get("/api/projects", dependencies=guard)
     def list_projects() -> list[Project]:
