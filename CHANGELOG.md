@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `model_dump()`. There is no switch back to the old behaviour: counting
   defaults as passed is exactly what delivered secret defaults as their mask
   (below).
+- The dashboard's path picker takes a relative path from your home directory
+  (it used the server's working directory, which you never see). It keeps a
+  path as you spelled it rather than resolving symlinks: the path you pick is
+  what the job's config receives, and a resolved one (`/scratch/…` turned into
+  `/lustre/…`) may not exist where the job runs.
 - A factory-defaulted field's flag no longer hands Click the factory. Pydantic
   runs it once per run, so it no longer also runs for `--help`, `--schema` and
   `--generate-config`, or twice per `config_file=True` run.
@@ -134,6 +139,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed metadata (a PyInstaller-frozen app, a bare source tree).
   `typantic.__version__` is `"0+unknown"` there, and `typantic --version` and
   the dashboard read the version from it.
+- **On Python 3.12 and 3.13 the path picker and the image gallery answered HTTP
+  500** for a path under a directory the server cannot enter (a colleague's
+  0700 home) or with a component longer than 255 bytes. `Path.is_file()` raises
+  there, where 3.14 returns `False`, so the local 3.14 gate never saw it. Every
+  path check in the dashboard now answers instead of raising, on every version.
+- One bad `output_folder` in a job's config (`~results/x` meant as `~/results/x`,
+  or a NUL byte) broke that job's whole gallery, permanently. It is now skipped
+  and the job folder's images still show. An undecodable config file is treated
+  the same way.
+- One file name that is not valid UTF-8 (legal on Linux filesystems) made a
+  whole picker listing, or a job's gallery, fail with HTTP 500. Such names are
+  now skipped. Creating a folder rejects control characters and undecodable
+  names, which would otherwise make a folder no listing could show.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

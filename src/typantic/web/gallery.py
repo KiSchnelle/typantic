@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
+from typantic.web._paths import expand, is_dir, is_file, resolved, utf8
 from typantic.web.models import JobImage, JobRecord
 
 _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
@@ -34,19 +35,21 @@ def artifact_roots(record: JobRecord) -> list[Path]:
     an explicit absolute ``output_folder`` from the submitted config if the
     command set one elsewhere.
     """
-    roots = [Path(record.job_dir).resolve()]
+    job_dir = resolved(Path(record.job_dir))
+    roots = [job_dir] if job_dir is not None else []
     try:
-        config = json.loads(Path(record.config_path).read_text())
-    except (OSError, json.JSONDecodeError):
+        config = json.loads(Path(record.config_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # ValueError covers JSON and decoding errors
         return roots
     output = config.get("output_folder") if isinstance(config, dict) else None
     if isinstance(output, str):
-        candidate = Path(output).expanduser()
-        if candidate.is_absolute():
-            resolved = candidate.resolve()
-            # Skip if it is the job dir or nested inside it (already scanned).
-            if not any(resolved.is_relative_to(root) for root in roots):
-                roots.append(resolved)
+        # A config's output_folder is user input: a typo ("~results") or a NUL
+        # must cost only that folder, not the job's whole gallery.
+        candidate = expand(output)
+        extra = resolved(candidate) if candidate and candidate.is_absolute() else None
+        # Skip it if it is the job dir or nested inside it (already scanned).
+        if extra is not None and not any(extra.is_relative_to(r) for r in roots):
+            roots.append(extra)
     return roots
 
 
@@ -72,6 +75,8 @@ def scan_images(root: Path) -> list[Path]:
             if scanned > _IMAGE_SCAN_CAP:
                 stack.clear()
                 break
+            if not utf8(entry.name):
+                continue  # its path cannot be put in a URL
             try:
                 if entry.is_dir(follow_symlinks=False):
                     if depth < _IMAGE_MAX_DEPTH:
@@ -91,7 +96,7 @@ def list_images(record: JobRecord, job_id: str) -> list[JobImage]:
     """Find output images across a job's artifact roots (bounded), newest first."""
     found: list[JobImage] = []
     for index, root in enumerate(artifact_roots(record)):
-        if not root.is_dir():
+        if not is_dir(root):
             continue
         for file in scan_images(root):
             if len(found) >= _IMAGE_LIMIT:
@@ -112,11 +117,11 @@ def resolve_artifact(record: JobRecord, root: int, path: str) -> Path | None:
     roots = artifact_roots(record)
     if not 0 <= root < len(roots):
         return None
-    base = roots[root].resolve()
-    target = (base / path).resolve()
-    if not target.is_relative_to(base):
-        return None  # path traversal attempt
-    if not target.is_file() or target.suffix.lower() not in _IMAGE_EXTS:
+    base = roots[root]
+    target = resolved(base / path)
+    if target is None or not target.is_relative_to(base):
+        return None  # unresolvable, or a path traversal attempt
+    if not is_file(target) or target.suffix.lower() not in _IMAGE_EXTS:
         return None
     return target
 
@@ -137,7 +142,7 @@ def thumbnail(source: Path, width: int) -> Path | None:
         return None
     key = hashlib.sha256(f"{source}|{mtime}|{width}".encode()).hexdigest()[:32]
     cached = _THUMB_CACHE / f"{key}.webp"
-    if cached.is_file():
+    if is_file(cached):
         return cached
     try:
         _THUMB_CACHE.mkdir(parents=True, exist_ok=True)

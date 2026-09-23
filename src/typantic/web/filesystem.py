@@ -10,6 +10,7 @@ image gallery is the sibling precedent -- output-image scanning lives in
 import os
 from pathlib import Path
 
+from typantic.web._paths import expand, is_dir, is_file, utf8
 from typantic.web.models import FsEntry, FsListing
 
 
@@ -26,44 +27,39 @@ _INVALID_DIR_NAMES = frozenset({"", ".", ".."})
 _INVALID_DIR_CHARS = frozenset({"/", "\\", "\x00"})
 
 
-def _is_dir(path: Path) -> bool:
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
+def _absolute(path: Path) -> Path:
+    """``path`` made absolute from the user's home, lexically -- not resolved.
 
-
-def _expand(path: str) -> Path | None:
-    """Expand ``~`` in a user-supplied path, or ``None`` if it cannot be resolved.
-
-    ``Path.expanduser`` raises ``RuntimeError`` for an unknown user (``~nobody``),
-    which is a bad path from the picker, not a server fault.
+    A relative path is taken from home rather than the server's working
+    directory (which a user never sees), and symlinks are kept as spelled: the
+    path a user picks is written into the job's config, and the resolved form
+    (``/scratch`` turned into ``/lustre/...``) may not exist where the job runs.
     """
-    try:
-        return Path(path).expanduser()
-    except RuntimeError:
-        return None
+    return Path(os.path.abspath(Path.home() / path))  # noqa: PTH100 - lexical, by design
 
 
 def browse_directory(path: str | None) -> FsListing:
     """List a directory for the path picker (falls back to home on a bad path)."""
-    raw = (_expand(path) or Path.home()) if path else Path.home()
-    if raw.is_file():
+    expanded = expand(path) if path else None
+    raw = _absolute(expanded) if expanded is not None else Path.home()
+    if is_file(raw):
         raw = raw.parent
-    if not _is_dir(raw):
+    if not is_dir(raw):
         raw = Path.home()
-    base = raw.resolve()
+    base = raw
 
     listed: list[tuple[bool, str]] = []
     error: str | None = None
     try:
         with os.scandir(base) as scan:
             for entry in scan:
+                if not utf8(entry.name):
+                    continue  # cannot be listed, picked, or put in a URL
                 try:
-                    is_dir = entry.is_dir()
+                    is_dir_entry = entry.is_dir()
                 except OSError:
-                    is_dir = False
-                listed.append((is_dir, entry.name))
+                    is_dir_entry = False
+                listed.append((is_dir_entry, entry.name))
     except OSError as exc:
         error = str(exc)
 
@@ -90,11 +86,19 @@ def make_directory(path: str, name: str) -> FsListing:
             underlying ``mkdir`` failed -- each a bad request (HTTP 400).
     """
     clean = name.strip()
-    if clean in _INVALID_DIR_NAMES or _INVALID_DIR_CHARS & set(clean):
+    if (
+        clean in _INVALID_DIR_NAMES
+        or _INVALID_DIR_CHARS & set(clean)
+        or not clean.isprintable()
+        or not utf8(clean)
+    ):
+        # A control character or a lone surrogate would make a folder no listing
+        # could show again.
         msg = "Invalid folder name."
         raise FileSystemError(msg)
-    parent = _expand(path)
-    if parent is None or not _is_dir(parent):
+    expanded = expand(path)
+    parent = _absolute(expanded) if expanded is not None else None
+    if parent is None or not is_dir(parent):
         msg = "Parent folder does not exist."
         raise FileSystemError(msg)
     target = parent / clean

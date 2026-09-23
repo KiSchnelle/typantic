@@ -1,4 +1,5 @@
 import asyncio
+import json
 import pathlib
 import subprocess
 from datetime import UTC, datetime
@@ -10,9 +11,9 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from starlette.websockets import WebSocketDisconnect
 
+from typantic.web import _paths, gallery
 from typantic.web import api as api_mod
 from typantic.web import filesystem as fs_mod
-from typantic.web import gallery
 from typantic.web import launcher as launcher_mod
 from typantic.web.api import _tail_log, make_api
 from typantic.web.backends.base import Launched, PollResult
@@ -446,6 +447,69 @@ def test_mkdir_collides_with_file(env, tmp_path):
     assert env.client.post("/api/fs/mkdir", json=body, headers=AUTH).status_code == 400
 
 
+def _raise_permission(*_args, **_kwargs):
+    raise PermissionError(13, "Permission denied")
+
+
+def test_browse_survives_path_checks_that_raise(env, monkeypatch):
+    # Python 3.12/3.13 Path.is_file()/is_dir() raise on EACCES or an over-long
+    # name where 3.14 returns False; the picker must answer, not 500.
+    monkeypatch.setattr(pathlib.Path, "is_file", _raise_permission)
+    monkeypatch.setattr(pathlib.Path, "is_dir", _raise_permission)
+    resp = env.client.get("/api/fs?path=/no/such/dir", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["path"] == str(pathlib.Path.home())
+
+
+def test_browse_takes_a_relative_path_from_home(env, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "rel").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    data = env.client.get("/api/fs?path=rel", headers=AUTH).json()
+    assert data["path"] == str(home / "rel")
+
+
+def test_browse_keeps_the_symlinked_spelling(env, tmp_path):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    data = env.client.get(f"/api/fs?path={tmp_path / 'link'}", headers=AUTH).json()
+    # "Use this folder" writes this path into the job config; the resolved one
+    # may not exist where the job runs (an ssh host, a container).
+    assert data["path"] == str(tmp_path / "link")
+
+
+def test_browse_skips_a_name_that_is_not_utf8(env, tmp_path, monkeypatch):
+    class Entry:
+        def __init__(self, name):
+            self.name = name
+
+        def is_dir(self):
+            return False
+
+    class Scan:
+        def __enter__(self):
+            return [Entry("ok.png"), Entry("caf\udce9.png")]
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(fs_mod.os, "scandir", lambda _p: Scan())
+    resp = env.client.get(f"/api/fs?path={tmp_path}", headers=AUTH)
+    assert resp.status_code == 200
+    assert [e["name"] for e in resp.json()["entries"]] == ["ok.png"]
+
+
+@pytest.mark.parametrize("name", ["tab\there", "caf\udce9", "bell\x07"])
+def test_mkdir_rejects_control_characters_and_non_utf8(env, tmp_path, name):
+    # json.dumps escapes a lone surrogate (\udce9), the way any JSON client can
+    # send one; the server decodes it back into the name.
+    body = json.dumps({"path": str(tmp_path), "name": name})
+    headers = {**AUTH, "Content-Type": "application/json"}
+    resp = env.client.post("/api/fs/mkdir", content=body, headers=headers)
+    assert resp.status_code == 400
+
+
 # --- log tail WebSocket (route wrapper) ---
 
 
@@ -599,12 +663,15 @@ def test_no_spa_when_dashboard_disabled(tmp_path, monkeypatch):
     assert client.get("/").status_code == 404
 
 
-def test_is_dir_handles_oserror():
-    class BadPath:
-        def is_dir(self):
-            raise OSError
-
-    assert fs_mod._is_dir(BadPath()) is False
+def test_path_helpers_answer_instead_of_raising(tmp_path):
+    assert _paths.is_dir(tmp_path)
+    assert not _paths.is_file(tmp_path)
+    assert not _paths.is_dir(tmp_path / "bad\x00name")
+    assert _paths.expand("~nosuchuser12345/x") is None
+    assert _paths.resolved(tmp_path / "bad\x00name") is None
+    assert _paths.resolved(tmp_path) == tmp_path.resolve()
+    assert _paths.utf8("caf\u00e9")
+    assert not _paths.utf8("caf\udce9")
 
 
 def test_browse_nonexistent_path_uses_home(env):

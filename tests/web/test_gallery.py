@@ -3,6 +3,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from typantic.web import gallery
@@ -105,6 +106,7 @@ def test_scan_images_scan_cap(tmp_path, monkeypatch):
 
 def test_scan_images_entry_error_is_skipped(tmp_path, monkeypatch):
     class BadEntry:
+        name = "x.png"
         path = str(tmp_path / "x.png")
 
         def is_dir(self, *, follow_symlinks=True):
@@ -229,3 +231,67 @@ def test_thumbnail_applies_exif_orientation(tmp_path):
 def test_tests_never_touch_the_real_thumbnail_cache():
     real = Path.home() / ".cache" / "typantic" / "thumbnails"
     assert real != gallery._THUMB_CACHE
+
+
+# --- a bad path never takes the gallery down ---
+
+
+@pytest.mark.parametrize("output", ["~nosuchuser12345/x", "/tmp/bad\x00name"])
+def test_a_bad_output_folder_is_skipped_not_fatal(tmp_path, output):
+    job = tmp_path / "job"
+    _png(job / "a.png")
+    record = _record(job, {"output_folder": output})
+    assert gallery.artifact_roots(record) == [job.resolve()]
+    assert [image.name for image in gallery.list_images(record, "j")] == ["a.png"]
+
+
+def test_an_undecodable_config_leaves_only_the_job_folder(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir()
+    record = _record(job)
+    Path(record.config_path).write_bytes(b"\xff\xfe not json")
+    assert gallery.artifact_roots(record) == [job.resolve()]
+
+
+def test_a_nul_in_the_image_path_is_not_found(tmp_path):
+    job = tmp_path / "job"
+    _png(job / "a.png")
+    assert gallery.resolve_artifact(_record(job), 0, "a\x00.png") is None
+
+
+def test_the_gallery_survives_path_checks_that_raise(tmp_path, monkeypatch):
+    # Python 3.12/3.13 behaviour, reproduced on any interpreter.
+    job = tmp_path / "job"
+    _png(job / "a.png")
+    record = _record(job)
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "is_file", refuse)
+    monkeypatch.setattr(Path, "is_dir", refuse)
+    assert [image.name for image in gallery.list_images(record, "j")] == ["a.png"]
+    assert gallery.resolve_artifact(record, 0, "a.png") == (job / "a.png").resolve()
+
+
+def test_a_name_that_is_not_utf8_is_skipped(tmp_path, monkeypatch):
+    real_scandir = os.scandir
+
+    class Named:
+        def __init__(self, entry, name):
+            self._entry, self.name = entry, name
+            self.path = entry.path
+
+        def __getattr__(self, attr):
+            return getattr(self._entry, attr)
+
+    def scandir(directory):
+        entries = list(real_scandir(directory))
+        return [Named(e, "caf\udce9.png") if e.name == "b.png" else e for e in entries]
+
+    job = tmp_path / "job"
+    _png(job / "a.png")
+    _png(job / "b.png")
+    monkeypatch.setattr(gallery.os, "scandir", scandir)
+    names = [image.name for image in gallery.list_images(_record(job), "j")]
+    assert names == ["a.png"]
