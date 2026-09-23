@@ -40,6 +40,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With `config_file=True`, a required nested model whose own fields all have
   defaults was reported as missing when neither a flag nor the file set it. It
   now builds from those defaults, as it already did without `config_file`.
+- **The config-file key check now accepts exactly the keys Pydantic accepts.** It
+  used a key set of its own, and was wrong in both directions:
+  - A `populate_by_name` model with an alias generator rejected the very keys
+    `--schema` advertises (`maxWorkers`), so **every dashboard launch of such a
+    command exited 2**.
+  - A file keyed by a field's *name* on a model that accepts only its alias was
+    let through, and Pydantic then dropped the value in silence.
+
+  Such a key is now reported with the key to use (`threshold (use 'thr')`). A
+  file that relied on the silent drop fails loudly instead. A flag still
+  overrides the file however the file spells the field.
+- The key check looks inside `Model | None` values and each item of a list of
+  models (`mounts[1].destt`) instead of stopping there. A model with
+  `extra="allow"` is no longer checked at all. A written-back computed field now
+  reloads on an `extra="forbid"` model, because it is dropped before the model is
+  built.
+- `AliasChoices` fields are settable from the CLI, through their first string
+  choice, instead of being rejected at decoration. `config_file="only"` commands
+  no longer crash on `AliasChoices` / `AliasPath` fields: templates write the
+  alias (an `AliasPath` as its nested keys) and files may use any accepted
+  spelling. Only an `AliasPath` through a list index still gets a clear
+  decoration-time error.
 
 ## [0.7.1] - 2026-09-18
 

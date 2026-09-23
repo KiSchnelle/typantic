@@ -332,12 +332,19 @@ Because `--config` may supply them, required fields are made optional at the Typ
 layer; Pydantic re-checks requiredness *after* merging file and flags, so a value
 missing from both is still reported as an error — it just no longer renders as
 `[required]` in `--help`. A `--config` document must be a mapping; a bad suffix,
-unparseable content, or a non-mapping top level raises a `ValueError`.
+unparseable content, or a non-mapping top level is a usage error (exit 2) naming
+the file.
 
-An **unknown key** in the file is rejected up front (recursing into nested
-models), so a typo like `wrokers: 8` fails fast instead of being silently dropped
-and leaving the field at its default. Computed-field names are still accepted, so
-a config written back out (which serialises them) reloads cleanly.
+An **unknown key** in the file is rejected up front, so a typo like `wrokers: 8`
+fails fast instead of being silently dropped and leaving the field at its
+default. A field is accepted under exactly the keys Pydantic accepts for it —
+its alias, and its own name only where the model allows that (a field's name on
+a model that only takes its alias is reported with the key to use). The check
+looks inside nested models, `Model | None` values and each item of a list of
+models (`mounts[1].destt`), and skips models that allow extra keys. Computed-field
+names are accepted and dropped, so a config written back out (which serialises
+them) reloads even on a model with `extra="forbid"`. Whichever spelling the file
+uses, a flag you pass still overrides it.
 
 ### The helpers behind the flags
 

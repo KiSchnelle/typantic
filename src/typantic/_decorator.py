@@ -24,6 +24,7 @@ from pydantic import BaseModel, SecretBytes, SecretStr, ValidationError
 from pydantic.fields import FieldInfo
 
 from typantic._config_file import (
+    canonicalize,
     load_config_file,
     unknown_config_keys,
     write_config_template,
@@ -194,7 +195,9 @@ def _load_base(model_cls: type[BaseModel], config: Path | None) -> dict[str, Any
         listed = ", ".join(sorted(unknown))
         msg = f"Unknown setting(s) {listed} in config file {config}"
         raise typer.BadParameter(msg)
-    return data
+    # Move each field onto the key a passed flag is written under, so the flag
+    # overrides the file whichever spelling the file used.
+    return canonicalize(model_cls, data)
 
 
 def _context_param() -> tuple[inspect.Parameter, object]:

@@ -17,6 +17,7 @@ import typer
 from pydantic import (
     AfterValidator,
     AliasChoices,
+    AliasPath,
     BaseModel,
     ConfigDict,
     Field,
@@ -1440,14 +1441,36 @@ class TestAliases:
         assert result.exit_code == 0
         assert seen[0].db.host == "prod"
 
-    def test_alias_choices_is_rejected_at_decoration_with_a_clear_error(self) -> None:
+    def test_alias_choices_is_set_through_its_first_string_choice(self) -> None:
         class Cfg(BaseModel):
             x: Annotated[
                 int,
                 Field(default=1, validation_alias=AliasChoices("a", "b"), kw_only=True),
             ]
 
-        with pytest.raises(ValueError, match="AliasChoices"):
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--x", "5"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].x == 5
+
+    def test_a_nested_alias_path_is_rejected_at_decoration(self) -> None:
+        class Cfg(BaseModel):
+            x: Annotated[
+                int,
+                Field(default=1, validation_alias=AliasPath("a", "b"), kw_only=True),
+            ]
+
+        with pytest.raises(ValueError, match="AliasPath"):
+            pydantic_to_typer(Cfg)(lambda config: config)
+
+    def test_an_alias_path_through_a_list_is_rejected_even_in_a_template(self) -> None:
+        class Cfg(BaseModel):
+            x: Annotated[
+                int,
+                Field(default=1, validation_alias=AliasPath("a", 0), kw_only=True),
+            ]
+
+        with pytest.raises(ValueError, match="list"):
             pydantic_to_typer(Cfg)(lambda config: config)
 
     def test_alias_choices_is_allowed_when_populate_by_name(self) -> None:

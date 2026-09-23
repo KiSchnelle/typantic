@@ -10,11 +10,12 @@ from typing import (
     Annotated,
     TypeGuard,
     Union,
+    cast,
     get_args,
     get_origin,
 )
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel
 from pydantic.fields import FieldInfo
 
 
@@ -95,14 +96,112 @@ def model_hints(model_cls: type[BaseModel]) -> dict[str, object]:
     return {name: field.annotation for name, field in model_cls.model_fields.items()}
 
 
+def _by_name(model_cls: type[BaseModel]) -> bool:
+    """Whether the model accepts a field under its own name despite an alias."""
+    config = model_cls.model_config
+    # validate_by_name is the 2.11+ spelling; populate_by_name still works.
+    return bool(config.get("populate_by_name") or config.get("validate_by_name"))
+
+
+def _alias_paths(field: FieldInfo) -> list[tuple[str | int, ...]]:
+    """The field's validation alias as key paths, in Pydantic's precedence order.
+
+    ``validation_alias`` alone is enough: Pydantic mirrors a plain ``alias`` (and
+    an ``alias_generator``'s) into it, so it is set whenever an alias applies. A
+    plain string is a one-key path, an ``AliasPath`` a nested one, and an
+    ``AliasChoices`` contributes each of its choices in turn.
+    """
+    alias = field.validation_alias
+    if alias is None:
+        return []
+    choices = alias.choices if isinstance(alias, AliasChoices) else [alias]
+    return [
+        (choice,) if isinstance(choice, str) else tuple(choice.path)
+        for choice in choices
+    ]
+
+
+def _key_paths(
+    model_cls: type[BaseModel],
+    name: str,
+    field: FieldInfo,
+) -> list[tuple[str | int, ...]]:
+    """Every key path under which ``model_cls`` accepts ``name``, in precedence order.
+
+    An alias is honoured unless the model turned ``validate_by_alias`` off; the
+    field's own name is accepted when there is no alias, or when the model opts
+    into ``populate_by_name`` / ``validate_by_name``. Pydantic tries the aliases
+    first, so they come first.
+    """
+    aliases = _alias_paths(field)
+    paths: list[tuple[str | int, ...]] = []
+    if aliases and model_cls.model_config.get("validate_by_alias", True):
+        paths.extend(aliases)
+    if not aliases or _by_name(model_cls):
+        paths.append((name,))
+    return paths
+
+
+def accepted_keys(model_cls: type[BaseModel], name: str, field: FieldInfo) -> list[str]:
+    """The top-level mapping keys under which ``model_cls`` accepts field ``name``.
+
+    Pydantic's precedence order: aliases first, then the field's own name where
+    the model accepts it. An ``AliasPath`` contributes its first key -- the value
+    under it is the path's nested structure, not a flat value.
+    """
+    keys = [path[0] for path in _key_paths(model_cls, name, field)]
+    return list(dict.fromkeys(key for key in keys if isinstance(key, str)))
+
+
+def flat_keys(model_cls: type[BaseModel], name: str, field: FieldInfo) -> list[str]:
+    """The single-key spellings of field ``name`` (no ``AliasPath``), by precedence."""
+    return [
+        path[0]
+        for path in _key_paths(model_cls, name, field)
+        if len(path) == 1 and isinstance(path[0], str)
+    ]
+
+
+def canonical_key_path(
+    model_cls: type[BaseModel],
+    name: str,
+    field: FieldInfo,
+) -> tuple[str, ...]:
+    """The one key path typantic writes field ``name`` under.
+
+    A generated template writes the field there, a passed flag is re-nested
+    there, and a config file's other spellings are moved onto it -- so a flag
+    always overrides the file, whichever spelling the file used. The field's
+    name wins when the model accepts it (it matches the flag the user types);
+    otherwise the first alias Pydantic would accept. An ``AliasPath`` is a nested
+    path, usable only while every step is a key rather than a list index.
+
+    Raises:
+        ValueError: If the only spellings Pydantic accepts are ``AliasPath`` s
+            through a list index, which typantic cannot write a value into.
+    """
+    paths = _key_paths(model_cls, name, field)
+    if (name,) in paths:
+        return (name,)
+    for path in paths:
+        if all(isinstance(step, str) for step in path):
+            return cast("tuple[str, ...]", path)
+    msg = (
+        f"Field {name!r} can only be set through an AliasPath into a list, which "
+        f"typantic cannot write a value into. Set "
+        f"model_config['populate_by_name'] = True, or add a string alias."
+    )
+    raise ValueError(msg)
+
+
 def field_input_key(model_cls: type[BaseModel], name: str, field: FieldInfo) -> str:
-    """The mapping key ``model_cls(**{key: value})`` accepts for field ``name``.
+    """The mapping key a CLI flag's value is re-nested under for field ``name``.
 
     Pydantic populates by *alias*, not by field name, unless the model opts into
     ``populate_by_name``. Passing the field name to an aliased model would land in
-    ``extra`` and be dropped in silence, so the CLI value must be re-keyed onto
-    the alias before the model is built. The flag the user types is unaffected --
-    it always follows the field name.
+    ``extra`` and be dropped in silence, so the value must be re-keyed onto an
+    accepted key before the model is built (see :func:`canonical_key_path`). The
+    flag the user types is unaffected -- it always follows the field name.
 
     Args:
         model_cls: The model the value will be passed to.
@@ -110,29 +209,45 @@ def field_input_key(model_cls: type[BaseModel], name: str, field: FieldInfo) -> 
         field: The field's metadata.
 
     Returns:
-        The alias when one is needed and expressible, else the field name.
+        The field's canonical key.
 
     Raises:
-        ValueError: If the field's validation alias is an ``AliasChoices`` /
-            ``AliasPath``, which cannot be expressed as a single keyword.
+        ValueError: If every spelling Pydantic accepts is a nested ``AliasPath``,
+            which a single CLI parameter cannot be re-nested under.
     """
-    config = model_cls.model_config
-    # validate_by_name is the 2.11+ spelling; populate_by_name still works.
-    if config.get("populate_by_name") or config.get("validate_by_name"):
-        return name
-
-    # validation_alias alone is enough: Pydantic mirrors a plain `alias` (and an
-    # alias_generator's) into it, so it is set whenever an alias applies at all.
-    alias = field.validation_alias
-    if alias is None:
-        return name
-    if not isinstance(alias, str):
+    path = canonical_key_path(model_cls, name, field)
+    if len(path) != 1:
         msg = (
-            f"Field {name!r} uses a {type(alias).__name__} validation alias, which "
-            f"typantic cannot map onto a single CLI parameter. Set "
-            f"model_config['populate_by_name'] = True, or use a plain string alias."
+            f"Field {name!r} can only be set through an AliasPath, which typantic "
+            f"cannot map onto a single CLI parameter. Set "
+            f"model_config['populate_by_name'] = True, add a string alias, or use "
+            f'config_file="only".'
         )
-        # ValueError, not TypeError: this is a model that cannot map onto a CLI,
-        # the same class of error (and exception type) as a name collision.
-        raise ValueError(msg)  # noqa: TRY004
-    return alias
+        raise ValueError(msg)
+    return path[0]
+
+
+def nested_model(annotation: object) -> type[BaseModel] | None:
+    """The model a field holds -- directly, or as the one member of ``X | None``."""
+    base = extract_base_type(annotation)
+    if is_model_type(base):
+        return base
+    if get_origin(base) in (Union, types.UnionType):
+        members = [arg for arg in get_args(base) if arg is not type(None)]
+        if len(members) == 1 and is_model_type(members[0]):
+            return members[0]
+    return None
+
+
+def item_model(annotation: object) -> type[BaseModel] | None:
+    """The model a list/set/tuple field holds per item (``X | None`` unwrapped)."""
+    base = extract_base_type(annotation)
+    if get_origin(base) in (Union, types.UnionType):
+        members = [arg for arg in get_args(base) if arg is not type(None)]
+        if len(members) != 1:
+            return None
+        base = members[0]
+    args = get_args(base)
+    if get_origin(base) is list and len(args) == 1 and is_model_type(args[0]):
+        return args[0]
+    return None

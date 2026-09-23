@@ -10,7 +10,15 @@ from typing import Annotated
 import pytest
 import typer
 import yaml
-from pydantic import BaseModel, Field, computed_field
+from pydantic import (
+    AliasChoices,
+    AliasPath,
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+)
+from pydantic.alias_generators import to_camel
 from typer.testing import CliRunner
 
 from typantic import (
@@ -19,7 +27,8 @@ from typantic import (
     load_config_file,
     write_config_template,
 )
-from typantic._config_file import unknown_config_keys
+from typantic._config_file import canonicalize, unknown_config_keys
+from typantic._introspect import item_model, nested_model
 
 runner = CliRunner()
 
@@ -517,3 +526,170 @@ def test_template_of_a_directly_self_referential_model_terminates() -> None:
     template = build_config_template(Loop)
     # Inner expands once, and its way back to Loop stops at the placeholder.
     assert template["via_required"]["back"] == "<REQUIRED: back>"
+
+
+# ---------------------------------------------------------------------------
+# Which keys a field accepts
+#
+# The config check used a key set of its own (the field's one input key plus
+# every field name) instead of the keys Pydantic actually accepts: an aliased
+# populate_by_name model rejected the very keys --schema advertises (so every
+# web launch of it exited 2), and a file keyed by the field name of a plainly
+# aliased field was accepted and then dropped by Pydantic in silence.
+# ---------------------------------------------------------------------------
+def _run(model_cls, argv, *, config_file=True):
+    seen: list[BaseModel] = []
+    app = typer.Typer()
+    add_command(app, model_cls, seen.append, name="go", config_file=config_file)
+
+    @app.command()
+    def other() -> None: ...
+
+    return runner.invoke(app, ["go", *argv]), seen
+
+
+class _Camel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    max_workers: int = 1
+    output_dir: str = "out"
+
+
+class _Thr(BaseModel):
+    threshold: float = Field(default=0.5, alias="thr")
+
+
+def test_a_file_keyed_the_way_schema_lists_loads(tmp_path: Path):
+    path = tmp_path / "c.json"
+    keys = set(_Camel.model_json_schema()["properties"])
+    assert keys == {"maxWorkers", "outputDir"}  # what the web form writes
+    path.write_text(json.dumps({"maxWorkers": 8, "outputDir": "x"}))
+    result, seen = _run(_Camel, ["--config", str(path)])
+    assert result.exit_code == 0, result.output
+    assert (seen[0].max_workers, seen[0].output_dir) == (8, "x")
+
+
+def test_a_flag_beats_the_file_whichever_key_the_file_used(tmp_path: Path):
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"maxWorkers": 8}))
+    result, seen = _run(_Camel, ["--config", str(path), "--max-workers", "2"])
+    assert result.exit_code == 0, result.output
+    assert seen[0].max_workers == 2
+
+
+def test_the_field_name_of_a_plainly_aliased_field_is_rejected(tmp_path: Path):
+    # Pydantic accepts only "thr" here; "threshold" would be dropped in silence.
+    path = tmp_path / "c.yaml"
+    path.write_text("threshold: 0.9\n")
+    result, seen = _run(_Thr, ["--config", str(path)])
+    assert result.exit_code == 2
+    out = _plain(result.output)
+    assert "threshold" in out
+    assert "thr" in out
+    assert not seen
+
+
+def test_the_alias_of_a_plainly_aliased_field_loads(tmp_path: Path):
+    path = tmp_path / "c.yaml"
+    path.write_text("thr: 0.9\n")
+    result, seen = _run(_Thr, ["--config", str(path)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].threshold == 0.9
+
+
+class _Choices(BaseModel):
+    a: int = Field(default=1, validation_alias=AliasChoices("alpha", "first"))
+    b: int = Field(default=2, validation_alias=AliasPath("deep", "b"))
+
+
+def test_file_only_mode_handles_alias_choices_and_paths(tmp_path: Path):
+    tmpl = tmp_path / "t.yaml"
+    result, _ = _run(_Choices, ["--generate-config", str(tmpl)], config_file="only")
+    assert result.exit_code == 0, result.output
+    assert yaml.safe_load(tmpl.read_text()) == {"alpha": 1, "deep": {"b": 2}}
+
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"first": 5, "deep": {"b": 6}}))
+    result, seen = _run(_Choices, ["--config", str(path)], config_file="only")
+    assert result.exit_code == 0, result.output
+    assert (seen[0].a, seen[0].b) == (5, 6)
+
+
+class _Mnt(BaseModel):
+    source: str
+    dest: str = "/data"
+
+
+class _Deep(BaseModel):
+    mounts: list[_Mnt] = Field(default_factory=list)
+    backup: _Mnt | None = None
+
+
+def test_unknown_keys_inside_lists_and_optionals_of_models_are_reported():
+    data = {
+        "mounts": [{"source": "/a"}, {"source": "/b", "destt": "/mnt"}],
+        "backup": {"source": "/c", "hots": "nas"},
+    }
+    assert sorted(unknown_config_keys(_Deep, data)) == [
+        "backup.hots",
+        "mounts[1].destt",
+    ]
+
+
+class _Open(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    known: int = 1
+
+
+def test_a_model_that_allows_extra_keys_is_not_checked(tmp_path: Path):
+    path = tmp_path / "c.yaml"
+    path.write_text("known: 2\nplugin_opt: 3\n")
+    result, seen = _run(_Open, ["--config", str(path)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].model_extra == {"plugin_opt": 3}
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    factor: int = 2
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def doubled(self) -> int:
+        return self.factor * 2
+
+
+def test_a_written_back_computed_field_reloads_on_a_forbidding_model(tmp_path: Path):
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"factor": 5, "doubled": 999}))
+    result, seen = _run(_Strict, ["--config", str(path)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].doubled == 10
+
+
+class _AliasedMnt(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    source_dir: str
+
+
+class _Fleet(BaseModel):
+    mounts: list[_AliasedMnt] | None = None
+
+
+def test_items_of_a_list_of_models_are_checked_and_canonicalised():
+    data = {"mounts": [{"sourceDir": "/a"}, 5]}
+    # A non-mapping item is left for Pydantic to reject with its own message.
+    assert unknown_config_keys(_Fleet, data) == []
+    assert canonicalize(_Fleet, data) == {"mounts": [{"source_dir": "/a"}, 5]}
+
+
+def test_model_lookup_through_unions_and_collections():
+    assert nested_model(_Mnt | None) is _Mnt
+    assert nested_model(int | None) is None
+    assert item_model(list[_Mnt] | None) is _Mnt
+    assert item_model(set[_Mnt]) is _Mnt
+    assert item_model(list[int]) is None
+    assert item_model(list[_Mnt] | int | None) is None

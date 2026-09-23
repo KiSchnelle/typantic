@@ -24,10 +24,14 @@ from pydantic.fields import FieldInfo
 from pydantic_core import to_jsonable_python
 
 from typantic._introspect import (
+    accepted_keys,
+    canonical_key_path,
     extract_base_type,
-    field_input_key,
+    flat_keys,
     is_model_type,
+    item_model,
     model_hints,
+    nested_model,
 )
 
 _YAML_SUFFIXES = {".yaml", ".yml"}
@@ -96,38 +100,117 @@ def unknown_config_keys(
     data: dict[str, Any],
     prefix: str = "",
 ) -> list[str]:
-    """Config-file keys matching no field on ``model_cls`` (recursing into models).
+    """Config-file keys ``model_cls`` would not accept (recursing into models).
 
-    A field is accepted under its input key (its alias, where the model needs
-    one -- which is what a generated template and the web form both write) as well
-    as its own name. Computed-field names are allowed so a written run-config
-    (which serialises them) still round-trips on reload; anything else is almost
-    certainly a typo that Pydantic's ``extra="ignore"`` would otherwise drop in
-    silence. Only dict values are recursed into, and only for fields whose bare
-    annotation is a concrete model -- optionals and lists of models are left alone
-    rather than risk a false rejection.
+    A field is accepted under exactly the keys Pydantic accepts for it (see
+    :func:`typantic._introspect.accepted_keys`) -- its alias, and its own name
+    only where the model allows that. Computed-field names are allowed too, so a
+    written run-config (which serialises them) still round-trips. Anything else is
+    almost certainly a typo Pydantic would drop in silence; a field's own name on
+    a model that accepts only its alias is reported with the key to use instead.
+    Nested models are checked inside a model value, an ``X | None`` value, and
+    each item of a list/set/tuple of models (reported as ``mounts[1].dest``). A
+    model that allows extra keys (``extra="allow"``) is not checked at all.
     """
+    if model_cls.model_config.get("extra") == "allow":
+        return []
     hints = model_hints(model_cls)
-    by_key = {
-        field_input_key(model_cls, name, field): name
-        for name, field in model_cls.model_fields.items()
-    }
-    allowed = set(by_key) | set(model_cls.model_fields)
-    allowed |= set(model_cls.model_computed_fields)
+    owner: dict[str, str] = {}
+    for name, field in model_cls.model_fields.items():
+        owner.update(dict.fromkeys(accepted_keys(model_cls, name, field), name))
+    computed = set(model_cls.model_computed_fields)
     unknown: list[str] = []
     for key, value in data.items():
         dotted = f"{prefix}{key}"
-        if key not in allowed:
-            unknown.append(dotted)
+        field_name = owner.get(key)
+        if field_name is None:
+            if key not in computed:
+                unknown.append(dotted + _spelling_hint(model_cls, key))
             continue
-        name = by_key.get(key, key)
-        if name in model_cls.model_fields and isinstance(value, dict):
-            nested = extract_base_type(hints[name])
-            if is_model_type(nested):
-                unknown.extend(
-                    unknown_config_keys(nested, value, prefix=f"{dotted}."),
-                )
+        unknown.extend(_unknown_below(hints[field_name], value, dotted))
     return unknown
+
+
+def _spelling_hint(model_cls: type[BaseModel], key: str) -> str:
+    """A ``(use 'thr')`` hint for a field's name the model accepts only aliased."""
+    field = model_cls.model_fields.get(key)
+    if field is None:
+        return ""
+    keys = accepted_keys(model_cls, key, field)
+    return f" (use {keys[0]!r})" if keys else ""
+
+
+def _unknown_below(annotation: object, value: object, dotted: str) -> list[str]:
+    """Unknown keys inside a field's value, for fields that hold models."""
+    model = nested_model(annotation)
+    if model is not None and isinstance(value, dict):
+        return unknown_config_keys(model, cast("dict[str, Any]", value), f"{dotted}.")
+    model = item_model(annotation)
+    if model is not None and isinstance(value, list):
+        unknown: list[str] = []
+        for index, item in enumerate(cast("list[object]", value)):
+            if isinstance(item, dict):
+                unknown.extend(
+                    unknown_config_keys(
+                        model,
+                        cast("dict[str, Any]", item),
+                        f"{dotted}[{index}].",
+                    ),
+                )
+        return unknown
+    return []
+
+
+def canonicalize(model_cls: type[BaseModel], data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` with every field under its canonical key, computed fields dropped.
+
+    A config file may spell a field any way Pydantic accepts (an alias, a choice,
+    or the field's name), but a passed flag is re-nested under the canonical key
+    (:func:`typantic._introspect.canonical_key_path`). Moving the file's spelling
+    onto that key first is what lets the flag override the file -- otherwise both
+    keys reach Pydantic and its alias-first precedence lets the file win. Where
+    the file spells a field twice, the spelling Pydantic would have used wins.
+
+    Written-back computed fields are dropped: Pydantic recomputes them, and a
+    model with ``extra="forbid"`` would reject them. Models nested in a model
+    value, an ``X | None`` value, or a list of models are canonicalised too.
+    """
+    out = {
+        key: value
+        for key, value in data.items()
+        if key not in model_cls.model_computed_fields
+    }
+    hints = model_hints(model_cls)
+    for name, field in model_cls.model_fields.items():
+        path = canonical_key_path(model_cls, name, field)
+        if len(path) != 1:
+            continue  # an AliasPath: the file's nested structure is Pydantic's
+        canonical = path[0]
+        present = [key for key in flat_keys(model_cls, name, field) if key in out]
+        if present:
+            chosen = out[present[0]]
+            for key in present:
+                del out[key]
+            out[canonical] = chosen
+        if canonical in out:
+            out[canonical] = _canonical_below(hints[name], out[canonical])
+    return out
+
+
+def _canonical_below(annotation: object, value: object) -> object:
+    """Canonicalise the models inside a field's value."""
+    model = nested_model(annotation)
+    if model is not None and isinstance(value, dict):
+        return canonicalize(model, cast("dict[str, Any]", value))
+    model = item_model(annotation)
+    if model is not None and isinstance(value, list):
+        return [
+            canonicalize(model, cast("dict[str, Any]", item))
+            if isinstance(item, dict)
+            else item
+            for item in cast("list[object]", value)
+        ]
+    return value
 
 
 def _required_placeholder(
@@ -187,15 +270,24 @@ def build_config_template(
     seen = _seen | {model_cls}
     template: dict[str, object] = {}
     for name, field in model_cls.model_fields.items():
-        key = field_input_key(model_cls, name, field)
+        value: object
         if field.is_required():
             base_type = extract_base_type(hints[name])
-            template[key] = _required_placeholder(name, field, base_type, seen)
+            value = _required_placeholder(name, field, base_type, seen)
         elif field.default_factory is not None:
-            template[key] = _DEFAULT_SENTINEL
+            value = _DEFAULT_SENTINEL
         else:
-            template[key] = to_jsonable_python(field.default)
+            value = to_jsonable_python(field.default)
+        _put(template, canonical_key_path(model_cls, name, field), value)
     return template
+
+
+def _put(template: dict[str, object], path: tuple[str, ...], value: object) -> None:
+    """Write ``value`` at the nested key ``path`` (an ``AliasPath`` nests)."""
+    target = template
+    for key in path[:-1]:
+        target = cast("dict[str, object]", target.setdefault(key, {}))
+    target[path[-1]] = value
 
 
 def write_config_template(model_cls: type[BaseModel], path: Path) -> None:
