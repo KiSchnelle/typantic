@@ -69,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example writing into a directory literally named after the placeholder.
   `load_config_file` (and so `--config`) now refuses a file that still holds a
   placeholder, naming each one (`name, inputs[0], nested.source`).
+- `--schema` printed `Infinity` / `NaN` for a non-finite default (`float("inf")`),
+  which is not JSON and which a strict parser rejects. A non-finite value is now
+  left out of the schema (the model still applies it). A JSON template writes it
+  as the string `"inf"` / `"-inf"` / `"nan"`, which loads back as that float.
+- `--generate-config` into a directory that does not exist was a raw traceback
+  (exit 1). It is now a usage error (exit 2) naming the path.
+- Config files are read and written as UTF-8 on every platform, rather than in
+  the locale's encoding (mojibake on a Windows cp1252 locale). A leading
+  byte-order mark is tolerated.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

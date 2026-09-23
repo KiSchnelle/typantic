@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import math
 import types
 from collections.abc import Callable
 from decimal import Decimal
@@ -122,6 +123,33 @@ def _raw_values(instance: BaseModel) -> dict[str, Any]:
     return raw
 
 
+def _non_finite(value: object) -> bool:
+    """Whether ``value`` is a float JSON cannot represent (``inf`` / ``nan``)."""
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def _without_non_finite(schema: object) -> object:
+    """``schema`` minus every non-finite float, so it prints as strict JSON.
+
+    JSON has no Infinity/NaN; ``json.dumps`` would print the bare tokens, which a
+    strict parser -- the web front-end's among them -- rejects. A ``default``
+    (or bound) of ``inf`` is dropped: the model still applies it.
+    """
+    if isinstance(schema, dict):
+        return {
+            key: _without_non_finite(value)
+            for key, value in cast("dict[str, object]", schema).items()
+            if not _non_finite(value)
+        }
+    if isinstance(schema, list):
+        return [
+            _without_non_finite(item)
+            for item in cast("list[object]", schema)
+            if not _non_finite(item)
+        ]
+    return schema
+
+
 def _construct(model_cls: type[BaseModel], data: dict[str, Any]) -> BaseModel:
     """Build the model from ``data``, reporting errors as Typer parameter errors."""
     try:
@@ -198,6 +226,45 @@ def _load_base(model_cls: type[BaseModel], config: Path | None) -> dict[str, Any
     # Move each field onto the key a passed flag is written under, so the flag
     # overrides the file whichever spelling the file used.
     return canonicalize(model_cls, data)
+
+
+def _config_file_base(
+    model_cls: type[BaseModel],
+    kwargs: dict[str, object],
+    *,
+    file_only: bool,
+) -> dict[str, Any]:
+    """Act on the injected config-file flags; return the ``--config`` base.
+
+    ``--schema`` and ``--generate-config`` do their job and exit without a run.
+    Otherwise the ``--config`` file (if any) is loaded as the base the passed
+    flags override. The injected parameters are popped from ``kwargs``.
+    """
+    generate = cast("Path | None", kwargs.pop(_GENERATE_PARAM))
+    config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
+    if cast("bool", kwargs.pop(_SCHEMA_PARAM)):
+        # The web front-end subprocesses this to build a form from the model
+        # without importing it (keeping torch out of its process).
+        finite = _without_non_finite(model_cls.model_json_schema())
+        typer.echo(json.dumps(finite, indent=2, allow_nan=False))
+        raise typer.Exit
+    if generate is not None and config is not None:
+        # Without this, generation would silently win and the run be skipped;
+        # the two are mutually exclusive.
+        msg = "Pass either --config or --generate-config, not both."
+        raise typer.BadParameter(msg)
+    if generate is not None:
+        try:
+            write_config_template(model_cls, generate)
+        except (OSError, ValueError) as exc:
+            msg = f"Could not write the template to {generate}: {exc}"
+            raise typer.BadParameter(msg) from exc
+        typer.echo(f"Wrote config template to {generate}.")
+        raise typer.Exit
+    if file_only and config is None:
+        msg = "Provide --config FILE, or --generate-config FILE to create one."
+        raise typer.BadParameter(msg)
+    return _load_base(model_cls, config)
 
 
 def _context_param() -> tuple[inspect.Parameter, object]:
@@ -884,30 +951,7 @@ def pydantic_to_typer(
             ctx = cast("typer.Context", kwargs.pop(_CTX_PARAM))
             base: dict[str, Any] = {}
             if config_file:
-                generate = cast("Path | None", kwargs.pop(_GENERATE_PARAM))
-                config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
-                schema = cast("bool", kwargs.pop(_SCHEMA_PARAM))
-                if schema:
-                    # The web front-end subprocesses this to build a form from the
-                    # model without importing it (keeping torch out of its process).
-                    typer.echo(json.dumps(model_cls.model_json_schema(), indent=2))
-                    raise typer.Exit
-                if generate is not None and config is not None:
-                    # Without this, generation would silently win and the run be
-                    # skipped; the two are mutually exclusive.
-                    msg = "Pass either --config or --generate-config, not both."
-                    raise typer.BadParameter(msg)
-                if generate is not None:
-                    write_config_template(model_cls, generate)
-                    typer.echo(f"Wrote config template to {generate}.")
-                    raise typer.Exit
-                if file_only and config is None:
-                    msg = (
-                        "Provide --config FILE, or --generate-config FILE "
-                        "to create one."
-                    )
-                    raise typer.BadParameter(msg)
-                base = _load_base(model_cls, config)
+                base = _config_file_base(model_cls, kwargs, file_only=file_only)
             data = _collect(ctx, base, mapping, kwargs, nested)
             return func(_construct(model_cls, data))
 

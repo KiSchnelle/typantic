@@ -15,6 +15,7 @@ mode, so nested models, sets, datetimes, paths and enums all round-trip.
 """
 
 import json
+import math
 from pathlib import Path
 from typing import Any, cast, get_args, get_origin
 
@@ -67,7 +68,8 @@ def load_config_file(path: Path) -> dict[str, Any]:
         msg = f"Unsupported config file type '{suffix}'; use .yaml or .json."
         raise ValueError(msg)
 
-    text = path.read_text()
+    # UTF-8 on every platform (not the locale's encoding), tolerating a BOM.
+    text = path.read_text(encoding="utf-8-sig")
     try:
         data = yaml.safe_load(text) if suffix in _YAML_SUFFIXES else json.loads(text)
     except (yaml.YAMLError, json.JSONDecodeError) as exc:
@@ -372,6 +374,23 @@ def write_config_template(model_cls: type[BaseModel], path: Path) -> None:
     """
     template = build_config_template(model_cls)
     if path.suffix.lower() == ".json":
-        path.write_text(json.dumps(template, indent=2))
+        # Strict JSON: a non-finite float is written as the string Pydantic reads
+        # back as that float, not as the Infinity/NaN tokens JSON does not have.
+        text = json.dumps(_json_safe(template), indent=2, allow_nan=False)
     else:
-        path.write_text(yaml.safe_dump(template, sort_keys=False))
+        text = yaml.safe_dump(template, sort_keys=False, allow_unicode=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _json_safe(value: object) -> object:
+    """``value`` with every non-finite float as ``"inf"`` / ``"-inf"`` / ``"nan"``."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return "nan" if math.isnan(value) else ("inf" if value > 0 else "-inf")
+    if isinstance(value, dict):
+        return {
+            key: _json_safe(item)
+            for key, item in cast("dict[str, object]", value).items()
+        }
+    if isinstance(value, list):
+        return [_json_safe(item) for item in cast("list[object]", value)]
+    return value

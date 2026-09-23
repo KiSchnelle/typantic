@@ -795,3 +795,48 @@ def test_models_inside_a_dict_default_are_templated_by_input_keys(tmp_path: Path
     result, seen = _run(_Registry, ["--config", str(tmpl)], config_file="only")
     assert result.exit_code == 0, result.output
     assert seen[0].by_color[Color.RED].max_workers == 2
+
+
+# ---------------------------------------------------------------------------
+# Config-file I/O
+# ---------------------------------------------------------------------------
+def _strict_json(text: str) -> object:
+    def refuse(token: str) -> object:
+        msg = f"not JSON: {token}"
+        raise ValueError(msg)
+
+    return json.loads(text, parse_constant=refuse)
+
+
+class _Unbounded(BaseModel):
+    timeout: float = float("inf")
+    name: str = "x"
+
+
+def test_schema_is_strict_json_even_with_a_non_finite_default():
+    result, _ = _run(_Unbounded, ["--schema"])
+    assert result.exit_code == 0, result.output
+    schema = _strict_json(result.output)
+    assert "default" not in schema["properties"]["timeout"]
+    assert schema["properties"]["name"]["default"] == "x"
+
+
+def test_a_json_template_is_strict_json_and_reloads(tmp_path: Path):
+    tmpl = tmp_path / "t.json"
+    assert _run(_Unbounded, ["--generate-config", str(tmpl)])[0].exit_code == 0
+    assert _strict_json(tmpl.read_text())["timeout"] == "inf"
+    result, seen = _run(_Unbounded, ["--config", str(tmpl)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].timeout == float("inf")
+
+
+def test_generate_config_into_a_missing_directory_is_a_usage_error(tmp_path: Path):
+    result, _ = _run(_Unbounded, ["--generate-config", str(tmp_path / "no" / "t.yaml")])
+    assert result.exit_code == 2
+    assert "t.yaml" in _plain(result.output)
+
+
+def test_a_config_file_with_a_byte_order_mark_loads(tmp_path: Path):
+    path = tmp_path / "c.json"
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"name": "café"}).encode())
+    assert load_config_file(path) == {"name": "café"}
