@@ -86,6 +86,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon keeps the container running without it. **Migration:** an image that
   needs its entrypoint to be PID 1 (one that runs its own init) must now cope
   with a parent init.
+- **Breaking (preview): Slurm and PBS jobs get their name, log and folder as
+  `sbatch` / `qsub` arguments**, no longer as `#SBATCH` / `#PBS` lines in the
+  script, where the paths stood unquoted. On the command line a path is one
+  argument, so a jobs folder with a space in its path works. The launch
+  preview now starts with the submit command, above the script. A
+  `SchedulerBackend` subclass can do the same through the new `_control_args`
+  hook; one that does not is unaffected. The memory field's example no longer
+  reads `16G` only, which PBS rejects: it names Slurm's `16G` and PBS's `16gb`.
 - A gallery thumbnail that cannot be rendered now answers HTTP 415, and the
   tile shows the file's name. It used to stream the full-size original into a
   384 px tile, which for a detector frame or a large plot meant hundreds of
@@ -319,6 +327,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is, and the server warns at start with the `chmod 700` that fixes it.
   **Migration:** if colleagues read results straight out of your job folders,
   point the command's output folder somewhere shared instead.
+- **Scheduler options could smuggle a command into the batch script.** Each
+  option (partition, memory, an extra directive) becomes a line of the script,
+  which runs as you on the cluster, and none was checked: a newline in one
+  started a shell command of its own. Partition and memory must now be one
+  word (no whitespace or `#`) and each extra directive one line. The form
+  checks the same patterns before submitting.
 - **Cancelling or deleting a local job could SIGTERM an unrelated process
   group.** Deleting a job whose stored status still said RUNNING -- its process
   long gone, say across a server restart -- signalled whatever process group its

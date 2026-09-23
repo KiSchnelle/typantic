@@ -15,7 +15,7 @@ import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,21 +36,35 @@ _TOOL_TIMED_OUT = -2
 """Return code standing in for "the tool did not answer in time"."""
 
 
+# Each option becomes a line of the batch script, which runs as the user on the
+# cluster: a newline in one would start a shell command of its own.
+_ONE_WORD = r"^[^\s#]+$"
+_ONE_LINE = r"^[^\r\n]*$"
+
+
 class SchedulerParams(BaseModel):
     """A batch resource request, shared across schedulers."""
 
     model_config = ConfigDict(extra="forbid")
 
-    partition: str | None = Field(default=None, description="Partition / queue.")
+    partition: str | None = Field(
+        default=None,
+        pattern=_ONE_WORD,
+        description="Partition / queue.",
+    )
     gpus: int | None = Field(default=None, ge=0, description="GPUs to request.")
     cpus: int | None = Field(default=None, ge=1, description="CPUs per task.")
-    mem: str | None = Field(default=None, description="Memory, e.g. '16G'.")
+    mem: str | None = Field(
+        default=None,
+        pattern=_ONE_WORD,
+        description="Memory, in the scheduler's syntax: Slurm '16G', PBS '16gb'.",
+    )
     time_minutes: int | None = Field(
         default=None,
         ge=1,
         description="Wall-clock limit in minutes.",
     )
-    extra: list[str] = Field(
+    extra: list[Annotated[str, Field(pattern=_ONE_LINE)]] = Field(
         default_factory=list,
         description="Raw extra directive arguments, one per line.",
     )
@@ -136,6 +150,25 @@ class SchedulerBackend(abc.ABC):
 
     # --- shared flow ---
 
+    def _control_args(
+        self,
+        *,
+        job_dir: Path,  # noqa: ARG002 - subclass hook
+        log_path: Path,  # noqa: ARG002 - subclass hook
+    ) -> list[str]:
+        """Submit options naming the job, its log and its folder.
+
+        Given on the submit command line, where a path with a space in it is
+        still one argument, rather than as directives in the script. Inserted
+        right after the tool's name; empty by default, for a scheduler whose
+        directives still carry them.
+        """
+        return []
+
+    def _submit(self, script_path: Path, *, job_dir: Path, log_path: Path) -> list[str]:
+        tool, *rest = self._submit_command(script_path)
+        return [tool, *self._control_args(job_dir=job_dir, log_path=log_path), *rest]
+
     def _preamble(self, *, job_dir: Path) -> list[str]:  # noqa: ARG002 - subclass hook
         """Shell lines to run after the directives, before the command.
 
@@ -175,7 +208,7 @@ class SchedulerBackend(abc.ABC):
             script_path,
             self._script(argv, job_dir=job_dir, log_path=log_path, params=params),
         )
-        submit = self._submit_command(script_path)
+        submit = self._submit(script_path, job_dir=job_dir, log_path=log_path)
         result = _run_tool(self._run, submit)
         if result.returncode == _TOOL_TIMED_OUT:
             msg = (
@@ -239,9 +272,15 @@ class SchedulerBackend(abc.ABC):
         log_path: Path,
         backend_options: dict[str, Any],
     ) -> str:
-        """Return the submit script this launch would render."""
+        """Return the submit command and the script this launch would render."""
         params = SchedulerParams.model_validate(backend_options)
-        return self._script(argv, job_dir=job_dir, log_path=log_path, params=params)
+        script = self._script(argv, job_dir=job_dir, log_path=log_path, params=params)
+        submit = self._submit(
+            job_dir / _SUBMIT_SCRIPT,
+            job_dir=job_dir,
+            log_path=log_path,
+        )
+        return f"# Submitted with: {shlex.join(submit)}\n{script}"
 
 
 def first_nonempty_line(text: str) -> str | None:

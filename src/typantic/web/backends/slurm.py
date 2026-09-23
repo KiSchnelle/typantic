@@ -32,19 +32,22 @@ _FAILED_STATES = frozenset(
 class SlurmBackend(SchedulerBackend):
     """Submit and track jobs on a Slurm cluster."""
 
+    def _control_args(self, *, job_dir: Path, log_path: Path) -> list[str]:
+        return [
+            f"--job-name={job_dir.name}",
+            f"--output={log_path}",
+            # Run in the job folder (parity with the local backend's cwd).
+            f"--chdir={job_dir}",
+        ]
+
     def _directives(
         self,
         params: SchedulerParams,
         *,
-        job_dir: Path,
-        log_path: Path,
+        job_dir: Path,  # noqa: ARG002 - named on the command line instead
+        log_path: Path,  # noqa: ARG002 - named on the command line instead
     ) -> list[str]:
-        lines = [
-            f"#SBATCH --job-name={job_dir.name}",
-            f"#SBATCH --output={log_path}",
-            # Run in the job folder (parity with the local backend's cwd).
-            f"#SBATCH --chdir={job_dir}",
-        ]
+        lines: list[str] = []
         if params.partition:
             lines.append(f"#SBATCH --partition={params.partition}")
         if params.gpus:  # 0/unset means no GPU request -> no gres line

@@ -20,18 +20,24 @@ _FINISHED_STATES = frozenset({"C", "F"})
 class PbsBackend(SchedulerBackend):
     """Submit and track jobs on a PBS cluster."""
 
+    def _control_args(self, *, job_dir: Path, log_path: Path) -> list[str]:
+        return [
+            "-N",
+            _job_name(job_dir.name),
+            "-o",
+            str(log_path),
+            "-j",
+            "oe",  # merge stderr into the -o log
+        ]
+
     def _directives(
         self,
         params: SchedulerParams,
         *,
-        job_dir: Path,
-        log_path: Path,
+        job_dir: Path,  # noqa: ARG002 - named on the command line instead
+        log_path: Path,  # noqa: ARG002 - named on the command line instead
     ) -> list[str]:
-        lines = [
-            f"#PBS -N {_job_name(job_dir.name)}",
-            f"#PBS -o {log_path}",
-            "#PBS -j oe",  # merge stderr into the -o log
-        ]
+        lines: list[str] = []
         if params.partition:
             lines.append(f"#PBS -q {params.partition}")
         resources = []
