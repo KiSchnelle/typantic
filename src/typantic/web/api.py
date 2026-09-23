@@ -193,7 +193,8 @@ def make_api(  # noqa: C901, PLR0915 - a route-registering factory; each closure
 
     @app.post("/api/jobs/{job_id}/cancel", dependencies=guard)
     def cancel_job(job_id: str) -> JobRecord:
-        record = launcher.cancel(job_id)
+        with _domain_errors():
+            record = launcher.cancel(job_id)
         if record is None:
             raise HTTPException(status_code=404, detail="No such job.")
         return record

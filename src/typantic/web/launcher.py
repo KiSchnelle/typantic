@@ -471,7 +471,16 @@ class Launcher:
                 return record
             backend = self._backends.get(record.backend)
             if backend is not None:
-                backend.cancel(record)
+                try:
+                    backend.cancel(record)
+                except Exception:
+                    # Refused because it has just finished is no failure: show
+                    # how it ended. Otherwise it may well still be running.
+                    self._forget_poll(job_id)
+                    latest = self.refresh(record)
+                    if latest.is_terminal:
+                        return latest
+                    raise
             record = record.model_copy(
                 update={
                     "status": JobStatus.CANCELLED,
@@ -494,9 +503,7 @@ class Launcher:
                 self._forget_poll(job_id)
                 record = self.refresh(record)
             if not record.is_terminal:
-                backend = self._backends.get(record.backend)
-                if backend is not None:
-                    backend.cancel(record)
+                self._cancel_before_delete(record)
             self._forget_poll(job_id)
             deleted = self.store.delete(job_id)
         with self._lock:
@@ -504,6 +511,24 @@ class Launcher:
             # stores nothing, so dropping it here is safe.
             self._job_locks.pop(job_id, None)
         return deleted
+
+    def _cancel_before_delete(self, record: JobRecord) -> None:
+        """Cancel a job about to be deleted; a failure is logged, not raised.
+
+        Deleting is what was asked for, and the job's row and folder go either
+        way -- but a job the backend could not stop may run on, so say so.
+        """
+        backend = self._backends.get(record.backend)
+        if backend is None:
+            return
+        try:
+            backend.cancel(record)
+        except Exception:
+            logger.warning(
+                "Could not cancel job %s before deleting it; it may still be running.",
+                record.id,
+                exc_info=True,
+            )
 
     def request_for(self, job_id: str) -> LaunchRequest | None:
         """The launch request behind a job, for cloning or restarting it."""

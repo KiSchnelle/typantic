@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from typantic.web import launcher as launcher_mod
 from typantic.web.backends.base import Launched, LaunchUncertainError, PollResult
+from typantic.web.backends.scheduler import SchedulerError
 from typantic.web.launcher import (
     JobNotTerminalError,
     Launcher,
@@ -42,6 +43,7 @@ class FakeBackend:
         # A scheduler job writes its log only once it starts running.
         self.writes_log = True
         self.rejects = None  # an exception preview() and launch() raise
+        self.cancel_error = None  # an exception cancel() raises
 
     def launch(self, argv, *, job_dir, log_path, backend_options):
         if self.rejects is not None:
@@ -59,6 +61,8 @@ class FakeBackend:
         return self.poll_result
 
     def cancel(self, record):
+        if self.cancel_error is not None:
+            raise self.cancel_error
         self.cancelled.append(record.id)
 
     def preview(self, argv, *, job_dir, log_path, backend_options):
@@ -853,3 +857,37 @@ def test_a_restart_of_a_job_without_a_log(wired):
     store.log_path(done.id).unlink()
     launcher.restart(done.id)
     assert store.log_path(done.id).read_text() == "hello\n"
+
+
+# --- a cancel the backend could not carry out ---
+
+
+def test_a_failed_cancel_is_reported_and_the_job_left_running(wired):
+    launcher, backend, store = wired
+    record = launcher.launch(_request())
+    backend.cancel_error = SchedulerError("Cancel failed (exit 1): no controller")
+    with pytest.raises(SchedulerError):
+        launcher.cancel(record.id)
+    assert store.load(record.id).status is JobStatus.RUNNING
+
+
+def test_a_cancel_that_fails_because_the_job_just_finished_is_no_error(wired):
+    launcher, backend, _ = wired
+    record = launcher.launch(_request())
+
+    def finish_then_refuse(_record):
+        backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+        msg = "Cancel failed (exit 1): Job/step already completing or completed"
+        raise SchedulerError(msg)
+
+    backend.cancel = finish_then_refuse
+    assert launcher.cancel(record.id).status is JobStatus.DONE
+
+
+def test_delete_goes_ahead_when_the_cancel_fails(wired, caplog):
+    launcher, backend, store = wired
+    record = launcher.launch(_request())
+    backend.cancel_error = SchedulerError("Cancel failed (exit 1): no controller")
+    assert launcher.delete(record.id) is True
+    assert store.load(record.id) is None
+    assert "may still be running" in caplog.text

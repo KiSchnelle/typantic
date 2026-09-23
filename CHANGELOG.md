@@ -77,6 +77,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path as you spelled it rather than resolving symlinks: the path you pick is
   what the job's config receives, and a resolved one (`/scratch/…` turned into
   `/lustre/…`) may not exist where the job runs.
+- **Breaking (containers): docker and podman jobs run with `--init`, named
+  `typantic-<job id>`.** A process running as PID 1 ignores SIGTERM unless it
+  installs a handler, so a Python app in a container shrugged off every
+  cancel: the container ran on. `--init` puts a minimal init in front of the
+  app that passes the signal on. The name lets a cancel fall back to
+  `docker kill typantic-<job id>` when the client process is gone, since the
+  daemon keeps the container running without it. **Migration:** an image that
+  needs its entrypoint to be PID 1 (one that runs its own init) must now cope
+  with a parent init.
 - A gallery thumbnail that cannot be rendered now answers HTTP 415, and the
   tile shows the file's name. It used to stream the full-size original into a
   384 px tile, which for a detector frame or a large plot meant hundreds of
@@ -255,6 +264,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that has finished since, which recorded CANCELLED over its real outcome.
   - The status cache is synchronised; concurrent requests could raise
     `KeyError` from it.
+- **Cancelling a scheduler job whose `scancel` / `qdel` failed recorded it
+  CANCELLED anyway**, while it kept running. The failure is now reported (HTTP
+  502) and the job left as it is -- unless it finished in the meantime, which
+  is then what it shows. Deleting a job still goes ahead, and logs that the job
+  may still be running.
 - **A restart that failed could leave the job worse off than before:**
   - A restart the backend refused (a bad partition, say) destroyed the job's
     settings: the new ones were written before the backend looked at its

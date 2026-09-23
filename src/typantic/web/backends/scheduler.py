@@ -216,9 +216,20 @@ class SchedulerBackend(abc.ABC):
         return self._parse_status(result.stdout)
 
     def cancel(self, record: JobRecord) -> None:
-        """Cancel the job through the scheduler (best effort)."""
-        if record.scheduler_id is not None:
-            _run_tool(self._run, self._cancel_command(record.scheduler_id))
+        """Cancel the job through the scheduler.
+
+        Raises:
+            SchedulerError: If the scheduler refused, or could not be asked. As
+                far as anyone knows the job is then still running, and recording
+                it cancelled would hide that.
+        """
+        if record.scheduler_id is None:
+            return
+        result = _run_tool(self._run, self._cancel_command(record.scheduler_id))
+        if result.returncode != 0:
+            detail = result.stderr.strip()
+            msg = f"Cancel failed (exit {result.returncode}): {detail}"
+            raise SchedulerError(msg)
 
     def preview(
         self,

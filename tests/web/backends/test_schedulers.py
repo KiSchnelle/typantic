@@ -359,3 +359,14 @@ def test_a_submission_that_timed_out_may_have_queued(tmp_path):
         SlurmBackend(hangs).launch(
             ARGV, job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
         )
+
+
+@pytest.mark.parametrize("backend", [SlurmBackend, PbsBackend])
+def test_a_refused_cancel_is_reported(tmp_path, backend):
+    # A failed scancel/qdel was ignored, and the job recorded CANCELLED while it
+    # kept running.
+    runner = FakeRunner()
+    runner.set("scancel", returncode=1, stderr="Invalid job id specified")
+    runner.set("qdel", returncode=35, stderr="qdel: Unknown Job Id")
+    with pytest.raises(SchedulerError, match="Cancel failed"):
+        backend(runner).cancel(_record(tmp_path, scheduler_id="55"))

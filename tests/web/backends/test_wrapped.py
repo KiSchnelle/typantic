@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from typantic.web.backends import container as container_mod
 from typantic.web.backends.apptainer import ApptainerBackend
 from typantic.web.backends.container import (
     ContainerBackend,
@@ -110,6 +111,12 @@ def test_container_wrap_docker():
         "docker",
         "run",
         "--rm",
+        # PID 1 ignores SIGTERM unless it handles it: without an init, a Python
+        # app in a container shrugged off every cancel.
+        "--init",
+        # A name to stop it by, should the client process be gone.
+        "--name",
+        "typantic-j",
         "-v",
         "/jobs/j:/jobs/j",
         "-w",
@@ -147,3 +154,61 @@ def test_container_requires_image():
 )
 def test_backends_expose_options_model(backend):
     assert issubclass(backend.options_model, BaseModel)
+
+
+# --- a cancelled container stops ---
+
+
+def _record(job_dir):
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from typantic.web.models import JobRecord  # noqa: PLC0415
+
+    return JobRecord(
+        id=job_dir.name,
+        command_key="a/b",
+        app="a",
+        command="b",
+        title="T",
+        backend="docker",
+        job_dir=str(job_dir),
+        config_path=str(job_dir / "submit_config.json"),
+        log_path=str(job_dir / "job.log"),
+        pid=4242,
+        created_at=datetime.now(UTC),
+    )
+
+
+@pytest.fixture
+def kills(monkeypatch):
+    calls = []
+    monkeypatch.setattr(container_mod, "run_tool", lambda argv, **_: calls.append(argv))
+    return calls
+
+
+def _client(monkeypatch, *, reachable):
+    backend = container_mod.ContainerBackend
+    monkeypatch.setattr(backend, "_signal", lambda _self, _record: reachable)
+
+
+def test_cancel_signals_the_client_when_it_is_there(monkeypatch, kills):
+    _client(monkeypatch, reachable=True)
+    docker_backend().cancel(_record(JOB_DIR))
+    assert kills == []
+
+
+def test_cancel_kills_the_container_by_name_when_the_client_is_gone(monkeypatch, kills):
+    # The daemon owns the container: with the docker client dead, signalling
+    # the job's process group reached nothing and the container ran on.
+    _client(monkeypatch, reachable=False)
+    podman_backend().cancel(_record(JOB_DIR))
+    assert kills == [["podman", "kill", "typantic-j"]]
+
+
+def test_cancel_survives_a_missing_container_cli(monkeypatch):
+    def missing(argv, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+
+    _client(monkeypatch, reachable=False)
+    monkeypatch.setattr(container_mod, "run_tool", missing)
+    docker_backend().cancel(_record(JOB_DIR))

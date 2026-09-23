@@ -747,3 +747,17 @@ def test_a_submission_that_may_have_queued_is_504(env, monkeypatch):
     resp = env.client.post("/api/launch", json=body, headers=AUTH)
     assert resp.status_code == 504
     assert "may have been queued" in resp.json()["detail"]
+
+
+def test_a_refused_cancel_is_502(env, monkeypatch):
+    record = _launch(env, backend="slurm")
+
+    def runner(argv):
+        if argv[0] == "scancel":
+            return subprocess.CompletedProcess(argv, 1, "", "no controller")
+        return subprocess.CompletedProcess(argv, 0, "RUNNING|0:0", "")
+
+    monkeypatch.setattr(env.launcher._backends["slurm"], "_run", runner)
+    resp = env.client.post(f"/api/jobs/{record['id']}/cancel", headers=AUTH)
+    assert resp.status_code == 502
+    assert "Cancel failed" in resp.json()["detail"]
