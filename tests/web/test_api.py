@@ -552,15 +552,22 @@ def test_log_tail_missing_job(env):
 
 
 class FakeWS:
-    def __init__(self, fail_after=None):
+    def __init__(self, fail_after=None, *, leaves=False):
         self.sent = []
         self.closed = False
         self.fail_after = fail_after
+        self.leaves = leaves  # the client has closed its end
 
     async def send_json(self, data):
         if self.fail_after is not None and len(self.sent) >= self.fail_after:
             raise WebSocketDisconnect(1000)
         self.sent.append(data)
+
+    async def receive(self):
+        if self.leaves:
+            return {"type": "websocket.disconnect", "code": 1001}
+        await asyncio.sleep(3600)  # a client that stays says nothing
+        return {"type": "websocket.receive", "text": ""}
 
     async def close(self):
         self.closed = True
@@ -900,3 +907,91 @@ def test_a_request_without_a_host_header_is_refused(tmp_path, monkeypatch):
 )
 def test_host_name_is_parsed_strictly(header, name):
     assert host_name(header) == name
+
+
+# --- the log socket: off the event loop, gone with its client, reset on a new log ---
+
+
+def test_the_log_sockets_first_lookup_runs_off_the_event_loop(env, monkeypatch):
+    # A scheduler job's status is a sacct call away; run on the event loop, one
+    # slow call stalled every other client of the server.
+    record = _launch(env)
+    env.backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    real_get = env.launcher.get
+    on_loop = []
+
+    def get(job_id):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real_get(job_id)
+
+    monkeypatch.setattr(env.launcher, "get", get)
+    url = f"/ws/jobs/{record['id']}/log?token=secret"
+    with env.client.websocket_connect(url) as ws:
+        while "end" not in ws.receive_json():
+            pass
+    assert on_loop
+    assert not any(on_loop)
+
+
+def test_the_tail_stops_when_its_client_leaves(tmp_path):
+    # A quiet job sends nothing, and a closed socket was only noticed on a send:
+    # the tail kept asking for the job's status for as long as it ran.
+    log = tmp_path / "job.log"
+    log.write_text("")
+    calls = []
+
+    def get(_id):
+        calls.append(_id)
+        if len(calls) > 50:
+            raise AssertionError("still polling after the client left")
+        return _rec(JobStatus.RUNNING)
+
+    ws = FakeWS(leaves=True)
+    asyncio.run(_tail_log(ws, SimpleNamespace(get=get), "j", log, interval=0))
+    assert len(calls) == 1
+    assert not ws.closed  # nothing to close: the client already has
+
+
+def test_a_replaced_log_is_streamed_from_its_start(tmp_path):
+    # A restart in place gives the job a fresh log; the tail kept its offset in
+    # the old file and so skipped the new run's first bytes, or all of them.
+    log = tmp_path / "job.log"
+    log.write_text("old run\n")
+    calls = {"n": 0}
+
+    def get(_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            fresh = tmp_path / "fresh.log"
+            fresh.write_text("new run\n")
+            fresh.replace(log)
+            return _rec(JobStatus.RUNNING)
+        return _rec(JobStatus.DONE)
+
+    ws = FakeWS()
+    asyncio.run(_tail_log(ws, SimpleNamespace(get=get), "j", log, interval=0))
+    assert ws.sent[:3] == [{"log": "old run\n"}, {"reset": True}, {"log": "new run\n"}]
+
+
+def test_a_truncated_log_is_streamed_from_its_start(tmp_path):
+    log = tmp_path / "job.log"
+    log.write_text("a long first run\n")
+    calls = {"n": 0}
+
+    def get(_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            with log.open("r+") as handle:  # same file, cut short and rewritten
+                handle.truncate(0)
+                handle.write("second\n")
+            return _rec(JobStatus.RUNNING)
+        return _rec(JobStatus.DONE)
+
+    ws = FakeWS()
+    asyncio.run(_tail_log(ws, SimpleNamespace(get=get), "j", log, interval=0))
+    assert {"reset": True} in ws.sent
+    assert {"log": "second\n"} in ws.sent

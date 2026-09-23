@@ -338,6 +338,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own options) was submitted as `[]`, pinning the field instead of leaving the
   model's default. Arrays at the top level and in nested objects were already
   left out; arrays of objects are now cleaned the same way.
+- **The log socket:**
+  - Its first status check ran on the server's event loop, so opening a
+    Slurm job's log (a `sacct` call away) stalled every other client until it
+    answered. It now runs off the loop, like the tail's later checks.
+  - A tail outlived its client. A quiet job sends nothing, and a closed socket
+    was only noticed on a send, so the server kept checking the job's status
+    (a `sacct` a second, for a Slurm job) for as long as it ran. The tail now
+    stops when its client leaves.
+  - A job restarted in place gets a fresh log, but a tail already open kept
+    reading at its old offset and skipped the new run's first bytes, or all of
+    them. A replaced or truncated log is now streamed from its start, after a
+    `{"reset": true}` frame that tells the dashboard to clear what it shows.
 - The `ssh -N -L` line the dashboard prints for an IPv6 bind (`--host ::1`)
   read `8000:::1:8000`, which ssh rejects; the address is now bracketed.
 - `typantic web serve --log-level` took any word, printed the startup banner,

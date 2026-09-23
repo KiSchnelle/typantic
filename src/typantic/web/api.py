@@ -10,6 +10,7 @@ serves both.
 import asyncio
 import codecs
 import contextlib
+import os
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Annotated
@@ -304,7 +305,8 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
         if not token_ok(token, websocket.query_params.get("token")):
             await websocket.close(code=_WS_POLICY_VIOLATION)
             return
-        record = launcher.get(job_id)
+        # Off the event loop: a scheduler job's status is a sacct call away.
+        record = await asyncio.to_thread(launcher.get, job_id)
         if record is None:
             await websocket.close(code=_WS_POLICY_VIOLATION)
             return
@@ -324,28 +326,47 @@ _LOG_CHUNK_BYTES = 1 << 20
 """Most bytes read (and framed) per tail step, so a huge log streams in pieces."""
 
 
-def _read_log_from(
-    path: Path,
-    offset: int,
-    decoder: codecs.IncrementalDecoder,
-) -> tuple[str, int]:
-    """Read up to one chunk of the log from ``offset``.
+class _LogCursor:
+    """How far a tail has read a job's log, and which file that was.
 
-    Bounded so a multi-gigabyte log is streamed rather than loaded whole: reading
-    to EOF would hold the entire file (and a second copy through the JSON frame)
-    in memory at once. ``decoder`` carries any partial UTF-8 sequence across the
-    chunk boundary, which decoding each chunk independently would corrupt.
-
-    Returns:
-        The decoded text and the offset to resume from.
+    A restart in place gives the job a fresh log file; a tail that kept its
+    offset would skip the new run's first bytes (or all of them). So each read
+    checks the file is still the one read so far, and not shorter than the
+    offset, and otherwise starts again from the top.
     """
-    try:
-        with path.open("rb") as handle:
-            handle.seek(offset)
-            data = handle.read(_LOG_CHUNK_BYTES)
-    except OSError:
-        return "", offset
-    return decoder.decode(data), offset + len(data)
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.offset = 0
+        self._file: tuple[int, int] | None = None  # (device, inode) read so far
+        # Carries a partial UTF-8 sequence across chunk boundaries, which
+        # decoding each chunk independently would corrupt.
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+    def read(self) -> tuple[str, bool]:
+        """Up to one chunk of new text, and whether the log started over first.
+
+        Bounded so a multi-gigabyte log is streamed rather than loaded whole:
+        reading to EOF would hold the entire file (and a second copy through
+        the JSON frame) in memory at once.
+        """
+        try:
+            with self.path.open("rb") as handle:
+                info = os.fstat(handle.fileno())
+                current = (info.st_dev, info.st_ino)
+                restarted = self._file is not None and (
+                    current != self._file or info.st_size < self.offset
+                )
+                if restarted:
+                    self.offset = 0
+                    self._decoder.reset()
+                self._file = current
+                handle.seek(self.offset)
+                data = handle.read(_LOG_CHUNK_BYTES)
+        except OSError:
+            return "", False
+        self.offset += len(data)
+        return self._decoder.decode(data), restarted
 
 
 async def _tail_log(
@@ -358,47 +379,53 @@ async def _tail_log(
 ) -> None:
     """Stream appended log bytes until the job is terminal, then close.
 
-    Every frame is a JSON envelope (``{"log": …}`` / ``{"end": …}``), so a log
-    line can never be mistaken for the end signal.
+    Every frame is a JSON envelope -- ``{"log": …}``, ``{"reset": true}`` when
+    the log started over (the client clears what it has), ``{"end": …}`` -- so a
+    log line can never be mistaken for a signal.
 
     This is the only async path in the app -- every route is a sync ``def`` that
     runs in a threadpool -- so its blocking work (reading the log, and a
     ``launcher.get`` that may shell out to a scheduler) is handed to a thread.
     Run inline, one slow ``sacct`` would stall the event loop for every client.
+    The wait between polls listens for the client leaving: a quiet job sends
+    nothing, and a closed socket is otherwise only noticed on a send.
     """
-    offset = 0
-    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    cursor = _LogCursor(log_path)
     try:
         while True:
-            offset = await _drain(websocket, log_path, offset, decoder)
+            await _drain(websocket, cursor)
             record = await asyncio.to_thread(launcher.get, job_id)
             if record is None or record.is_terminal:
-                await _drain(websocket, log_path, offset, decoder)
+                await _drain(websocket, cursor)
                 status = record.status if record is not None else "unknown"
                 await websocket.send_json({"end": {"status": status}})
                 break
-            await asyncio.sleep(interval)
+            if await _client_left(websocket, within=interval):
+                return
     except WebSocketDisconnect:
         return
     await websocket.close()
 
 
-async def _drain(
-    websocket: WebSocket,
-    log_path: Path,
-    offset: int,
-    decoder: codecs.IncrementalDecoder,
-) -> int:
-    """Send every chunk appended since ``offset``; return the new offset."""
+async def _client_left(websocket: WebSocket, *, within: float) -> bool:
+    """Wait up to ``within`` seconds for the client to leave; whether it did."""
+    try:
+        async with asyncio.timeout(within):
+            message = await websocket.receive()
+    except TimeoutError:
+        return False
+    kind: str = message["type"]
+    return kind == "websocket.disconnect"
+
+
+async def _drain(websocket: WebSocket, cursor: _LogCursor) -> None:
+    """Send every chunk appended since the cursor, and a reset if it started over."""
     while True:
-        text, new_offset = await asyncio.to_thread(
-            _read_log_from,
-            log_path,
-            offset,
-            decoder,
-        )
+        offset = cursor.offset
+        text, restarted = await asyncio.to_thread(cursor.read)
+        if restarted:
+            await websocket.send_json({"reset": True})
         if text:
             await websocket.send_json({"log": text})
-        if new_offset == offset:
-            return offset
-        offset = new_offset
+        if cursor.offset == offset and not restarted:
+            return
