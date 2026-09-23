@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from typer.testing import CliRunner
 
@@ -8,6 +10,12 @@ from typantic.web.models import Brand, CommandMeta
 
 runner = CliRunner()
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(output):
+    """Strip ANSI codes so assertions survive Rich's colours (CI sets FORCE_COLOR)."""
+    return _ANSI.sub("", output)
 
 
 def test_serve_no_token(monkeypatch, tmp_path):
@@ -134,7 +142,7 @@ def test_an_unknown_log_level_is_a_usage_error(monkeypatch, tmp_path):
         ["serve", "--no-token", "--jobs-dir", str(tmp_path), "--log-level", "loud"],
     )
     assert result.exit_code == 2
-    assert "loud" in result.output
+    assert "loud" in _plain(result.output)
     assert started == []
 
 
@@ -202,5 +210,5 @@ def test_a_bad_brand_flag_is_a_usage_error(monkeypatch, tmp_path, flag, content)
         value = str(path)
     result, captured = _serve(monkeypatch, tmp_path, flag, value)
     assert result.exit_code == 2
-    assert flag in result.output
+    assert flag in _plain(result.output)
     assert captured == {}
