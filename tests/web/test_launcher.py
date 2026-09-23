@@ -35,14 +35,20 @@ class FakeBackend:
         self.poll_count = 0
         self.next_status = JobStatus.RUNNING
         self.poll_result = PollResult(status=JobStatus.RUNNING)
+        # Runs in place of the poll, to act out what happens while a slow
+        # status query (sacct can take seconds) is in flight.
+        self.on_poll = None
 
     def launch(self, argv, *, job_dir, log_path, backend_options):
+        pid = 4321 + len(self.launched)  # each run gets its own process
         self.launched.append((argv, backend_options))
         log_path.write_text("hello\n")
-        return Launched(pid=4321, status=self.next_status)
+        return Launched(pid=pid, status=self.next_status)
 
     def poll(self, record):
         self.poll_count += 1
+        if self.on_poll is not None:
+            return self.on_poll(record)
         return self.poll_result
 
     def cancel(self, record):
@@ -535,3 +541,101 @@ def test_a_restart_makes_an_old_config_private(wired):
     launcher.get(record.id)
     launcher.restart(record.id, _request(values={"x": 2}))
     assert _mode(store.config_path(record.id)) == 0o600
+
+
+# --- a slow poll never overwrites what happened while it ran ---
+
+
+def _finish(store, record):
+    store.save(record.model_copy(update={"status": JobStatus.DONE, "exit_code": 0}))
+
+
+def test_a_slow_poll_does_not_undo_a_restart(wired):
+    # The poll answered about the old run; storing it over the restarted row
+    # lost the new run's handle, leaving it running untracked.
+    launcher, backend, store = wired
+    record = launcher.launch(_request())
+
+    def finish_and_restart(polled):
+        backend.on_poll = None
+        _finish(store, polled)
+        launcher.restart(polled.id)
+        return PollResult(status=JobStatus.FAILED, exit_code=1)
+
+    backend.on_poll = finish_and_restart
+    launcher.refresh(record)
+    stored = store.load(record.id)
+    assert stored.status is JobStatus.RUNNING
+    assert stored.pid == 4322  # the restarted run's process
+
+
+def test_a_slow_poll_does_not_turn_a_cancel_into_a_failure(wired):
+    launcher, backend, store = wired
+    record = launcher.launch(_request())
+
+    def cancel_meanwhile(polled):
+        backend.on_poll = None
+        launcher.cancel(polled.id)
+        return PollResult(status=JobStatus.FAILED)  # the SIGTERM killed it
+
+    backend.on_poll = cancel_meanwhile
+    launcher.refresh(record)
+    assert store.load(record.id).status is JobStatus.CANCELLED
+
+
+def test_a_slow_poll_does_not_resurrect_a_deleted_job(wired):
+    launcher, backend, store = wired
+    record = launcher.launch(_request())
+
+    def delete_meanwhile(polled):
+        backend.on_poll = None
+        launcher.delete(polled.id)
+        return PollResult(status=JobStatus.DONE, exit_code=0)
+
+    backend.on_poll = delete_meanwhile
+    launcher.refresh(record)
+    assert store.load(record.id) is None
+
+
+def test_a_poll_of_the_old_run_is_not_reused_for_the_new_one(wired):
+    # The cached answer about the old run outlived the restart, and the next
+    # refresh within the TTL applied it to the new run.
+    launcher, backend, store = wired
+    record = launcher.launch(_request())
+
+    def finish_and_restart(polled):
+        backend.on_poll = None
+        _finish(store, polled)
+        launcher.restart(polled.id)
+        return PollResult(status=JobStatus.DONE, exit_code=0)
+
+    backend.on_poll = finish_and_restart
+    launcher.refresh(record)
+    backend.poll_result = PollResult(status=JobStatus.RUNNING)
+    assert launcher.get(record.id).status is JobStatus.RUNNING
+
+
+def test_cancel_does_not_trust_a_cached_running_status(wired):
+    # A 2 s old poll said RUNNING for a job that had finished since, so cancel
+    # signalled it and recorded CANCELLED over its real outcome.
+    launcher, backend, _ = wired
+    record = launcher.launch(_request())
+    launcher.refresh(record)  # caches RUNNING
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    assert launcher.cancel(record.id).status is JobStatus.DONE
+    assert backend.cancelled == []
+
+
+def test_a_refresh_that_changes_nothing_new_stores_nothing(wired):
+    # Another poll already stored this answer; the row is returned as stored.
+    launcher, backend, store = wired
+    backend.next_status = JobStatus.QUEUED
+    record = launcher.launch(_request())
+
+    def start_meanwhile(polled):
+        backend.on_poll = None
+        store.save(polled.model_copy(update={"status": JobStatus.RUNNING}))
+        return PollResult(status=JobStatus.RUNNING)
+
+    backend.on_poll = start_meanwhile
+    assert launcher.refresh(record).status is JobStatus.RUNNING

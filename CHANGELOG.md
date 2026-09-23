@@ -241,6 +241,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it and the job failed at once, unable to find its config; an unexpanded `~`
   even created a folder literally named `~`. The root is now made absolute when
   the store opens, keeping a symlinked path as spelled.
+- **A status check that took a while could undo what happened meanwhile.**
+  Refreshing a job stored the copy it had read before asking the backend, and a
+  `sacct` query can take seconds. A job restarted in that window was overwritten
+  with the old run's outcome, which left the new run running untracked; a
+  cancelled job flipped to FAILED; a deleted job came back. A status is now
+  stored only while the stored job is still the run that was asked about, and
+  every change to a job (refresh, cancel, restart, delete) is made under that
+  job's lock.
+  - A cached status names its run, so an answer about the run before a restart
+    is never reused for the new one.
+  - Cancel asks afresh instead of trusting a two-second-old RUNNING for a job
+    that has finished since, which recorded CANCELLED over its real outcome.
+  - The status cache is synchronised; concurrent requests could raise
+    `KeyError` from it.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

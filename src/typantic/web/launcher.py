@@ -10,6 +10,7 @@ dependencies never enter the web process.
 import json
 import logging
 import shutil
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -46,6 +47,13 @@ _POLL_TTL_SECONDS = 2.0
 _POLL_CACHE_MAX = 1024
 
 _PLACEHOLDER_JOB_ID = "<job-id>"
+
+_Run = tuple[str, int | None, int | None, str | None]
+
+
+def _run(record: JobRecord) -> _Run:
+    """What tells one run of a job from the next: a restart reuses the job id."""
+    return (record.backend, record.pid, record.pid_start, record.scheduler_id)
 
 
 def _clean_form_values(values: dict[str, Any]) -> dict[str, Any]:
@@ -111,7 +119,11 @@ class Launcher:
         self.store = store
         self.schema_cache = schema_cache or SchemaCache()
         self._backends = backends if backends is not None else load_backends()
-        self._poll_cache: dict[str, tuple[float, PollResult]] = {}
+        # The API serves requests from a thread pool. _lock guards the two dicts
+        # below; a job's own lock serialises every change to its stored row.
+        self._lock = threading.Lock()
+        self._poll_cache: dict[str, tuple[float, _Run, PollResult]] = {}
+        self._job_locks: dict[str, threading.RLock] = {}
         self.refresh_commands()
 
     def refresh_commands(self) -> list[CommandMeta]:
@@ -256,47 +268,83 @@ class Launcher:
             msg = f"Unknown project {project_id!r}."
             raise UnknownProjectError(msg)
 
+    def _job_lock(self, job_id: str) -> threading.RLock:
+        """The lock every change to ``job_id``'s stored row is made under.
+
+        Re-entrant, because a cancel or restart resolves the live status through
+        :meth:`refresh`, which takes it again to store what it found.
+        """
+        with self._lock:
+            return self._job_locks.setdefault(job_id, threading.RLock())
+
     def _poll(self, record: JobRecord) -> PollResult:
-        """Poll the backend, reusing a recent result within the TTL window."""
+        """Poll the backend, reusing a recent result for the same run.
+
+        A cached result names the run it was about, so an answer about the run
+        before a restart is never handed out for the new one.
+        """
         now = time.monotonic()
-        cached = self._poll_cache.get(record.id)
-        if cached is not None and now - cached[0] < _POLL_TTL_SECONDS:
-            return cached[1]
+        with self._lock:
+            cached = self._poll_cache.get(record.id)
+        if (
+            cached is not None
+            and cached[1] == _run(record)
+            and now - cached[0] < _POLL_TTL_SECONDS
+        ):
+            return cached[2]
         result = self._backends[record.backend].poll(record)
-        # Re-insert at the end so eviction is least-recently-updated first.
-        self._poll_cache.pop(record.id, None)
-        self._poll_cache[record.id] = (now, result)
-        while len(self._poll_cache) > _POLL_CACHE_MAX:
-            del self._poll_cache[next(iter(self._poll_cache))]
+        with self._lock:
+            # Re-insert at the end so eviction is least-recently-updated first.
+            self._poll_cache.pop(record.id, None)
+            self._poll_cache[record.id] = (now, _run(record), result)
+            while len(self._poll_cache) > _POLL_CACHE_MAX:
+                del self._poll_cache[next(iter(self._poll_cache))]
         return result
 
+    def _forget_poll(self, job_id: str) -> None:
+        with self._lock:
+            self._poll_cache.pop(job_id, None)
+
     def refresh(self, record: JobRecord) -> JobRecord:
-        """Re-resolve a non-terminal job's status from its backend and persist it."""
+        """Re-resolve a non-terminal job's status from its backend and persist it.
+
+        The poll runs unlocked -- a scheduler query can take seconds -- so by the
+        time it answers, the job may have been cancelled, restarted or deleted.
+        What it found is stored only while the stored row is still the run that
+        was polled, and not yet terminal; otherwise the stored row is returned.
+        """
         if record.is_terminal or record.backend not in self._backends:
             return record
         result = self._poll(record)
         if result.status == record.status and result.exit_code == record.exit_code:
             return record
-        # refresh only runs on non-terminal records, so finished_at is None here.
-        # Every terminal state gets stamped, CANCELLED included: a job cancelled
-        # outside the dashboard (scancel, kill) reaches it through this path too,
-        # and would otherwise show a finish time of "never".
-        finished_at = (
-            datetime.now(UTC)
-            if result.status in TERMINAL_STATUSES
-            else record.finished_at
-        )
-        record = record.model_copy(
-            update={
-                "status": result.status,
-                "exit_code": result.exit_code,
-                "finished_at": finished_at,
-            },
-        )
-        if record.is_terminal:
-            self._poll_cache.pop(record.id, None)
-        self.store.save(record)
-        return record
+        with self._job_lock(record.id):
+            current = self.store.load(record.id)
+            if current is None:
+                return record  # deleted meanwhile: nothing left to update
+            if current.is_terminal or _run(current) != _run(record):
+                return current  # cancelled, finished or restarted meanwhile
+            if (current.status, current.exit_code) == (result.status, result.exit_code):
+                return current  # another poll stored this already
+            # Every terminal state gets stamped, CANCELLED included: a job
+            # cancelled outside the dashboard (scancel, kill) reaches it through
+            # this path too, and would otherwise show a finish time of "never".
+            finished_at = (
+                datetime.now(UTC)
+                if result.status in TERMINAL_STATUSES
+                else current.finished_at
+            )
+            updated = current.model_copy(
+                update={
+                    "status": result.status,
+                    "exit_code": result.exit_code,
+                    "finished_at": finished_at,
+                },
+            )
+            if updated.is_terminal:
+                self._forget_poll(record.id)
+            self.store.save(updated)
+            return updated
 
     def query(  # noqa: PLR0913 - a filter/sort/page query surface
         self,
@@ -336,11 +384,7 @@ class Launcher:
         """Delete a project and all its jobs, cancelling any still active."""
         jobs, _ = self.store.query_jobs(project_id=project_id)
         for record in jobs:
-            if not record.is_terminal:
-                backend = self._backends.get(record.backend)
-                if backend is not None:
-                    backend.cancel(record)
-            self._poll_cache.pop(record.id, None)
+            self.delete(record.id)
         return self.store.delete_project(project_id)
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -355,32 +399,45 @@ class Launcher:
         keep its real outcome rather than be recorded CANCELLED forever because
         the stored row had not caught up yet.
         """
-        record = self.get(job_id)
-        if record is None:
-            return None
-        if record.is_terminal:
-            return record
-        backend = self._backends.get(record.backend)
-        if backend is not None:
-            backend.cancel(record)
-        record = record.model_copy(
-            update={"status": JobStatus.CANCELLED, "finished_at": datetime.now(UTC)},
-        )
-        self._poll_cache.pop(job_id, None)
-        self.store.save(record)
-        return record
-
-    def delete(self, job_id: str) -> bool:
-        """Remove a job entirely, cancelling it first if it is still active."""
-        record = self.store.load(job_id)
-        if record is None:
-            return False
-        if not record.is_terminal:
+        with self._job_lock(job_id):
+            # Not the cached poll: a 2 s old RUNNING may describe a job that has
+            # finished since, which must keep its outcome.
+            self._forget_poll(job_id)
+            record = self.get(job_id)
+            if record is None:
+                return None
+            if record.is_terminal:
+                return record
             backend = self._backends.get(record.backend)
             if backend is not None:
                 backend.cancel(record)
-        self._poll_cache.pop(job_id, None)
-        return self.store.delete(job_id)
+            record = record.model_copy(
+                update={
+                    "status": JobStatus.CANCELLED,
+                    "finished_at": datetime.now(UTC),
+                },
+            )
+            self._forget_poll(job_id)
+            self.store.save(record)
+            return record
+
+    def delete(self, job_id: str) -> bool:
+        """Remove a job entirely, cancelling it first if it is still active."""
+        with self._job_lock(job_id):
+            record = self.store.load(job_id)
+            if record is None:
+                return False
+            if not record.is_terminal:
+                backend = self._backends.get(record.backend)
+                if backend is not None:
+                    backend.cancel(record)
+            self._forget_poll(job_id)
+            deleted = self.store.delete(job_id)
+        with self._lock:
+            # A refresh still waiting on the old lock finds the row gone and
+            # stores nothing, so dropping it here is safe.
+            self._job_locks.pop(job_id, None)
+        return deleted
 
     def request_for(self, job_id: str) -> LaunchRequest | None:
         """The launch request behind a job, for cloning or restarting it."""
@@ -419,57 +476,61 @@ class Launcher:
         Raises:
             JobNotTerminalError: If the job is still active.
         """
-        record = self.get(job_id)
-        if record is None:
-            return None
-        if not record.is_terminal:
-            msg = f"Job {job_id} is {record.status.value}; only terminal jobs restart."
-            raise JobNotTerminalError(msg)
+        with self._job_lock(job_id):
+            record = self.get(job_id)
+            if record is None:
+                return None
+            if not record.is_terminal:
+                msg = (
+                    f"Job {job_id} is {record.status.value}; "
+                    "only terminal jobs restart."
+                )
+                raise JobNotTerminalError(msg)
 
-        meta = self.command(record.command_key)
+            meta = self.command(record.command_key)
 
-        if request is None:
-            new_request = self._request_from_record(record)
-        else:
-            new_request = request.model_copy(
-                update={"command_key": record.command_key},
+            if request is None:
+                new_request = self._request_from_record(record)
+            else:
+                new_request = request.model_copy(
+                    update={"command_key": record.command_key},
+                )
+            # Validate everything before touching the job's stored settings: a
+            # rejected restart must leave the job exactly as it was.
+            backend = self._backend(new_request.backend)
+            self._check_project(new_request.project_id)
+
+            if request is not None:
+                write_private(
+                    self.store.config_path(job_id),
+                    json.dumps(_clean_form_values(new_request.values), indent=2),
+                )
+                write_private(
+                    self.store.request_path(job_id),
+                    new_request.model_dump_json(indent=2),
+                )
+
+            self._forget_poll(job_id)
+            argv = meta.invocation("--config", record.config_path)
+            launched = backend.launch(
+                argv,
+                job_dir=Path(record.job_dir),
+                log_path=Path(record.log_path),
+                backend_options=new_request.backend_options,
             )
-        # Validate everything before touching the job's stored settings: a
-        # rejected restart must leave the job exactly as it was.
-        backend = self._backend(new_request.backend)
-        self._check_project(new_request.project_id)
-
-        if request is not None:
-            write_private(
-                self.store.config_path(job_id),
-                json.dumps(_clean_form_values(new_request.values), indent=2),
+            record = record.model_copy(
+                update={
+                    "status": launched.status,
+                    "backend": new_request.backend,
+                    "name": new_request.name,
+                    "project_id": new_request.project_id,
+                    "pid": launched.pid,
+                    "pid_start": launched.pid_start,
+                    "scheduler_id": launched.scheduler_id,
+                    "finished_at": None,
+                    "exit_code": None,
+                },
             )
-            write_private(
-                self.store.request_path(job_id),
-                new_request.model_dump_json(indent=2),
-            )
-
-        self._poll_cache.pop(job_id, None)
-        argv = meta.invocation("--config", record.config_path)
-        launched = backend.launch(
-            argv,
-            job_dir=Path(record.job_dir),
-            log_path=Path(record.log_path),
-            backend_options=new_request.backend_options,
-        )
-        record = record.model_copy(
-            update={
-                "status": launched.status,
-                "backend": new_request.backend,
-                "name": new_request.name,
-                "project_id": new_request.project_id,
-                "pid": launched.pid,
-                "pid_start": launched.pid_start,
-                "scheduler_id": launched.scheduler_id,
-                "finished_at": None,
-                "exit_code": None,
-            },
-        )
-        self.store.save(record)
-        logger.info("Restarted job %s (%s)", job_id, record.backend)
-        return record
+            self.store.save(record)
+            logger.info("Restarted job %s (%s)", job_id, record.backend)
+            return record
