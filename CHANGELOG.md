@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-23
+
 ### Added
 
 - **Many more field types work as CLI flags.** Typer parses only a handful of
@@ -44,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.cache/typantic/thumbnails`). It no longer grows forever: the server prunes
   thumbnails nobody has opened in 30 days when it starts. The cache folder is
   now private (0700), like the files in it.
+- `typantic.web` exports the errors a `Launcher` can now raise:
+  `LaunchUncertainError` (a submission that timed out, and may have queued the
+  job; the dashboard answers 504), `ForeignHostError` (a job whose process runs
+  on another host; 409) and `FolderNotRemovedError` (a delete that left files
+  behind; 409).
 - `GET /api/jobs/{id}/images` reports `truncated` when a job has more output
   images than the gallery lists. The dashboard then shows the newest and says
   so. (The response was already an object holding `images`; the field is
@@ -122,6 +129,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--generate-config`, or twice per `config_file=True` run.
 
 ### Fixed
+
+#### CLI and config files
 
 - **A `SecretStr` / `SecretBytes` default reached your function as the mask
   `'**********'`** when the flag was not passed without `config_file`. Click
@@ -209,6 +218,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed metadata (a PyInstaller-frozen app, a bare source tree).
   `typantic.__version__` is `"0+unknown"` there, and `typantic --version` and
   the dashboard read the version from it.
+- `AliasChoices` fields are settable from the CLI, through their first string
+  choice, instead of being rejected at decoration. `config_file="only"` commands
+  no longer crash on `AliasChoices` / `AliasPath` fields: templates write the
+  alias (an `AliasPath` as its nested keys) and files may use any accepted
+  spelling. Only an `AliasPath` through a list index still gets a clear
+  decoration-time error.
+
+#### Jobs and backends
+
+- **A relative or `~` jobs root broke every launch** (`--jobs-dir ./jobs`,
+  `TYPANTIC_WEB_JOBS_DIR=~/jobs`). A job runs with its own folder as the working
+  directory, so its relative `--config` path resolved a second time from inside
+  it and the job failed at once, unable to find its config; an unexpanded `~`
+  even created a folder literally named `~`. The root is now made absolute when
+  the store opens, keeping a symlinked path as spelled.
+- **A status check that took a while could undo what happened meanwhile.**
+  Refreshing a job stored the copy it had read before asking the backend, and a
+  `sacct` query can take seconds. A job restarted in that window was overwritten
+  with the old run's outcome, which left the new run running untracked; a
+  cancelled job flipped to FAILED; a deleted job came back. A status is now
+  stored only while the stored job is still the run that was asked about, and
+  every change to a job (refresh, cancel, restart, delete) is made under that
+  job's lock.
+  - A cached status names its run, so an answer about the run before a restart
+    is never reused for the new one.
+  - Cancel asks afresh instead of trusting a two-second-old RUNNING for a job
+    that has finished since, which recorded CANCELLED over its real outcome.
+  - The status cache is synchronised; concurrent requests could raise
+    `KeyError` from it.
+- **A restart that failed could leave the job worse off than before:**
+  - A restart the backend refused (a bad partition, say) destroyed the job's
+    settings: the new ones were written before the backend looked at its
+    options. Options are now checked first, and if the relaunch fails anyway
+    the job's config, launch request and log are put back as they were.
+  - A restarted scheduler job showed the previous run's log until it started
+    running, which can be hours in the queue. The new run's log starts empty.
+  - A restart wrote the new config to one path and launched with another, the
+    one in the job's record: a job from a relative jobs root (above) could not
+    be restarted. Restart now uses the store's paths throughout, and records
+    them.
+  - A job without its stored launch request (deleted, or lost) restarted
+    without its backend options, silently. That is now logged.
+- A job whose record could not be stored once it had started (a locked or full
+  database) kept running with nothing to find, cancel or clean it up by. It is
+  now stopped again and the error reported.
+- A submission that timed out deleted the job's folder, although the scheduler
+  may have queued the job anyway (`sbatch` can hang after the controller
+  accepted it); the job then failed on start, with nowhere to write its log.
+  The folder is kept, and the dashboard answers HTTP 504 saying the job may
+  have been queued.
+- **Cancelling a scheduler job whose `scancel` / `qdel` failed recorded it
+  CANCELLED anyway**, while it kept running. The failure is now reported (HTTP
+  502) and the job left as it is -- unless it finished in the meantime, which
+  is then what it shows. Deleting a job still goes ahead, and logs that the job
+  may still be running.
+- **A Slurm or PBS job the scheduler had forgotten never finished.** Without
+  Slurm accounting (`sacct` refuses), without PBS job history, or once the
+  records were purged, a finished job stayed RUNNING or QUEUED forever. The
+  batch script now leaves the command's exit code in the job folder
+  (`.typantic-exit`, as a local job does) and exits with that code, and a
+  status check reads it before it asks the scheduler. Slurm falls back to
+  `squeue` when accounting knows nothing. A job the scheduler has forgotten
+  that left no exit code (killed, timed out, lost with its node) is FAILED
+  after two minutes -- about how long a shared filesystem can take to show the
+  login node the file.
+- Slurm's exit code lost its signal half: a job killed by SIGKILL (`0:9`) read
+  as exit 0. It now reads as 137, the shell's 128 + signal. A PBS job that
+  finished with no exit status on record read as DONE; the exit marker now
+  decides, and without one it is FAILED. Torque's `exit_status` spelling is
+  read too.
+- **A job store shared by servers on several login nodes** (a home directory
+  on NFS) had each server misread the others' local, ssh and container jobs: a
+  pid means something only on the host that started it, so a server found
+  another's running job "gone" and recorded it FAILED for good, and a cancel
+  could signal an unrelated process with the same pid. Jobs now record their
+  host (`JobRecord.host`, an additive field). Another host's job keeps its
+  last status until its exit marker shows how it ended, and cancelling it is
+  refused (HTTP 409, naming the host). Jobs recorded before 0.8.0 carry no
+  host and behave as before.
+- A job's finish time was when a server first noticed it had finished: a job
+  that ended overnight with no server running showed the next morning. It is
+  now when the job wrote its exit marker. The history page (`/api/history`)
+  also showed stored rows as they were, so a finished job read as running
+  there until the jobs list happened to refresh it; it now asks for the live
+  status of every job still active. `PollResult` gains an optional
+  `finished_at` for a backend that knows.
+- Deleting a job whose folder held files its owner may not remove -- a
+  container that ran as root leaves root-owned output -- reported success and
+  left them on disk, unseen. The job is still deleted, and the dashboard now
+  says which folder could not be removed completely (HTTP 409). Deleting a
+  project deletes everything it can before it says so.
+- A local job that finished in the instant between the two halves of a status
+  check was recorded FAILED forever: its exit marker was read (not there yet),
+  then its process looked for (gone by then). The marker is now read again
+  before a job is called failed.
+- A local job whose liveness probe was refused (`EPERM`) was taken to be still
+  running, for good. The tracked pid is always typantic's own shell, so a
+  refusal means the pid belongs to another user by now and the job is gone.
+- A local job's exit marker is now `.typantic-exit` in its folder. The old name,
+  `exit_code`, is one an app could plausibly write into its working directory
+  itself. A job launched by an older typantic and still running across the
+  upgrade writes the old name, which is still read.
+- An ssh job's `directory: ~/work` was quoted whole, so the remote shell
+  looked for a folder literally named `~`. A leading `~` now means the remote
+  home.
+- A scheduler tool (`sacct`, `qstat`) printing a byte that is not UTF-8 (a
+  Latin-1 job name, say) made the whole jobs list answer HTTP 500. Scheduler
+  tools now run the same way as `--schema`: no stdin, output decoded with
+  replacement, and the process group killed on timeout.
+
+#### The dashboard's server, gallery and forms
+
 - **On Python 3.12 and 3.13 the path picker and the image gallery answered HTTP
   500** for a path under a directory the server cannot enter (a colleague's
   0700 home) or with a component longer than 255 bytes. `Path.is_file()` raises
@@ -236,13 +357,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the next refresh. Several tabs opening the same uncached command also each
   spawned the app. Concurrent first requests now share one fetch, and a fetch
   that straddles a refresh does not store its stale result.
-- A scheduler tool (`sacct`, `qstat`) printing a byte that is not UTF-8 (a
-  Latin-1 job name, say) made the whole jobs list answer HTTP 500. Scheduler
-  tools now run the same way as `--schema`: no stdin, output decoded with
-  replacement, and the process group killed on timeout.
 - A form field literally named `prefixItems` was renamed to `items`, because the
   schema rewrite ran on property names and data keywords too. It now touches
   only positions that hold schemas.
+- An untouched array inside a list of objects (a list of mounts, each with its
+  own options) was submitted as `[]`, pinning the field instead of leaving the
+  model's default. Arrays at the top level and in nested objects were already
+  left out; arrays of objects are now cleaned the same way.
 - 16-bit grayscale images (detector frames, 12-bit captures) got almost
   pure-white gallery thumbnails. Their samples were clipped to 8 bits rather
   than scaled the way a browser displays the full-size image.
@@ -271,92 +392,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sibling folder was looked at. It now reads lazily and breadth first. The path
   picker likewise stops reading a folder after 200 000 entries and says the
   listing is cut, instead of reading millions of names to show the first page.
-- **A relative or `~` jobs root broke every launch** (`--jobs-dir ./jobs`,
-  `TYPANTIC_WEB_JOBS_DIR=~/jobs`). A job runs with its own folder as the working
-  directory, so its relative `--config` path resolved a second time from inside
-  it and the job failed at once, unable to find its config; an unexpanded `~`
-  even created a folder literally named `~`. The root is now made absolute when
-  the store opens, keeping a symlinked path as spelled.
-- **A status check that took a while could undo what happened meanwhile.**
-  Refreshing a job stored the copy it had read before asking the backend, and a
-  `sacct` query can take seconds. A job restarted in that window was overwritten
-  with the old run's outcome, which left the new run running untracked; a
-  cancelled job flipped to FAILED; a deleted job came back. A status is now
-  stored only while the stored job is still the run that was asked about, and
-  every change to a job (refresh, cancel, restart, delete) is made under that
-  job's lock.
-  - A cached status names its run, so an answer about the run before a restart
-    is never reused for the new one.
-  - Cancel asks afresh instead of trusting a two-second-old RUNNING for a job
-    that has finished since, which recorded CANCELLED over its real outcome.
-  - The status cache is synchronised; concurrent requests could raise
-    `KeyError` from it.
-- **A Slurm or PBS job the scheduler had forgotten never finished.** Without
-  Slurm accounting (`sacct` refuses), without PBS job history, or once the
-  records were purged, a finished job stayed RUNNING or QUEUED forever. The
-  batch script now leaves the command's exit code in the job folder
-  (`.typantic-exit`, as a local job does) and exits with that code, and a
-  status check reads it before it asks the scheduler. Slurm falls back to
-  `squeue` when accounting knows nothing. A job the scheduler has forgotten
-  that left no exit code (killed, timed out, lost with its node) is FAILED
-  after two minutes -- about how long a shared filesystem can take to show the
-  login node the file.
-- Slurm's exit code lost its signal half: a job killed by SIGKILL (`0:9`) read
-  as exit 0. It now reads as 137, the shell's 128 + signal. A PBS job that
-  finished with no exit status on record read as DONE; the exit marker now
-  decides, and without one it is FAILED. Torque's `exit_status` spelling is
-  read too.
-- **Cancelling a scheduler job whose `scancel` / `qdel` failed recorded it
-  CANCELLED anyway**, while it kept running. The failure is now reported (HTTP
-  502) and the job left as it is -- unless it finished in the meantime, which
-  is then what it shows. Deleting a job still goes ahead, and logs that the job
-  may still be running.
-- **A restart that failed could leave the job worse off than before:**
-  - A restart the backend refused (a bad partition, say) destroyed the job's
-    settings: the new ones were written before the backend looked at its
-    options. Options are now checked first, and if the relaunch fails anyway
-    the job's config, launch request and log are put back as they were.
-  - A restarted scheduler job showed the previous run's log until it started
-    running, which can be hours in the queue. The new run's log starts empty.
-  - A restart wrote the new config to one path and launched with another, the
-    one in the job's record: a job from a relative jobs root (above) could not
-    be restarted. Restart now uses the store's paths throughout, and records
-    them.
-  - A job without its stored launch request (deleted, or lost) restarted
-    without its backend options, silently. That is now logged.
-- A job whose record could not be stored once it had started (a locked or full
-  database) kept running with nothing to find, cancel or clean it up by. It is
-  now stopped again and the error reported.
-- A submission that timed out deleted the job's folder, although the scheduler
-  may have queued the job anyway (`sbatch` can hang after the controller
-  accepted it); the job then failed on start, with nowhere to write its log.
-  The folder is kept, and the dashboard answers HTTP 504 saying the job may
-  have been queued.
-- **A job store shared by servers on several login nodes** (a home directory
-  on NFS) had each server misread the others' local, ssh and container jobs: a
-  pid means something only on the host that started it, so a server found
-  another's running job "gone" and recorded it FAILED for good, and a cancel
-  could signal an unrelated process with the same pid. Jobs now record their
-  host (`JobRecord.host`, an additive field). Another host's job keeps its
-  last status until its exit marker shows how it ended, and cancelling it is
-  refused (HTTP 409, naming the host). Jobs recorded before 0.8.0 carry no
-  host and behave as before.
-- A job's finish time was when a server first noticed it had finished: a job
-  that ended overnight with no server running showed the next morning. It is
-  now when the job wrote its exit marker. The history page (`/api/history`)
-  also showed stored rows as they were, so a finished job read as running
-  there until the jobs list happened to refresh it; it now asks for the live
-  status of every job still active. `PollResult` gains an optional
-  `finished_at` for a backend that knows.
-- Deleting a job whose folder held files its owner may not remove -- a
-  container that ran as root leaves root-owned output -- reported success and
-  left them on disk, unseen. The job is still deleted, and the dashboard now
-  says which folder could not be removed completely (HTTP 409). Deleting a
-  project deletes everything it can before it says so.
-- An untouched array inside a list of objects (a list of mounts, each with its
-  own options) was submitted as `[]`, pinning the field instead of leaving the
-  model's default. Arrays at the top level and in nested objects were already
-  left out; arrays of objects are now cleaned the same way.
 - **The log socket:**
   - Its first status check ran on the server's event loop, so opening a
     Slurm job's log (a `sacct` call away) stalled every other client until it
@@ -369,55 +404,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reading at its old offset and skipped the new run's first bytes, or all of
     them. A replaced or truncated log is now streamed from its start, after a
     `{"reset": true}` frame that tells the dashboard to clear what it shows.
-- **The dashboard:**
-  - A page loaded while the server was restarting never learnt the backends
-    (the launch form offered none) or the brand: `/api/meta` was asked once.
-    It is now asked until it answers.
-  - The job log showed its text twice after the log socket reconnected (a
-    server restart, a network blip): the server sends the whole log on every
-    connection, and the page appended it to what it already showed. The log
-    now starts over on each connection, and when the server says the log
-    itself started over (a job restarted in place).
-  - Deleting the last job on the last page left the Jobs list on an empty page
-    with the pagination hidden. It now steps back to the last page with jobs.
-  - A failed delete in the Jobs or Projects list did nothing visible. It now
-    says why, as the job page already did, and error messages show the
-    server's explanation rather than the JSON it arrived in.
-  - The live views asked the server again on a fixed clock, so a slow answer
-    (a large output folder's image scan, a history refresh waiting on `sacct`)
-    was overlapped by the next request, and the next. Each view now asks
-    again only once the previous answer is in.
-  - **Copy log** threw an error on a dashboard opened over plain http by host
-    name, where browsers offer no clipboard API; it falls back to the
-    browser's copy command. **Download log** released the file's address
-    before some browsers had begun the download.
-  - A server clock a little ahead of the browser's showed times like "-5s
-    ago"; they read "just now".
 - The `ssh -N -L` line the dashboard prints for an IPv6 bind (`--host ::1`)
   read `8000:::1:8000`, which ssh rejects; the address is now bracketed.
 - `typantic web serve --log-level` took any word, printed the startup banner,
   then failed with a `KeyError` traceback for a level uvicorn does not know. It
   is now a choice, checked before anything starts (a usage error, exit 2).
-- An ssh job's `directory: ~/work` was quoted whole, so the remote shell
-  looked for a folder literally named `~`. A leading `~` now means the remote
-  home.
-- A local job that finished in the instant between the two halves of a status
-  check was recorded FAILED forever: its exit marker was read (not there yet),
-  then its process looked for (gone by then). The marker is now read again
-  before a job is called failed.
-- A local job whose liveness probe was refused (`EPERM`) was taken to be still
-  running, for good. The tracked pid is always typantic's own shell, so a
-  refusal means the pid belongs to another user by now and the job is gone.
-- A local job's exit marker is now `.typantic-exit` in its folder. The old name,
-  `exit_code`, is one an app could plausibly write into its working directory
-  itself. A job launched by an older typantic and still running across the
-  upgrade writes the old name, which is still read.
-- `AliasChoices` fields are settable from the CLI, through their first string
-  choice, instead of being rejected at decoration. `config_file="only"` commands
-  no longer crash on `AliasChoices` / `AliasPath` fields: templates write the
-  alias (an `AliasPath` as its nested keys) and files may use any accepted
-  spelling. Only an `AliasPath` through a list index still gets a clear
-  decoration-time error.
+
+#### The dashboard in the browser
+
+- A page loaded while the server was restarting never learnt the backends
+  (the launch form offered none) or the brand: `/api/meta` was asked once.
+  It is now asked until it answers.
+- The job log showed its text twice after the log socket reconnected (a
+  server restart, a network blip): the server sends the whole log on every
+  connection, and the page appended it to what it already showed. The log
+  now starts over on each connection, and when the server says the log
+  itself started over (a job restarted in place).
+- Deleting the last job on the last page left the Jobs list on an empty page
+  with the pagination hidden. It now steps back to the last page with jobs.
+- A failed delete in the Jobs or Projects list did nothing visible. It now
+  says why, as the job page already did, and error messages show the
+  server's explanation rather than the JSON it arrived in.
+- The live views asked the server again on a fixed clock, so a slow answer
+  (a large output folder's image scan, a history refresh waiting on `sacct`)
+  was overlapped by the next request, and the next. Each view now asks
+  again only once the previous answer is in.
+- **Copy log** threw an error on a dashboard opened over plain http by host
+  name, where browsers offer no clipboard API; it falls back to the
+  browser's copy command. **Download log** released the file's address
+  before some browsers had begun the download.
+- A server clock a little ahead of the browser's showed times like "-5s
+  ago"; they read "just now".
 
 ### Security
 
