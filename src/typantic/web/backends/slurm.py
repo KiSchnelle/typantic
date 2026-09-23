@@ -1,11 +1,19 @@
-"""Slurm backend: submit via ``sbatch``, track via ``sacct`` / ``scancel``."""
+"""Slurm backend: submit via ``sbatch``, track via ``sacct`` / ``squeue``.
+
+``sacct`` reads the accounting database, which a cluster may not run; ``squeue``
+knows a job while it is queued or running, and for a few minutes after it ends.
+"""
 
 from pathlib import Path
 
 from typantic.web.backends.base import PollResult
 from typantic.web.backends.scheduler import (
+    GONE,
     SchedulerBackend,
     SchedulerParams,
+    _Gone,
+    _log_failed_query,
+    _run_tool,
     first_nonempty_line,
 )
 from typantic.web.models import TERMINAL_STATUSES, JobStatus
@@ -78,11 +86,27 @@ class SlurmBackend(SchedulerBackend):
             "--parsable2",
         ]
 
+    def _query(self, job_id: str) -> PollResult | _Gone | None:
+        result = _run_tool(self._run, self._status_command(job_id))
+        if result.returncode == 0 and first_nonempty_line(result.stdout) is not None:
+            return self._parse_status(result.stdout)
+        # Not in accounting: just submitted, or accounting is off.
+        queue = _run_tool(
+            self._run,
+            ["squeue", "-j", job_id, "--noheader", "--states=all", "--format=%T"],
+        )
+        if queue.returncode == 0:
+            state = first_nonempty_line(queue.stdout)
+            if state is None:
+                return GONE
+            return PollResult(status=_map_state(state.strip()))
+        if "Invalid job id" in queue.stderr:
+            return GONE
+        _log_failed_query(job_id, queue)
+        return None
+
     def _parse_status(self, stdout: str) -> PollResult:
-        line = first_nonempty_line(stdout)
-        if line is None:
-            # Not yet in the accounting DB (just submitted): still queued.
-            return PollResult(status=JobStatus.QUEUED)
+        line = first_nonempty_line(stdout) or ""
         state, _, exit_field = line.partition("|")
         status = _map_state(state.strip())
         # sacct prints "0:0" for a job that has not finished; reporting that as
@@ -113,9 +137,11 @@ def _map_state(state: str) -> JobStatus:
 
 
 def _parse_exit_code(field: str) -> int | None:
-    # sacct ExitCode is "<code>:<signal>".
-    code = field.strip().split(":", 1)[0]
+    """The ``<code>:<signal>`` of sacct as one code: 128 + signal if killed."""
+    code, _, signal = field.strip().partition(":")
     try:
-        return int(code)
+        exit_code = int(code)
+        killed_by = int(signal or 0)
     except ValueError:
         return None
+    return 128 + killed_by if killed_by and not exit_code else exit_code

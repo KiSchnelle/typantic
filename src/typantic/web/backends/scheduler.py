@@ -2,17 +2,21 @@
 
 The command is wrapped in a submit script whose output is directed at the same
 per-job log a local job captures to, so the dashboard tails both identically
-(shared filesystem). ``SchedulerBackend`` holds the shared submit / poll / cancel
-flow; a concrete scheduler (Slurm, PBS) fills in its directive syntax, its
-submit/query/cancel commands, and how it parses their output. The scheduler
-tools are invoked through an injectable ``runner`` so backends are testable
-without a cluster.
+(shared filesystem). The script also leaves the command's exit code in the job
+folder, as a local job does, which tells how a job ended even once the scheduler
+has forgotten it (accounting off, job history purged).
+
+``SchedulerBackend`` holds the shared submit / poll / cancel flow; a concrete
+scheduler (Slurm, PBS) fills in its directive syntax, its submit/query/cancel
+commands, and how it parses their output. The scheduler tools are invoked
+through an injectable ``runner`` so backends are testable without a cluster.
 """
 
 import abc
 import logging
 import shlex
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, ClassVar
@@ -21,6 +25,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from typantic.web._files import write_private
 from typantic.web._subprocess import run_tool
+from typantic.web.backends._marker import (
+    EXIT_MARKER,
+    clear_exit_code,
+    read_exit_code,
+)
 from typantic.web.backends.base import Launched, LaunchUncertainError, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
@@ -34,6 +43,19 @@ _TOOL_UNAVAILABLE = -1
 """Return code standing in for "the tool could not be run at all"."""
 _TOOL_TIMED_OUT = -2
 """Return code standing in for "the tool did not answer in time"."""
+_GONE_GRACE_S = 120
+"""How long a job the scheduler has forgotten may still leave its exit marker.
+
+A shared filesystem can show the login node a file written on a compute node a
+minute or so late (NFS caches the directory listing that said it was missing).
+"""
+
+
+class _Gone:
+    """The scheduler no longer knows the job: it has ended, but how is unknown."""
+
+
+GONE = _Gone()
 
 
 # Each option becomes a line of the batch script, which runs as the user on the
@@ -115,6 +137,8 @@ class SchedulerBackend(abc.ABC):
     def __init__(self, runner: Runner | None = None) -> None:
         """Create the backend; ``runner`` defaults to the real scheduler tools."""
         self._run: Runner = runner or _default_runner
+        # When each forgotten job was first found gone, by scheduler id.
+        self._gone_since: dict[str, float] = {}
 
     # --- scheduler-specific hooks ---
 
@@ -141,12 +165,22 @@ class SchedulerBackend(abc.ABC):
         """The command that queries ``job_id``'s status."""
 
     @abc.abstractmethod
-    def _parse_status(self, stdout: str) -> PollResult:
-        """Map the status command's stdout to a :class:`PollResult`."""
+    def _parse_status(self, stdout: str) -> PollResult | _Gone:
+        """Map the status command's stdout to a :class:`PollResult`.
+
+        :data:`GONE` for a job that has ended without an outcome on record.
+        """
 
     @abc.abstractmethod
     def _cancel_command(self, job_id: str) -> list[str]:
         """The command that cancels ``job_id``."""
+
+    def _unknown_job(
+        self,
+        result: "subprocess.CompletedProcess[str]",  # noqa: ARG002 - subclass hook
+    ) -> bool:
+        """Whether a failed status query says the scheduler does not know the job."""
+        return False
 
     # --- shared flow ---
 
@@ -190,7 +224,12 @@ class SchedulerBackend(abc.ABC):
         # between them and the command.
         lines.extend(self._directives(params, job_dir=job_dir, log_path=log_path))
         lines.extend(self._preamble(job_dir=job_dir))
-        lines.extend(["", shlex.join(argv), ""])
+        marker = shlex.quote(str(job_dir / EXIT_MARKER))
+        # The script exits with the command's own code, so the scheduler's
+        # record of the job still tells a failure apart.
+        lines.extend(
+            ["", shlex.join(argv), "rc=$?", f'echo "$rc" > {marker}', 'exit "$rc"', ""]
+        )
         return "\n".join(lines)
 
     def launch(
@@ -203,6 +242,7 @@ class SchedulerBackend(abc.ABC):
     ) -> Launched:
         """Render and submit a batch script, returning the scheduler job id."""
         params = SchedulerParams.model_validate(backend_options)
+        clear_exit_code(job_dir)  # a restart in place must start unfinished
         script_path = job_dir / _SUBMIT_SCRIPT
         write_private(
             script_path,
@@ -228,25 +268,47 @@ class SchedulerBackend(abc.ABC):
         return Launched(scheduler_id=job_id, status=JobStatus.QUEUED)
 
     def poll(self, record: JobRecord) -> PollResult:
-        """Resolve status by querying the scheduler for this job id.
+        """Resolve status: the job's exit marker first, then the scheduler.
 
-        A query that could not run (missing tool, timeout, nonzero exit) says
-        nothing about the job, so the last known status is kept rather than
-        reading the empty output as "not in the queue" -- which would report a
-        dead cluster as QUEUED forever.
+        A job that ran its command to the end left its exit code in its folder,
+        which holds whatever the scheduler still remembers. A query that could
+        not run (missing tool, timeout, controller down) says nothing about the
+        job, so the last known status is kept rather than reading the empty
+        output as "not in the queue" -- which would report a dead cluster as
+        QUEUED forever. A job the scheduler no longer knows, with no marker,
+        ended before its command did (killed, timed out, lost with its node):
+        FAILED, once the marker has had time to show up.
         """
-        if record.scheduler_id is None:
+        job_id = record.scheduler_id
+        if job_id is None:
             return PollResult(status=JobStatus.FAILED)
-        result = _run_tool(self._run, self._status_command(record.scheduler_id))
-        if result.returncode != 0:
-            logger.warning(
-                "Status query for job %s failed (exit %s): %s",
-                record.scheduler_id,
-                result.returncode,
-                result.stderr.strip(),
-            )
-            return PollResult(status=record.status, exit_code=record.exit_code)
-        return self._parse_status(result.stdout)
+        code = read_exit_code(Path(record.job_dir))
+        if code is not None:
+            self._gone_since.pop(job_id, None)
+            status = JobStatus.DONE if code == 0 else JobStatus.FAILED
+            return PollResult(status=status, exit_code=code)
+        state = self._query(job_id)
+        if isinstance(state, PollResult):
+            self._gone_since.pop(job_id, None)
+            return state
+        last_known = PollResult(status=record.status, exit_code=record.exit_code)
+        if state is None:
+            return last_known
+        gone_since = self._gone_since.setdefault(job_id, time.monotonic())
+        if time.monotonic() - gone_since < _GONE_GRACE_S:
+            return last_known
+        self._gone_since.pop(job_id, None)
+        return PollResult(status=JobStatus.FAILED)
+
+    def _query(self, job_id: str) -> PollResult | _Gone | None:
+        """Ask the scheduler: the job's state, :data:`GONE`, or ``None`` (no answer)."""
+        result = _run_tool(self._run, self._status_command(job_id))
+        if result.returncode == 0:
+            return self._parse_status(result.stdout)
+        if self._unknown_job(result):
+            return GONE
+        _log_failed_query(job_id, result)
+        return None
 
     def cancel(self, record: JobRecord) -> None:
         """Cancel the job through the scheduler.
@@ -281,6 +343,15 @@ class SchedulerBackend(abc.ABC):
             log_path=log_path,
         )
         return f"# Submitted with: {shlex.join(submit)}\n{script}"
+
+
+def _log_failed_query(job_id: str, result: "subprocess.CompletedProcess[str]") -> None:
+    logger.warning(
+        "Status query for job %s failed (exit %s): %s",
+        job_id,
+        result.returncode,
+        result.stderr.strip(),
+    )
 
 
 def first_nonempty_line(text: str) -> str | None:

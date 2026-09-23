@@ -5,10 +5,16 @@ script mirrors the Slurm backend's, translated to ``#PBS`` directives.
 """
 
 import shlex
+import subprocess
 from pathlib import Path
 
 from typantic.web.backends.base import PollResult
-from typantic.web.backends.scheduler import SchedulerBackend, SchedulerParams
+from typantic.web.backends.scheduler import (
+    GONE,
+    SchedulerBackend,
+    SchedulerParams,
+    _Gone,
+)
 from typantic.web.models import JobStatus
 
 # PBS job_state letters we treat as running (E = exiting/epilogue).
@@ -71,19 +77,24 @@ class PbsBackend(SchedulerBackend):
     def _status_command(self, job_id: str) -> list[str]:
         return ["qstat", "-x", "-f", job_id]
 
-    def _parse_status(self, stdout: str) -> PollResult:
+    def _parse_status(self, stdout: str) -> PollResult | _Gone:
         fields = _parse_qstat(stdout)
         state = fields.get("job_state", "").upper()
         if state in _RUNNING_STATES:
             return PollResult(status=JobStatus.RUNNING)
-        exit_status = fields.get("Exit_status")
+        # PBS Pro spells it Exit_status, Torque exit_status.
+        exit_status = fields.get("Exit_status", fields.get("exit_status"))
         if exit_status is not None:
             code = _to_int(exit_status)
             status = JobStatus.DONE if code == 0 else JobStatus.FAILED
             return PollResult(status=status, exit_code=code)
         if state in _FINISHED_STATES:
-            return PollResult(status=JobStatus.DONE)
+            return GONE  # finished with no outcome recorded: the marker tells
         return PollResult(status=JobStatus.QUEUED)
+
+    def _unknown_job(self, result: "subprocess.CompletedProcess[str]") -> bool:
+        # Without job history a finished job is forgotten at once.
+        return "Unknown Job Id" in result.stderr
 
     def _cancel_command(self, job_id: str) -> list[str]:
         return ["qdel", job_id]

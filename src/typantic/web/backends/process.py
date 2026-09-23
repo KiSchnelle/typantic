@@ -23,29 +23,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+from typantic.web.backends._marker import (
+    EXIT_MARKER,
+    clear_exit_code,
+    read_exit_code,
+)
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.models import JobRecord, JobStatus
 
-EXIT_MARKER = ".typantic-exit"
-# The marker's name before 0.8.0, which an app could collide with; a job launched
-# by an older typantic and still running across the upgrade writes it.
-_LEGACY_EXIT_MARKER = "exit_code"
 _PROC = Path("/proc")
-
-
-def read_exit_code(job_dir: Path) -> int | None:
-    """The exit code a finished job recorded in ``job_dir``, else ``None``."""
-    for name in (EXIT_MARKER, _LEGACY_EXIT_MARKER):
-        code = _read_exit_code(job_dir / name)
-        if code is not None:
-            return code
-    return None
-
-
-def clear_exit_code(job_dir: Path) -> None:
-    """Remove a previous run's markers, so a restart in place starts unfinished."""
-    for name in (EXIT_MARKER, _LEGACY_EXIT_MARKER):
-        (job_dir / name).unlink(missing_ok=True)
 
 
 def _pid_start_time(pid: int) -> int | None:
@@ -65,18 +51,6 @@ def _pid_start_time(pid: int) -> int | None:
     try:
         return int(stat[stat.rindex(")") + 1 :].split()[19])
     except (ValueError, IndexError):
-        return None
-
-
-def _read_exit_code(path: Path) -> int | None:
-    """Return the recorded exit code, or ``None`` if not yet cleanly written."""
-    try:
-        text = path.read_text().strip()
-    except OSError:
-        return None
-    try:
-        return int(text)
-    except ValueError:
         return None
 
 

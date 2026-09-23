@@ -6,10 +6,10 @@ import time
 from datetime import UTC, datetime
 
 from typantic.web.backends import process as proc
+from typantic.web.backends._marker import _read_exit_code
 from typantic.web.backends.local import LocalBackend
 from typantic.web.backends.process import (
     _process_running,
-    _read_exit_code,
     _reap,
 )
 from typantic.web.models import JobRecord, JobStatus

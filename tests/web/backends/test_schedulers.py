@@ -157,6 +157,10 @@ def test_slurm_poll_without_id_is_failed(tmp_path):
         ("COMPLETED|0:0", JobStatus.DONE, 0),
         ("FAILED|1:0", JobStatus.FAILED, 1),
         ("CANCELLED by 1001|0:0", JobStatus.CANCELLED, 0),
+        # The signal half: killed by SIGTERM / SIGKILL reads as 128 + signal,
+        # the way a shell reports it; it used to read as exit 0.
+        ("CANCELLED by 1001|0:15", JobStatus.CANCELLED, 143),
+        ("FAILED|0:9", JobStatus.FAILED, 137),
         ("WEIRD|x:0", JobStatus.QUEUED, None),
         ("", JobStatus.QUEUED, None),
     ],
@@ -250,7 +254,8 @@ def test_pbs_launch_writes_script(tmp_path):
         ("job_state = E", JobStatus.RUNNING, None),
         ("job_state = F\nExit_status = 0", JobStatus.DONE, 0),
         ("job_state = F\nExit_status = 3", JobStatus.FAILED, 3),
-        ("job_state = C", JobStatus.DONE, None),
+        # Torque spells it exit_status.
+        ("job_state = C\nexit_status = 0", JobStatus.DONE, 0),
         ("job_state = Q", JobStatus.QUEUED, None),
         ("", JobStatus.QUEUED, None),
     ],
@@ -476,3 +481,157 @@ def test_a_scheduler_subclass_without_control_args_submits_as_before(tmp_path):
     )
     assert runner.calls[0] == ["bsub", str(tmp_path / "submit.sh")]
     assert f"#BSUB -o {tmp_path / 'job.log'}" in (tmp_path / "submit.sh").read_text()
+    # A failed query, with no way to tell a forgotten job: the last status holds.
+    runner.set("bjobs", returncode=255, stderr="Job <77> is not found")
+    record = _record(tmp_path, scheduler_id="77", status=JobStatus.RUNNING)
+    assert Lsf(runner).poll(record).status is JobStatus.RUNNING
+
+
+# --- a scheduler job finishes even when the scheduler forgets it ---
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    from typantic.web.backends import scheduler as scheduler_mod  # noqa: PLC0415
+
+    now = Clock()
+    monkeypatch.setattr(scheduler_mod.time, "monotonic", now)
+    return now
+
+
+@pytest.mark.parametrize("backend", [SlurmBackend, PbsBackend])
+def test_the_batch_script_leaves_its_exit_code(tmp_path, backend):
+    runner = FakeRunner()
+    runner.set("sbatch", stdout="1\n")
+    runner.set("qsub", stdout="1.pbs\n")
+    (tmp_path / ".typantic-exit").write_text("0\n")  # a previous run's
+    backend(runner).launch(
+        ARGV, job_dir=tmp_path, log_path=tmp_path / "job.log", backend_options={}
+    )
+    assert not (tmp_path / ".typantic-exit").exists()
+    script = (tmp_path / "submit.sh").read_text()
+    marker = tmp_path / ".typantic-exit"
+    assert script.endswith(f'rc=$?\necho "$rc" > {marker}\nexit "$rc"\n')
+
+
+def test_a_finished_job_is_read_from_its_marker_first(tmp_path):
+    # Without accounting (sacct refuses) a finished job was never seen to finish.
+    runner = FakeRunner()
+    runner.set("sacct", returncode=1, stderr="accounting storage is disabled")
+    (tmp_path / ".typantic-exit").write_text("3\n")
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    result = SlurmBackend(runner).poll(record)
+    assert (result.status, result.exit_code) == (JobStatus.FAILED, 3)
+    assert runner.calls == []
+
+
+def test_slurm_without_accounting_asks_squeue(tmp_path):
+    runner = FakeRunner()
+    runner.set("sacct", returncode=1, stderr="accounting storage is disabled")
+    runner.set("squeue", stdout="RUNNING\n")
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.QUEUED)
+    assert SlurmBackend(runner).poll(record).status is JobStatus.RUNNING
+    assert runner.calls[-1][:3] == ["squeue", "-j", "1"]
+
+
+def test_slurm_asks_squeue_for_a_job_accounting_has_not_seen_yet(tmp_path):
+    runner = FakeRunner()
+    runner.set("sacct", stdout="")
+    runner.set("squeue", stdout="PENDING\n")
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.QUEUED)
+    assert SlurmBackend(runner).poll(record).status is JobStatus.QUEUED
+
+
+def test_slurm_keeps_the_last_status_when_squeue_cannot_answer(tmp_path):
+    runner = FakeRunner()
+    runner.set("sacct", returncode=1, stderr="accounting storage is disabled")
+    runner.set("squeue", returncode=1, stderr="Unable to contact slurm controller")
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    assert SlurmBackend(runner).poll(record).status is JobStatus.RUNNING
+
+
+def _gone_slurm():
+    runner = FakeRunner()
+    runner.set("sacct", returncode=1, stderr="accounting storage is disabled")
+    runner.set("squeue", returncode=1, stderr="Invalid job id specified")
+    return runner
+
+
+def _gone_pbs():
+    runner = FakeRunner()
+    runner.set("qstat", returncode=153, stderr="qstat: Unknown Job Id 1.pbs")
+    return runner
+
+
+def _finished_pbs():
+    runner = FakeRunner()
+    runner.set("qstat", stdout="job_state = F\n")  # no exit status recorded
+    return runner
+
+
+def _empty_squeue():
+    runner = FakeRunner()
+    runner.set("sacct", returncode=1, stderr="accounting storage is disabled")
+    runner.set("squeue", stdout="")
+    return runner
+
+
+@pytest.mark.parametrize(
+    ("backend", "runner"),
+    [
+        (SlurmBackend, _gone_slurm),
+        (SlurmBackend, _empty_squeue),
+        (PbsBackend, _gone_pbs),
+        (PbsBackend, _finished_pbs),
+    ],
+)
+def test_a_job_the_scheduler_forgot_fails_after_a_grace_period(
+    tmp_path, clock, backend, runner
+):
+    # It stayed RUNNING forever. The grace period is for the exit marker, which
+    # a shared filesystem can show the login node a little late.
+    scheduler = backend(runner())
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    assert scheduler.poll(record).status is JobStatus.RUNNING
+    clock.now += 60
+    assert scheduler.poll(record).status is JobStatus.RUNNING
+    clock.now += 120
+    assert scheduler.poll(record).status is JobStatus.FAILED
+
+
+def test_a_marker_that_shows_up_late_still_counts(tmp_path, clock):
+    scheduler = SlurmBackend(_gone_slurm())
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    assert scheduler.poll(record).status is JobStatus.RUNNING
+    clock.now += 30
+    (tmp_path / ".typantic-exit").write_text("0\n")
+    result = scheduler.poll(record)
+    assert (result.status, result.exit_code) == (JobStatus.DONE, 0)
+
+
+def test_a_job_seen_again_starts_its_grace_period_over(tmp_path, clock):
+    runner = _gone_slurm()
+    scheduler = SlurmBackend(runner)
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    scheduler.poll(record)  # gone: the grace period starts
+    clock.now += 170
+    runner.set("squeue", stdout="RUNNING\n")  # a slow controller answered after all
+    assert scheduler.poll(record).status is JobStatus.RUNNING
+    runner.set("squeue", returncode=1, stderr="Invalid job id specified")
+    clock.now += 20
+    assert scheduler.poll(record).status is JobStatus.RUNNING
+
+
+def test_pbs_keeps_the_last_status_when_qstat_cannot_answer(tmp_path):
+    runner = FakeRunner()
+    runner.set("qstat", returncode=1, stderr="Connection refused")
+    record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
+    assert PbsBackend(runner).poll(record).status is JobStatus.RUNNING

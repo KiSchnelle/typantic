@@ -272,6 +272,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that has finished since, which recorded CANCELLED over its real outcome.
   - The status cache is synchronised; concurrent requests could raise
     `KeyError` from it.
+- **A Slurm or PBS job the scheduler had forgotten never finished.** Without
+  Slurm accounting (`sacct` refuses), without PBS job history, or once the
+  records were purged, a finished job stayed RUNNING or QUEUED forever. The
+  batch script now leaves the command's exit code in the job folder
+  (`.typantic-exit`, as a local job does) and exits with that code, and a
+  status check reads it before it asks the scheduler. Slurm falls back to
+  `squeue` when accounting knows nothing. A job the scheduler has forgotten
+  that left no exit code (killed, timed out, lost with its node) is FAILED
+  after two minutes -- about how long a shared filesystem can take to show the
+  login node the file.
+- Slurm's exit code lost its signal half: a job killed by SIGKILL (`0:9`) read
+  as exit 0. It now reads as 137, the shell's 128 + signal. A PBS job that
+  finished with no exit status on record read as DONE; the exit marker now
+  decides, and without one it is FAILED. Torque's `exit_status` spelling is
+  read too.
 - **Cancelling a scheduler job whose `scancel` / `qdel` failed recorded it
   CANCELLED anyway**, while it kept running. The failure is now reported (HTTP
   502) and the job left as it is -- unless it finished in the meantime, which
