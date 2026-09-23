@@ -1,11 +1,13 @@
 """Core decorator for converting Pydantic models to Typer CLI interfaces."""
 
+import collections
 import inspect
 import json
 import math
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from decimal import Decimal
+from enum import Enum
 from functools import wraps
 from pathlib import Path
 from typing import (
@@ -18,6 +20,7 @@ from typing import (
     get_args,
     get_origin,
 )
+from uuid import UUID
 
 import annotated_types
 import typer
@@ -34,6 +37,8 @@ from typantic._introspect import extract_base_type as _extract_base_type
 from typantic._introspect import field_input_key as _field_input_key
 from typantic._introspect import is_model_type as _is_model_type
 from typantic._introspect import model_hints as _model_hints
+from typantic._introspect import nested_model as _nested_model
+from typantic._introspect import unwrap as _unwrap
 
 
 class _Missing:
@@ -58,6 +63,9 @@ class _Leaf(NamedTuple):
     # Whether the field itself is required (no default, no parent default) --
     # kept apart from the Typer default, which config mode relaxes to None.
     required: bool = False
+    # The collection the field declares (set, tuple, deque...), to rebuild from
+    # the list the CLI gathers; None where a list is what the field takes.
+    container: Callable[[Iterable[Any]], object] | None = None
 
 
 class _Nested(NamedTuple):
@@ -205,7 +213,11 @@ def _collect(
         if touched and not isinstance(_lookup(data, path), dict):
             _set_nested(data, path, _raw_values(default))
     for leaf in passed:
-        _set_nested(data, leaf.key_path, kwargs[leaf.cli_name])
+        value = kwargs[leaf.cli_name]
+        if leaf.container is not None and isinstance(value, list | tuple):
+            # The CLI gathers a list; a strict model accepts only its own type.
+            value = leaf.container(value)
+        _set_nested(data, leaf.key_path, value)
     for path in nested.required:
         parent_present = len(path) == 1 or isinstance(_lookup(data, path[:-1]), dict)
         if parent_present and _lookup(data, path) is _MISSING:
@@ -583,16 +595,19 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
         # back to the field's own default.
         override = getattr(defaults, name) if defaults is not None else _MISSING
 
-        if _is_model_type(base_type) and base_type not in nested_seen:
+        model = _nested_model(resolved_hints[name])
+        if model is not None and model not in nested_seen:
             nested_default = _nested_default(field_info, override)
             if nested_default is not None:
                 nested.defaults.append((key_path, nested_default))
             elif field_info.is_required():
                 nested.required.append(key_path)
             sub = _build_params(
-                base_type,
+                model,
                 subpanels=subpanels,
-                relax=relax,
+                # An optional model's leaves are optional flags: nothing passed
+                # leaves the model None, and Pydantic checks a partial one.
+                relax=relax or not _is_model_type(base_type),
                 prefix=path,
                 key_prefix=key_path,
                 seen=nested_seen,
@@ -609,6 +624,7 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
         panel = _panel_for_field(model_cls, name) if subpanels else None
         param, annotated, flags = _build_leaf(
             cli_name=cli_name,
+            field_path=".".join(path),
             field_info=field_info,
             base_type=base_type,
             panel=panel,
@@ -618,9 +634,109 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
         params.append(param)
         annotations[cli_name] = annotated
         required = field_info.is_required() and override is _MISSING
-        mapping.append(_Leaf(cli_name, key_path, path, flags, required))
+        container = _declared_container(resolved_hints[name])
+        mapping.append(_Leaf(cli_name, key_path, path, flags, required, container))
 
     return params, annotations, mapping, nested
+
+
+# Types Typer parses itself (typer.main.get_click_type), matched exactly as it
+# matches them: an int subclass such as ByteSize, or a Path subclass, is not.
+_NATIVE: tuple[object, ...] = (str, int, float, bool, UUID, Path)
+_NO_FLAG = object()  # a type no CLI flag can express
+
+
+def _is_native(tp: object) -> bool:
+    """Whether Typer parses ``tp`` itself (natives, enums, ``Literal``)."""
+    enum = isinstance(tp, type) and issubclass(tp, Enum)
+    return tp in _NATIVE or enum or get_origin(tp) is Literal
+
+
+def _is_structure(tp: object) -> bool:
+    """Whether ``tp`` is a container, a union or a model rather than one value."""
+    origin = get_origin(tp)
+    return (
+        origin in (list, tuple, dict, Union, types.UnionType)
+        or tp in (list, tuple, dict)
+        or _is_model_type(tp)
+    )
+
+
+def _as_text(tp: object) -> tuple[object, str]:
+    """``str`` for Click, with a metavar naming what the text must parse as."""
+    name = tp.__name__ if isinstance(tp, type) else "value"
+    return str, f"<{name.lower()}>"
+
+
+def _item_type(tp: object) -> tuple[object, str | None] | object:
+    """How Click takes one item of a list or tuple, or ``_NO_FLAG``."""
+    if _is_structure(tp):
+        return _NO_FLAG
+    if get_origin(tp) is Literal or not _is_native(tp):
+        # Typer's list handling cannot parse a Literal item; Pydantic still
+        # checks each value against it.
+        return _as_text(tp)
+    return tp, None
+
+
+def _cli_type(tp: object) -> tuple[object, str | None] | None:
+    """How Click takes a field of structural type ``tp``: ``(type, metavar)``.
+
+    Types Typer parses itself are passed through. Any other single value -- a
+    ``Decimal``, a date, a URL, an IP address, ``Any``, a union of values -- is
+    taken as text for Pydantic to parse, with a metavar naming what it must be
+    (``<decimal>``). Lists and fixed tuples of such values work item by item.
+    ``None`` means no flag can express the type (a dict, a list of lists or of
+    models); the field then needs ``config_file="only"``.
+    """
+    origin = get_origin(tp)
+    if origin in (Union, types.UnionType):
+        return _union_cli_type(tp)
+    if origin in (list, tuple):
+        return _sequence_cli_type(tp)
+    if _is_structure(tp):
+        return None
+    return (tp, None) if _is_native(tp) else _as_text(tp)
+
+
+def _union_cli_type(tp: object) -> tuple[object, str | None] | None:
+    """A union: ``X | None`` stays optional ``X``; a union of values is text."""
+    members = [arg for arg in get_args(tp) if arg is not type(None)]
+    if len(members) == 1:  # X | None -- a one-member union is always optional
+        inner = _cli_type(members[0])
+        return None if inner is None else (inner[0] | None, inner[1])  # type: ignore[operator]
+    if any(_is_structure(member) for member in members):
+        return None
+    optional = len(members) < len(get_args(tp))
+    return (str | None, "<value>") if optional else (str, "<value>")
+
+
+def _sequence_cli_type(tp: object) -> tuple[object, str | None] | None:
+    """A list (a repeated flag) or a fixed tuple (a multi-value flag)."""
+    items = [_item_type(arg) for arg in get_args(tp)]
+    if _NO_FLAG in items:
+        return None
+    parsed = [cast("tuple[object, str | None]", item) for item in items]
+    if get_origin(tp) is list:
+        item_type, metavar = parsed[0]
+        return list[item_type], metavar  # type: ignore[valid-type]
+    return tuple[tuple(item for item, _ in parsed)], None  # type: ignore[misc]
+
+
+def _declared_container(annotation: object) -> Callable[[Iterable[Any]], object] | None:
+    """The collection a field declares where the CLI would hand it a list."""
+    tp = _unwrap(annotation)
+    if get_origin(tp) in (Union, types.UnionType):
+        members = [arg for arg in get_args(tp) if arg is not type(None)]
+        if len(members) != 1:
+            return None
+        tp = _unwrap(members[0])
+    origin = get_origin(tp)
+    if origin in (set, frozenset, collections.deque):
+        return cast("Callable[[Iterable[Any]], object]", origin)
+    if origin is tuple and get_args(tp)[-1:] == (Ellipsis,):
+        return tuple
+    return None
 
 
 def _nested_default(field_info: FieldInfo, override: object) -> BaseModel | None:
@@ -637,9 +753,8 @@ def _nested_default(field_info: FieldInfo, override: object) -> BaseModel | None
     substituted the inner class's defaults.
     """
     if override is not _MISSING:
-        # Reached only for a concrete nested model, so a parent's default instance
-        # always holds a real instance here.
-        return cast("BaseModel", override)
+        # A parent's default instance may hold None for an optional nested model.
+        return override if isinstance(override, BaseModel) else None
     default = field_info.get_default(call_default_factory=False)
     if isinstance(default, BaseModel):
         return default
@@ -748,9 +863,30 @@ def _is_bool(typer_type: object) -> bool:
     return _union_members(typer_type) == (bool,)
 
 
+def _leaf_type(base_type: object, field_path: str) -> tuple[object, str | None, bool]:
+    """``(Click type, metavar, is_secret)`` for a leaf, or a clear error.
+
+    Raises:
+        ValueError: If no CLI flag can express the field's type.
+    """
+    if _secret_type(base_type) is not None:
+        # Typer renders neither SecretStr nor bytes; a secret is entered as text.
+        return str, None, True
+    click = _cli_type(base_type)
+    if click is None:
+        msg = (
+            f"Field {field_path!r} has type {base_type!r}, which no CLI flag can "
+            f'express. Set it from a file instead: config_file="only" makes a '
+            f"command read every field from --config."
+        )
+        raise ValueError(msg)
+    return click[0], click[1], False
+
+
 def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
     *,
     cli_name: str,
+    field_path: str,
     field_info: FieldInfo,
     base_type: object,
     panel: str | None,
@@ -761,6 +897,7 @@ def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
 
     Args:
         cli_name: The flattened parameter name (nested path joined by ``_``).
+        field_path: The field's dotted name, for error messages.
         field_info: The Pydantic field metadata.
         base_type: The structural type extracted from the field annotation.
         panel: The Rich help panel title for options, or ``None`` for none.
@@ -777,12 +914,7 @@ def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
     extra = _cli_extra(field_info)
     envvar = extra.get("cli_envvar")
 
-    secret = _secret_type(base_type)
-    is_secret = secret is not None
-    typer_type: object = base_type
-    if is_secret:
-        # Typer renders neither SecretStr nor bytes; a secret is entered as text.
-        typer_type = str
+    typer_type, metavar, is_secret = _leaf_type(base_type, field_path)
 
     if _numeric_type(typer_type) is not None:
         min_value, max_value = _numeric_bounds(field_info)
@@ -832,11 +964,13 @@ def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
             min=min_value,
             max=max_value,
             envvar=envvar,
+            metavar=metavar,
         )
     else:
         typer_meta = typer.Option(
             *decls,
             help=help_text,
+            metavar=metavar,
             rich_help_panel=panel,
             show_default=False if is_secret else show_default,
             hide_input=is_secret,

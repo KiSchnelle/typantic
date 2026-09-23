@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Many more field types work as CLI flags.** Typer parses only a handful of
+  types itself. Anything else used to crash Typer *while it built the command
+  group*, which took down every command of the app, `--help` included. Examples:
+  `Decimal`, `date`, `time`, `timedelta`, URLs, IP addresses, `ByteSize`,
+  `bytes`, `Any`, `int | str`, `list[Literal[...]]`, `Sequence[str]`,
+  `deque[int]`, a `NewType`, a PEP 695 `type` alias, and an optional nested
+  model.
+  - Any single value Pydantic can parse from text is now taken as text and
+    parsed by Pydantic, and `--help` names what it takes (`<decimal>`). Lists
+    and tuples of such values work item by item.
+  - `NewType` and `type` aliases are handled as the type they wrap.
+  - A `Model | None` field is flattened like a required nested model. Its flags
+    are optional and it stays `None` unless one of them is passed; Pydantic
+    checks a partially given one.
+  - A type no flag can express (a `dict`, a list of lists or of models) is
+    refused at decoration, naming the field and pointing at
+    `config_file="only"`.
+
 ### Changed
 
 - **Breaking: a flag you did not pass no longer reaches the model** — in either
@@ -103,6 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shell completion was missed for a program with a `.` in its name
   (`my.tool`): `make_main` looked for click's variable name, but Typer reads its
   own (`_MY.TOOL_COMPLETE`), so the completion request ran the program.
+- A timezone-aware `datetime` could not be entered, because Typer's own
+  datetime parser takes only naive formats. Datetimes are now parsed by
+  Pydantic, so `2026-09-23T10:00:00+02:00` works. The `--help` metavar is now
+  `<datetime>` instead of Typer's format list.
+- A `strict=True` model with a `set` or `tuple[X, ...]` field could not run: the
+  CLI gathers repeated values into a list, which strict mode rejects. The list is
+  now rebuilt into the declared collection first.
 - `AliasChoices` fields are settable from the CLI, through their first string
   choice, instead of being rejected at decoration. `config_file="only"` commands
   no longer crash on `AliasChoices` / `AliasPath` fields: templates write the

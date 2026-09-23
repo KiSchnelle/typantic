@@ -1,14 +1,16 @@
 """Tests for the pydantic_to_typer decorator."""
 
+import collections
 import datetime
 import decimal
 import inspect
+import ipaddress
 import re
 import types
 import typing
 from collections.abc import Callable
 from enum import IntEnum, StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, ClassVar, Literal, get_args
 
 import annotated_types
@@ -19,8 +21,10 @@ from pydantic import (
     AliasChoices,
     AliasPath,
     BaseModel,
+    ByteSize,
     ConfigDict,
     Field,
+    HttpUrl,
     SecretBytes,
     SecretStr,
     model_validator,
@@ -1928,3 +1932,195 @@ def test_a_required_positional_is_filled_first_in_both_modes(make) -> None:
     result = runner.invoke(app, ["A", "B"])
     assert result.exit_code == 0, result.output
     assert (seen[0].dst, seen[0].src) == ("A", "B")
+
+
+# ---------------------------------------------------------------------------
+# Tests: field types a flag can carry
+#
+# Every type below used to crash Typer while it built the command group, which
+# took down every command of the app, --help included. Anything Pydantic can
+# parse from a string now reaches the model as that string; what a flag truly
+# cannot express is refused at decoration, naming the field.
+# ---------------------------------------------------------------------------
+
+Port = typing.NewType("Port", int)
+type Label = str
+
+
+class _Where(StrEnum):
+    HERE = "here"
+    THERE = "there"
+
+
+_PARSED_FROM_TEXT = [
+    (decimal.Decimal, "1.50", decimal.Decimal("1.50")),
+    (datetime.date, "2026-09-23", datetime.date(2026, 9, 23)),
+    (datetime.time, "10:30:00", datetime.time(10, 30)),
+    (datetime.timedelta, "PT1H", datetime.timedelta(hours=1)),
+    (
+        datetime.datetime,
+        "2026-09-23T10:00:00+02:00",
+        datetime.datetime(
+            2026, 9, 23, 10, tzinfo=datetime.timezone(datetime.timedelta(hours=2))
+        ),
+    ),
+    (ipaddress.IPv4Address, "10.0.0.1", ipaddress.IPv4Address("10.0.0.1")),
+    (ByteSize, "1KiB", 1024),
+    (bytes, "raw", b"raw"),
+    (int | str, "7", "7"),
+    (typing.Any, "anything", "anything"),
+    (Port, "8080", 8080),
+    (Label, "x", "x"),
+    (PurePosixPath, "/a/b", PurePosixPath("/a/b")),
+]
+
+
+@pytest.mark.parametrize(("tp", "text", "expected"), _PARSED_FROM_TEXT)
+def test_a_text_parsable_type_reaches_the_model(tp, text, expected) -> None:
+    class Cfg(BaseModel):
+        value: Annotated[tp, Field(kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    result = runner.invoke(app, ["--value", text])
+    assert result.exit_code == 0, result.output
+    assert seen[0].value == expected
+
+
+def test_a_url_reaches_the_model() -> None:
+    class Cfg(BaseModel):
+        url: Annotated[HttpUrl, Field(kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    result = runner.invoke(app, ["--url", "https://example.org/x"])
+    assert result.exit_code == 0, result.output
+    assert str(seen[0].url) == "https://example.org/x"
+
+
+@pytest.mark.parametrize(
+    ("annotation", "argv", "expected"),
+    [
+        (list[Literal["a", "b"]], ["--xs", "a", "--xs", "b"], ["a", "b"]),
+        (typing.Sequence[str], ["--xs", "a"], ["a"]),
+        (collections.deque[int], ["--xs", "1", "--xs", "2"], collections.deque([1, 2])),
+        (list[decimal.Decimal], ["--xs", "1.5"], [decimal.Decimal("1.5")]),
+        (list[_Where], ["--xs", "here"], [_Where.HERE]),
+    ],
+)
+def test_a_repeatable_flag_of_any_parsable_item(annotation, argv, expected) -> None:
+    class Cfg(BaseModel):
+        xs: Annotated[annotation, Field(kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    result = runner.invoke(app, argv)
+    assert result.exit_code == 0, result.output
+    assert seen[0].xs == expected
+
+
+def test_help_names_what_a_text_parsed_flag_takes() -> None:
+    class Cfg(BaseModel):
+        amount: Annotated[
+            decimal.Decimal,
+            Field(default=decimal.Decimal(1), kw_only=True),
+        ]
+
+    app, _ = _make_app(Cfg)
+    output = _plain(runner.invoke(app, ["--help"]).output)
+    assert "<decimal>" in output
+
+
+def test_an_unsupported_field_type_no_longer_takes_down_other_commands() -> None:
+    class Cfg(BaseModel):
+        amount: decimal.Decimal = decimal.Decimal(1)
+
+    app = typer.Typer()
+    add_command(app, Cfg, lambda config: None, name="run")
+
+    @app.command()
+    def other() -> None: ...
+
+    assert runner.invoke(app, ["other", "--help"]).exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        dict[str, int],
+        dict[str, int] | None,
+        list[list[int]],
+        list[_Database],
+        list[int] | str,
+        tuple[list[int], int],
+    ],
+)
+def test_a_type_no_flag_can_express_is_refused_at_decoration(annotation) -> None:
+    class Cfg(BaseModel):
+        blob: Annotated[annotation, Field(kw_only=True)]
+
+    with pytest.raises(ValueError, match="blob") as exc:
+        pydantic_to_typer(Cfg)(lambda config: config)
+    assert 'config_file="only"' in str(exc.value)
+
+
+class TestOptionalNestedModels:
+    @pytest.mark.parametrize("make", [_make_app, _make_app_config])
+    def test_no_flag_leaves_it_none(self, make) -> None:
+        class Cfg(BaseModel):
+            db: Annotated[_Database | None, Field(default=None, kw_only=True)]
+
+        app, seen = make(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0, result.output
+        assert seen[0].db is None
+
+    def test_a_flag_builds_it_from_its_defaults(self) -> None:
+        class Cfg(BaseModel):
+            db: Annotated[_Database | None, Field(default=None, kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--db-port", "1"])
+        assert result.exit_code == 0, result.output
+        assert (seen[0].db.host, seen[0].db.port) == ("localhost", 1)
+
+    def test_its_required_leaves_are_not_required_flags(self) -> None:
+        class Mask(BaseModel):
+            path: Path
+            dilate: int = 2
+
+        class Cfg(BaseModel):
+            mask: Annotated[Mask | None, Field(default=None, kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, []).exit_code == 0
+        assert seen[0].mask is None
+        # Passing part of it is still checked by Pydantic.
+        result = runner.invoke(app, ["--mask-dilate", "3"])
+        assert result.exit_code == 2
+        assert "path" in _plain(result.output)
+
+    def test_an_absent_optional_parent_is_not_conjured(self) -> None:
+        class Outer(BaseModel):
+            db: _Database
+
+        class Cfg(BaseModel):
+            outer: Annotated[Outer | None, Field(default=None, kw_only=True)]
+
+        app, seen = _make_app_config(Cfg)
+        result = runner.invoke(app, [])
+        assert result.exit_code == 0, result.output
+        assert seen[0].outer is None
+
+
+def test_a_strict_model_gets_its_declared_containers() -> None:
+    class Cfg(BaseModel):
+        model_config = ConfigDict(strict=True)
+
+        tags: Annotated[set[str], Field(default_factory=set, kw_only=True)]
+        pair: Annotated[tuple[int, ...], Field(default=(), kw_only=True)]
+        maybe: Annotated[frozenset[str] | None, Field(default=None, kw_only=True)]
+
+    app, seen = _make_app(Cfg)
+    argv = ["--tags", "a", "--tags", "b", "--pair", "1", "--maybe", "m"]
+    result = runner.invoke(app, argv)
+    assert result.exit_code == 0, result.output
+    assert (seen[0].tags, seen[0].pair) == ({"a", "b"}, (1,))
+    assert seen[0].maybe == frozenset({"m"})

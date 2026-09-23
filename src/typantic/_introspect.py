@@ -5,9 +5,12 @@ Small pure helpers for unwrapping annotations, used by both the decorator
 (:mod:`typantic._config_file`); kept here to avoid an import cycle between them.
 """
 
+import collections
+import collections.abc
 import types
 from typing import (
     Annotated,
+    TypeAliasType,
     TypeGuard,
     Union,
     cast,
@@ -17,6 +20,19 @@ from typing import (
 
 from pydantic import AliasChoices, BaseModel
 from pydantic.fields import FieldInfo
+
+# Collections the CLI gathers as a repeated flag (a list); Pydantic coerces the
+# list back into the declared collection.
+_SEQUENCES = (
+    list,
+    set,
+    frozenset,
+    collections.deque,
+    collections.abc.Sequence,
+    collections.abc.MutableSequence,
+    collections.abc.Set,
+    collections.abc.MutableSet,
+)
 
 
 def extract_base_type(annotation: object) -> object:
@@ -28,10 +44,11 @@ def extract_base_type(annotation: object) -> object:
     untouched -- Typer renders them as CLI choices.
 
     Typer renders only ``list`` among the collections, so a ``set`` /
-    ``frozenset`` / variadic ``tuple[X, ...]`` is mapped to ``list[X]``: the CLI
-    gathers repeated values into a list and Pydantic coerces it back to the
-    declared type, which it does natively. A *fixed* tuple (``tuple[int, int]``)
-    keeps its shape -- Typer renders it as a multi-value option.
+    ``frozenset`` / ``Sequence`` / ``deque`` / variadic ``tuple[X, ...]`` is mapped
+    to ``list[X]``: the CLI gathers repeated values into a list and Pydantic
+    coerces it back to the declared type, which it does natively. A *fixed* tuple
+    (``tuple[int, int]``) keeps its shape -- Typer renders it as a multi-value
+    option. A ``NewType`` or a PEP 695 ``type`` alias is replaced by what it wraps.
 
     Args:
         annotation: A (possibly nested) type annotation to unwrap.
@@ -45,28 +62,36 @@ def extract_base_type(annotation: object) -> object:
         >>> extract_base_type(Annotated[float, Field(description="x")])
         <class 'float'>
     """
-    if get_origin(annotation) is Annotated:
-        inner = get_args(annotation)[0]
-        return extract_base_type(inner)
+    annotation = unwrap(annotation)
+    origin = get_origin(annotation)
+    args = get_args(annotation)
 
-    if get_origin(annotation) in (Union, types.UnionType):
-        cleaned = tuple(extract_base_type(a) for a in get_args(annotation))
+    if origin in (Union, types.UnionType):
+        cleaned = tuple(extract_base_type(a) for a in args)
         return Union[cleaned]  # noqa: UP007
 
-    if get_origin(annotation) in (list, set, frozenset):
-        args = get_args(annotation)
-        if args:
-            return list[extract_base_type(args[0])]  # type: ignore[misc]
+    repeated = origin in _SEQUENCES or (origin is tuple and _is_variadic_tuple(args))
+    if repeated and args:
+        return list[extract_base_type(args[0])]  # type: ignore[misc]
 
-    if get_origin(annotation) is tuple:
-        args = get_args(annotation)
-        if _is_variadic_tuple(args):
-            return list[extract_base_type(args[0])]  # type: ignore[misc]
-        if args:
-            cleaned = tuple(extract_base_type(a) for a in args)
-            return tuple[cleaned]  # type: ignore[valid-type]
+    if origin is tuple and args:
+        cleaned = tuple(extract_base_type(a) for a in args)
+        return tuple[cleaned]  # type: ignore[valid-type]
 
     return annotation
+
+
+def unwrap(annotation: object) -> object:
+    """Peel ``Annotated``, PEP 695 ``type`` aliases and ``NewType`` s off a type."""
+    while True:
+        if get_origin(annotation) is Annotated:
+            annotation = get_args(annotation)[0]
+        elif isinstance(annotation, TypeAliasType):
+            annotation = annotation.__value__
+        elif getattr(annotation, "__supertype__", None) is not None:
+            annotation = annotation.__supertype__  # type: ignore[attr-defined]
+        else:
+            return annotation
 
 
 def _is_variadic_tuple(args: tuple[object, ...]) -> bool:

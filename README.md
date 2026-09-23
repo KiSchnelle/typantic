@@ -108,14 +108,22 @@ Your function receives the **validated model instance**, exactly as `Model(**wha
 | `Literal["a", "b"]`               | CLI choices                             |
 | `Enum`, `tuple[...]`              | Choices / multi-value option            |
 | nested `BaseModel`                | Flattened into `--prefix-field` options |
+| `BaseModel \| None`               | Flattened too; stays `None` unless one of its flags is passed |
 | `SecretStr`, `SecretBytes`        | Hidden input (secure prompt if required)|
 | `int \| None`                     | Optional CLI option                     |
 | `default=None`                    | Rendered as `[default: (None)]`         |
-| `list[Path]`                      | Variadic positional argument            |
+| `list[X]`, `set[X]`, `Sequence[X]`, `deque[X]`, `tuple[X, ...]` | Repeated option (`--x a --x b`); a variadic positional argument with `kw_only=False` |
+| `Decimal`, `date`, `time`, `timedelta`, `datetime` (timezone-aware too), URLs, IP addresses, `ByteSize`, `bytes`, `Any`, a union of values | Taken as text and parsed by Pydantic; `--help` names what it takes (`<decimal>`) |
+| `NewType`, `type X = ...`         | Handled as the type they wrap           |
 | `AfterValidator`, `BeforeValidator` | Run at call time via Pydantic         |
 
 Validators that raise `ValueError` / `AssertionError` surface as Typer
 parameter errors; other exception types propagate unchanged.
+
+A type no flag can express — a `dict`, a list of lists, a list of models — is
+refused when the command is decorated, naming the field. Such a model belongs in
+a file: `config_file="only"` (see [Config files](#config-files)) makes the command
+read every field from `--config`.
 
 ## Per-field CLI hints
 
