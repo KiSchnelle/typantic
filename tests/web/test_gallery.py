@@ -224,3 +224,8 @@ def test_thumbnail_applies_exif_orientation(tmp_path):
     assert thumb is not None
     w, h = Image.open(thumb).size
     assert h > w  # transposed; without exif_transpose this would still be wide
+
+
+def test_tests_never_touch_the_real_thumbnail_cache():
+    real = Path.home() / ".cache" / "typantic" / "thumbnails"
+    assert real != gallery._THUMB_CACHE
