@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Each job records the version of the app that ran it.** `JobRecord` gains
+  `app_version`: the version of the installed distribution that provides the
+  command's console script, or `None` when none does (an executable found only
+  on `PATH`) and for a job recorded before 0.8.1. A restart records the
+  version it runs with. The dashboard shows it in the job's header and in the
+  jobs list.
+
 ### Fixed
 
 - **A branded dashboard's browser tab showed typantic's icon in Safari.** The

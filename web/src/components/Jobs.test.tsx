@@ -73,3 +73,13 @@ test("the status filter offers every job status", async () => {
   const options = [...screen.getByLabelText("Status").querySelectorAll("option")];
   expect(options.map((o) => o.value)).toEqual(["", ...JOB_STATUSES]);
 });
+
+test("each job shows the app version it ran with, when known", async () => {
+  vi.mocked(api.fetchJobs).mockResolvedValue({
+    jobs: [job("j0", { app_version: "1.4.2" }), job("j1")],
+    total: 2,
+  });
+  render(<Jobs />);
+  await settle();
+  expect(screen.getAllByText(/^v\d/).map((el) => el.textContent)).toEqual(["v1.4.2"]);
+});

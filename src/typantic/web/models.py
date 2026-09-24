@@ -176,6 +176,10 @@ class JobRecord(BaseModel):
     # The machine a process-family job's pid lives on; None for a scheduler job,
     # and for one recorded before 0.8.0.
     host: str | None = None
+    # The version of the app that ran the job (the installed distribution that
+    # provides its console script); None when unknown, and for one recorded
+    # before 0.8.1.
+    app_version: str | None = None
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime
     finished_at: datetime | None = None

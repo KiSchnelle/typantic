@@ -82,3 +82,9 @@ test("a reset frame clears the log before the new one streams in", async () => {
   });
   expect(shownLog()).toBe("new run\n");
 });
+
+test("the header names the app version the job ran with", async () => {
+  vi.mocked(api.fetchJob).mockResolvedValue(job("j1", { app_version: "0.2.0" }));
+  await mount();
+  expect(screen.getByText("v0.2.0").getAttribute("title")).toContain("app version");
+});

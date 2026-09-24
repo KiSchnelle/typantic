@@ -4,7 +4,9 @@ import sqlite3
 import stat
 import time
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel, Field
@@ -903,6 +905,36 @@ def test_a_job_records_the_host_it_was_started_on(wired):
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
     launcher.get(record.id)
     assert launcher.restart(record.id).host == "login01"
+
+
+def test_a_job_records_the_app_version_that_ran_it(wired, monkeypatch):
+    launcher, backend, store = wired
+    monkeypatch.setattr(launcher_mod, "_app_version", lambda _app: "1.0")
+    record = launcher.launch(_request())
+    assert record.app_version == "1.0"
+    assert store.load(record.id).app_version == "1.0"
+    # A restart runs the version installed now, and records that one.
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    launcher.get(record.id)
+    monkeypatch.setattr(launcher_mod, "_app_version", lambda _app: "2.0")
+    assert launcher.restart(record.id).app_version == "2.0"
+
+
+def test_the_app_version_comes_from_the_distribution_of_its_script():
+    # typantic's own `typantic` script is installed in this environment.
+    assert launcher_mod._app_version("typantic") == version("typantic")
+    assert launcher_mod._app_version("no-such-app-anywhere") is None
+
+
+def test_a_script_without_a_distribution_is_skipped(monkeypatch):
+    scripts = [
+        SimpleNamespace(dist=None),
+        SimpleNamespace(dist=SimpleNamespace(version="9")),
+    ]
+    monkeypatch.setattr(launcher_mod, "entry_points", lambda **_: scripts)
+    assert launcher_mod._app_version("app") == "9"
+    monkeypatch.setattr(launcher_mod, "entry_points", lambda **_: scripts[:1])
+    assert launcher_mod._app_version("app") is None
 
 
 # --- when a job finished, and a history that is current ---

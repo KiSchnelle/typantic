@@ -19,6 +19,7 @@ export function job(id: string, over: Partial<JobRecord> = {}): JobRecord {
     pid_start: null,
     scheduler_id: null,
     host: null,
+    app_version: null,
     status: "running",
     created_at: "2026-09-23T12:00:00Z",
     finished_at: null,

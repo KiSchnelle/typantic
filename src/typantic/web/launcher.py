@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from datetime import UTC, datetime
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, cast
 
@@ -138,6 +139,18 @@ class _Snapshot:
     def discard(self) -> None:
         if self._old_log is not None:
             self._old_log.unlink(missing_ok=True)
+
+
+def _app_version(app: str) -> str | None:
+    """The version of the installed distribution that provides ``app``'s script.
+
+    ``None`` when no distribution in this environment ships that console script,
+    e.g. an executable found only on ``PATH``.
+    """
+    for script in entry_points(group="console_scripts", name=app):
+        if script.dist is not None:
+            return script.dist.version
+    return None
 
 
 class UnknownCommandError(ValueError):
@@ -306,6 +319,7 @@ class Launcher:
             pid_start=launched.pid_start,
             scheduler_id=launched.scheduler_id,
             host=launched.host,
+            app_version=_app_version(meta.app),
             status=launched.status,
             created_at=created_at,
         )
@@ -677,6 +691,7 @@ class Launcher:
                         "pid_start": launched.pid_start,
                         "scheduler_id": launched.scheduler_id,
                         "host": launched.host,
+                        "app_version": _app_version(meta.app),
                         "finished_at": None,
                         "exit_code": None,
                     },

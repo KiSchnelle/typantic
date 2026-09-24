@@ -333,6 +333,14 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
               {job.app} / {job.command}
             </span>
           )}
+          {job.app_version && (
+            <span
+              className="font-mono text-sm text-slate-500"
+              title={`The ${job.app} version this job ran with`}
+            >
+              v{job.app_version}
+            </span>
+          )}
           <span className="text-sm text-slate-500 capitalize">{job.backend}</span>
           {job.scheduler_id && (
             <span className="font-mono text-sm text-slate-500">

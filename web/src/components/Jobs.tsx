@@ -174,6 +174,11 @@ export default function Jobs(): ReactNode {
                       {job.app}
                       <span className="text-slate-600"> / </span>
                       {job.command}
+                      {job.app_version && (
+                        <span className="ml-1 font-mono text-slate-600">
+                          v{job.app_version}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2 capitalize text-slate-400">
                       {job.backend}
