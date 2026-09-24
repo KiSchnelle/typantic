@@ -11,7 +11,9 @@ import asyncio
 import base64
 import codecs
 import contextlib
+import html
 import os
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Annotated
@@ -26,7 +28,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -66,6 +68,11 @@ from typantic.web.store import FolderNotRemovedError
 _SPA_DIR = Path(__file__).parent / "web_dist"
 _WS_POLICY_VIOLATION = 1008
 
+# What the SPA's index.html shows in the browser tab: typantic's name and icons,
+# which _branded_page replaces with the dashboard's brand.
+_PAGE_TITLE = re.compile(r"<title>.*?</title>", re.DOTALL)
+_PAGE_ICONS = re.compile(r'\s*<link rel="icon"[^>]*>')
+
 # Domain error -> HTTP status. Kept in one place so every route that can raise
 # them answers the same way; they used to be hand-mapped per route, and had drifted.
 _ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
@@ -93,6 +100,23 @@ def _domain_errors() -> Iterator[None]:
         raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 
+def _branded_page(page: str, title: str, icon: str | None) -> str:
+    """The SPA's ``index.html`` with the brand's name and icon in the browser tab.
+
+    The page loads with the brand already there: the SPA's own swap, once
+    ``/api/meta`` answers, comes too late for Safari, which keeps the icon a page
+    loaded with. ``icon`` is the brand's SVG as a data URI, like ``/api/meta``'s,
+    so its scripts never run on the dashboard's origin. Without one, typantic's
+    icons stay.
+    """
+    head = f"<title>{html.escape(title)}</title>"
+    if icon is not None:
+        page = _PAGE_ICONS.sub("", page)
+        head += f'\n    <link rel="icon" type="image/svg+xml" href="{icon}" />'
+    # A function, not a template: a backslash in a title is not a group reference.
+    return _PAGE_TITLE.sub(lambda _: head, page, count=1)
+
+
 def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; each closure is trivial
     launcher: Launcher,
     *,
@@ -114,11 +138,12 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
             :class:`~typantic.web.security.LocalHostOnly`).
         title: The dashboard's name; overrides the brand's.
         extra_routers: Extra routers to mount (each token-guarded by the caller).
-        dashboard: Serve the built SPA at ``/`` if present.
+        dashboard: Serve the built SPA at ``/`` if present, the brand already in
+            its browser tab.
         host: The host the server is bound to, served without a token as well.
         brand: How the dashboard presents itself (typantic's own when ``None``),
-            surfaced at ``/api/meta``. Never discovered here: see
-            :mod:`typantic.web.brand`.
+            surfaced at ``/api/meta`` and in the page's browser tab. Never
+            discovered here: see :mod:`typantic.web.brand`.
 
     Returns:
         The configured application (serve with uvicorn).
@@ -334,6 +359,18 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
         app.include_router(router)
 
     if dashboard and _SPA_DIR.is_dir():
+        # Ahead of the static mount, which would serve index.html as built: with
+        # typantic's name and icons in the tab (see _branded_page).
+        @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+        @app.api_route("/index.html", methods=["GET", "HEAD"], include_in_schema=False)
+        def page() -> HTMLResponse:
+            # Read per request, like the static files: a rebuilt SPA needs no restart.
+            try:
+                built = (_SPA_DIR / "index.html").read_text(encoding="utf-8")
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Not Found") from None
+            return HTMLResponse(_branded_page(built, shown.title, icon))
+
         app.mount("/", StaticFiles(directory=_SPA_DIR, html=True), name="spa")
 
     return app

@@ -1031,3 +1031,57 @@ def test_meta_without_a_brand_is_typantics(tmp_path, monkeypatch):
 def test_a_title_argument_still_names_the_dashboard(env):
     # make_api(title=...) predates the brand and keeps working.
     assert env.client.get("/api/meta", headers=AUTH).json()["wordmark_lead"] == "Test"
+
+
+# --- the brand in the page's browser tab ---
+
+# The SPA's source page, which the build copies into web_dist. The tests rewrite
+# the real markup, so a change to it that the rewrite no longer matches fails here.
+_INDEX_HTML = pathlib.Path(__file__).parents[2] / "web" / "index.html"
+
+
+def _page_client(tmp_path, monkeypatch, brand=None):
+    spa = tmp_path / "web_dist"
+    spa.mkdir()
+    (spa / "index.html").write_text(_INDEX_HTML.read_text(encoding="utf-8"))
+    monkeypatch.setattr(api_mod, "_SPA_DIR", spa)
+    launcher = _bare_launcher(tmp_path, monkeypatch)
+    return TestClient(make_api(launcher, token=None, brand=brand), base_url=LOCAL)
+
+
+def test_the_page_loads_with_the_brand_in_its_tab(tmp_path, monkeypatch):
+    # Not only once /api/meta answers: Safari keeps the tab icon a page loaded
+    # with, so the SPA's own swap never reached its tab.
+    brand = Brand(title="catchEM", icon="<svg/>")
+    client = _page_client(tmp_path, monkeypatch, brand)
+    icon = client.get("/api/meta").json()["icon"]
+    for path in ("/", "/index.html"):
+        page = client.get(path).text
+        assert "<title>catchEM</title>" in page
+        # typantic's SVG and PNG icons are gone: a browser would still pick one.
+        assert page.count('rel="icon"') == 1
+        assert f'<link rel="icon" type="image/svg+xml" href="{icon}" />' in page
+    assert client.head("/").status_code == 200
+
+
+def test_without_a_brand_the_page_is_as_built(tmp_path, monkeypatch):
+    client = _page_client(tmp_path, monkeypatch)
+    assert client.get("/").text == _INDEX_HTML.read_text(encoding="utf-8")
+    # The rest of the SPA is served as built, by the static mount behind the page.
+    (tmp_path / "web_dist" / "favicon.svg").write_text("<svg/>")
+    assert client.get("/favicon.svg").text == "<svg/>"
+
+
+def test_the_tab_title_is_text(tmp_path, monkeypatch):
+    # Escaped, never markup; and a backslash in it is not a group reference.
+    client = _page_client(tmp_path, monkeypatch, Brand(title=r"R&D <lab> \1"))
+    assert r"<title>R&amp;D &lt;lab&gt; \1</title>" in client.get("/").text
+
+
+def test_a_spa_without_its_page_answers_404(tmp_path, monkeypatch):
+    spa = tmp_path / "web_dist"
+    spa.mkdir()
+    monkeypatch.setattr(api_mod, "_SPA_DIR", spa)
+    launcher = _bare_launcher(tmp_path, monkeypatch)
+    client = TestClient(make_api(launcher, token=None), base_url=LOCAL)
+    assert client.get("/").status_code == 404

@@ -12,8 +12,10 @@ export type View = "launch" | "jobs" | "projects";
 interface State {
   view: View;
   // The brand (see ApiMeta): the tab's title, the sidebar wordmark, the mark
-  // (a data: URI) and the accent; typantic's own until /api/meta answers.
-  title: string;
+  // (a data: URI) and the accent; typantic's own until /api/meta answers. The
+  // title is null until then, which keeps the page's: the server wrote the
+  // brand's into the page it served.
+  title: string | null;
   wordmarkLead: string;
   wordmarkRest: string;
   icon: string | null;
@@ -44,7 +46,7 @@ interface State {
 
 export const useStore = create<State>((set) => ({
   view: "launch",
-  title: "typantic web",
+  title: null,
   wordmarkLead: "typantic",
   wordmarkRest: "web",
   icon: null,

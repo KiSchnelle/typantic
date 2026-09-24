@@ -89,3 +89,13 @@ test("the brand and backends are asked for until the server answers", async () =
   await settle(10_000);
   expect(api.fetchMeta).toHaveBeenCalledTimes(2); // then no more
 });
+
+test("until the server answers, the tab keeps the page's title", async () => {
+  // The server writes the brand's title into the page; the store's typantic
+  // default overwrote it until /api/meta answered, and for good if it never did.
+  document.title = "catchEM";
+  vi.mocked(api.fetchMeta).mockRejectedValue(new Error("401 Unauthorized"));
+  render(<App />);
+  await settle();
+  expect(document.title).toBe("catchEM");
+});

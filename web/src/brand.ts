@@ -29,7 +29,9 @@ export function applyAccent(accent: string | null): void {
 
 // Show a brand's mark as the tab's icon. index.html links typantic's, as an SVG
 // and as a PNG for browsers without SVG tab icons; the brand replaces the SVG
-// one and drops the PNG, which such a browser would still pick.
+// one and drops the PNG, which such a browser would still pick. The page the
+// server serves has the brand's already (Safari never follows a later swap), so
+// this is for `vite dev`, which serves index.html as written.
 export function showFavicon(icon: string | null): void {
   if (!icon) return;
   const svg = document.querySelector<HTMLLinkElement>(

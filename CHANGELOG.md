@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A branded dashboard's browser tab showed typantic's icon in Safari.** The
+  server sent the page with typantic's title and icons, and the page swapped in
+  the brand's once `/api/meta` answered, which Safari never follows: it keeps
+  the icon a page loaded with. The server now writes the brand's title and icon
+  (a data URI, like `/api/meta`'s) into the page it serves, so every browser
+  shows them from the start. The page no longer puts typantic's title back in
+  the tab while `/api/meta` has not answered.
+
 ## [0.8.0] - 2026-09-23
 
 ### Added

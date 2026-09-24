@@ -61,10 +61,11 @@ export default function App(): ReactNode {
     };
   }, [setBrand, setBackends]);
 
-  // Mirror the brand into the tab (index.html's title and icons are
-  // typantic's, until /api/meta answers) and into the accent colours.
+  // Mirror the brand into the tab and into the accent colours. A page the
+  // server served has the brand's title and icon already; under `vite dev`,
+  // index.html's are typantic's until /api/meta answers.
   useEffect(() => {
-    document.title = title;
+    if (title !== null) document.title = title;
   }, [title]);
   useEffect(() => showFavicon(icon), [icon]);
   useEffect(() => applyAccent(accent), [accent]);
