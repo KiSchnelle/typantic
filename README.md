@@ -654,6 +654,13 @@ click **Launch** — the dashboard writes your values to a config file, runs
   when the service stops (set `KillMode=process`), and one started inside a
   Slurm allocation takes them down when the allocation ends (use the `slurm`
   backend instead).
+- **Upgrading an app needs no restart**: its forms follow the version installed
+  now. A newly installed app, and source edits to an editable install, show up
+  after `POST /api/commands/refresh` (with the token) or a restart; upgrading
+  typantic itself needs a restart. Each job records the app version it ran
+  with, and a job whose settings the installed version does not have — renamed
+  or removed since, or added by a newer version before a downgrade — cannot be
+  cloned or restarted: it names those settings, and you launch a new one.
 - **Where things live** — each job's folder (config, log, outputs) under
   `~/.typantic/jobs`, or `$TYPANTIC_WEB_JOBS_DIR`, readable by you alone: a
   submitted config can hold a secret typed into the form. Write outputs you
