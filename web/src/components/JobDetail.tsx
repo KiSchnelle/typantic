@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ArrowLeft, Check, Copy, Download, RotateCcw, WrapText } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  Copy,
+  Download,
+  Lock,
+  RotateCcw,
+  WrapText,
+} from "lucide-react";
 import {
   cancelJob,
   deleteJob,
   fetchImages,
   fetchJob,
+  fetchJobCompat,
   fetchJobRequest,
   imageSrc,
   isEndFrame,
@@ -18,7 +27,7 @@ import {
 import { copyText, downloadText } from "../browser.ts";
 import { startPolling } from "../poll.ts";
 import { useStore } from "../store.ts";
-import type { JobImage, JobRecord, LaunchRequest } from "../types.ts";
+import type { JobCompat, JobImage, JobRecord, LaunchRequest } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
 import {
   Alert,
@@ -164,6 +173,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   // job id is unchanged.
   const [runEpoch, setRunEpoch] = useState(0);
   const [showRestart, setShowRestart] = useState(false);
+  const [compat, setCompat] = useState<JobCompat | null>(null);
   const [wrap, setWrap] = useState(false);
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -210,6 +220,19 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
       active = false;
     };
   }, [id]);
+
+  // Whether the job's settings still fit the installed app. Unanswered (or
+  // failing), the actions stay available and the server's own check decides.
+  useEffect(() => {
+    let active = true;
+    setCompat(null);
+    fetchJobCompat(id)
+      .then((c) => active && setCompat(c))
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [id, runEpoch]);
 
   // Tail the log. The server closes the socket when the job ends, so a close is
   // only worth retrying while the job is still live — without this a dropped
@@ -312,6 +335,13 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
 
   const options = request ? usedOptions(request.backend_options) : [];
   const logView = useMemo(() => (log ? colorizeLog(log) : null), [log]);
+  // Settings the installed app does not have (another version's): the form
+  // cannot show or drop them, so cloning or restarting the job would fail.
+  const stale = compat?.unknown_settings ?? [];
+  const locked = stale.length > 0;
+  const lockReason = locked
+    ? `Its settings don't fit the installed ${job?.app ?? "app"}: ${stale.join(", ")}.`
+    : undefined;
 
   return (
     <div>
@@ -358,6 +388,8 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
           </span>
           <div className="ml-auto flex gap-2">
             <Button
+              disabled={locked}
+              title={lockReason}
               onClick={() => {
                 run(fetchJobRequest(id).then(cloneFrom));
               }}
@@ -365,7 +397,12 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
               Clone
             </Button>
             {terminal ? (
-              <Button variant="danger" onClick={() => setShowRestart(true)}>
+              <Button
+                variant="danger"
+                disabled={locked}
+                title={lockReason}
+                onClick={() => setShowRestart(true)}
+              >
                 Restart
               </Button>
             ) : (
@@ -388,6 +425,23 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
               Delete
             </Button>
           </div>
+        </div>
+      )}
+
+      {job && compat && locked && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-800 bg-amber-950/40 p-3 text-sm text-amber-200">
+          <Lock size={16} className="mt-0.5 shrink-0" />
+          <span>
+            This job ran with{" "}
+            {compat.app_version
+              ? `${job.app} ${compat.app_version}`
+              : `another ${job.app} version`}
+            ; the installed {job.app}
+            {compat.installed_version && ` ${compat.installed_version}`} has no{" "}
+            {stale.length === 1 ? "setting" : "settings"}{" "}
+            <span className="font-mono">{stale.join(", ")}</span>. Clone and Restart
+            are unavailable — start a new job from the form.
+          </span>
         </div>
       )}
 

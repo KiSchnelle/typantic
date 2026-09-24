@@ -41,6 +41,7 @@ from typantic.web.filesystem import FileSystemError
 from typantic.web.launcher import (
     JobNotTerminalError,
     Launcher,
+    StaleSettingsError,
     UnknownBackendError,
     UnknownCommandError,
     UnknownProjectError,
@@ -51,6 +52,7 @@ from typantic.web.models import (
     CommandMeta,
     FsListing,
     History,
+    JobCompat,
     JobImages,
     JobPage,
     JobRecord,
@@ -81,6 +83,7 @@ _ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
     (UnknownProjectError, 400),
     (JobNotTerminalError, 409),
     (ForeignHostError, 409),
+    (StaleSettingsError, 409),
     (SchemaError, 502),
     (LaunchUncertainError, 504),
     (SchedulerError, 502),
@@ -265,6 +268,14 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
         if request is None:
             raise HTTPException(status_code=404, detail="No such job.")
         return request
+
+    @app.get("/api/jobs/{job_id}/compat", dependencies=guard)
+    def job_compat(job_id: str) -> JobCompat:
+        with _domain_errors():
+            compat = launcher.compat(job_id)
+        if compat is None:
+            raise HTTPException(status_code=404, detail="No such job.")
+        return compat
 
     @app.post("/api/jobs/{job_id}/restart", dependencies=guard)
     def restart_job(job_id: str, request: LaunchRequest | None = None) -> JobRecord:

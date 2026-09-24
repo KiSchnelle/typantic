@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on `PATH`) and for a job recorded before 0.8.1. A restart records the
   version it runs with. The dashboard shows it in the job's header and in the
   jobs list.
+- **A job whose settings the installed app does not have can no longer be
+  cloned or restarted.** A job keeps the settings of the version that ran it;
+  once the app renames or removes one (or, after a downgrade, never had it),
+  a Clone or Restart sent it along — the form draws only the current settings,
+  so it could not be seen or dropped — and the job failed in the CLI. The
+  launcher now checks launch and restart values against the command's current
+  schema and refuses unknown top-level settings with the new
+  `StaleSettingsError` (409), naming them; when the schema cannot be fetched
+  the CLI's own check stands. `GET /api/jobs/{id}/compat` returns a `JobCompat`
+  (`app_version`, `installed_version`, `unknown_settings`), and the dashboard
+  uses it to disable Clone and Restart with a notice saying why. A setting
+  that was only added since leaves an old job alone. `StaleSettingsError` and
+  `JobCompat` are exported from `typantic.web`.
 
 ### Fixed
 

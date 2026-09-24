@@ -6,6 +6,7 @@ import type {
   CommandMeta,
   FsListing,
   History,
+  JobCompat,
   JobImages,
   JobPage,
   JobQuery,
@@ -142,6 +143,12 @@ export function cancelJob(id: string): Promise<JobRecord> {
 // show the submitted config / backend options in the job detail.
 export function fetchJobRequest(id: string): Promise<LaunchRequest> {
   return getJson(`/api/jobs/${id}/request`);
+}
+
+// Whether a job's settings still fit the installed version of its command; a
+// setting the installed command does not have locks Clone and Restart.
+export function fetchJobCompat(id: string): Promise<JobCompat> {
+  return getJson(`/api/jobs/${id}/compat`);
 }
 
 // Remove a job from history (cancels it first if still active, then deletes it).

@@ -301,6 +301,44 @@ def test_restart_missing(env):
     assert env.client.post("/api/jobs/missing/restart", headers=AUTH).status_code == 404
 
 
+# --- settings from another version of the app ---
+
+
+def _installed_settings(monkeypatch, env, *names):
+    """The installed command's form has exactly these settings."""
+    schema = {"type": "object", "properties": {name: {} for name in names}}
+    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: schema)
+    env.launcher.schema_cache.clear()  # as installing that version would
+
+
+def test_job_compat_names_the_settings_the_installed_app_lacks(env, monkeypatch):
+    _installed_settings(monkeypatch, env, "end2end", "iou")
+    record = _launch(env, values={"end2end": None, "iou": 0.7})
+    _installed_settings(monkeypatch, env, "nms", "iou")  # end2end became nms
+    resp = env.client.get(f"/api/jobs/{record['id']}/compat", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["unknown_settings"] == ["end2end"]
+    assert env.client.get("/api/jobs/missing/compat", headers=AUTH).status_code == 404
+
+
+def test_restarting_another_versions_settings_is_409(env, monkeypatch):
+    _installed_settings(monkeypatch, env, "end2end")
+    record = _launch(env, values={"end2end": None})
+    _make_terminal(env, record)
+    _installed_settings(monkeypatch, env, "nms")
+    resp = env.client.post(f"/api/jobs/{record['id']}/restart", headers=AUTH)
+    assert resp.status_code == 409
+    assert "end2end" in resp.json()["detail"]
+
+
+def test_launching_settings_the_installed_app_lacks_is_409(env, monkeypatch):
+    _installed_settings(monkeypatch, env, "nms")
+    body = {"command_key": "app/run", "backend": "local", "values": {"end2end": 1}}
+    resp = env.client.post("/api/launch", json=body, headers=AUTH)
+    assert resp.status_code == 409
+    assert env.client.get("/api/jobs", headers=AUTH).json()["total"] == 0
+
+
 # --- images ---
 
 

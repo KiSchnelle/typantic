@@ -1,4 +1,5 @@
-// The log view shows a job's log once, whatever its socket goes through.
+// The job detail: a log shown once whatever its socket goes through, the app
+// version in its header, and the actions its settings allow.
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -9,6 +10,7 @@ import JobDetail from "./JobDetail.tsx";
 vi.mock("../api.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api.ts")>()),
   fetchJob: vi.fn(),
+  fetchJobCompat: vi.fn(),
   fetchJobRequest: vi.fn(),
   fetchImages: vi.fn(),
   openLogSocket: vi.fn(),
@@ -31,6 +33,11 @@ beforeEach(() => {
   vi.useFakeTimers();
   sockets = [];
   vi.mocked(api.fetchJob).mockResolvedValue(job("j1"));
+  vi.mocked(api.fetchJobCompat).mockResolvedValue({
+    app_version: null,
+    installed_version: null,
+    unknown_settings: [],
+  });
   vi.mocked(api.fetchJobRequest).mockResolvedValue(REQUEST);
   vi.mocked(api.fetchImages).mockResolvedValue({ images: [], truncated: false });
   vi.mocked(api.openLogSocket).mockImplementation(() => {
@@ -87,4 +94,47 @@ test("the header names the app version the job ran with", async () => {
   vi.mocked(api.fetchJob).mockResolvedValue(job("j1", { app_version: "0.2.0" }));
   await mount();
   expect(screen.getByText("v0.2.0").getAttribute("title")).toContain("app version");
+});
+
+function actionButton(name: string): HTMLButtonElement {
+  return screen.getByRole("button", { name }) as HTMLButtonElement;
+}
+
+test("a job with settings the installed app lacks cannot be cloned or restarted", async () => {
+  // Another version's settings: the form cannot show or drop them, so a Clone
+  // or Restart would only fail once the job ran.
+  vi.mocked(api.fetchJob).mockResolvedValue(
+    job("j1", { app: "catchem-ml", status: "done", app_version: "0.2.0" }),
+  );
+  vi.mocked(api.fetchJobCompat).mockResolvedValue({
+    app_version: "0.2.0",
+    installed_version: "0.3.0",
+    unknown_settings: ["end2end"],
+  });
+  await mount();
+  const banner = screen.getByText(/has no setting/).textContent;
+  expect(banner).toContain("ran with catchem-ml 0.2.0");
+  expect(banner).toContain("installed catchem-ml 0.3.0");
+  expect(screen.getByText("end2end")).toBeTruthy();
+  for (const name of ["Clone", "Restart"]) {
+    expect(actionButton(name).disabled).toBe(true);
+    expect(actionButton(name).title).toContain("end2end");
+  }
+  expect(actionButton("Delete").disabled).toBe(false);
+});
+
+test("a job whose settings fit the installed app keeps Clone and Restart", async () => {
+  vi.mocked(api.fetchJob).mockResolvedValue(job("j1", { status: "done" }));
+  await mount();
+  expect(screen.queryByText(/has no setting/)).toBeNull();
+  expect(actionButton("Clone").disabled).toBe(false);
+  expect(actionButton("Restart").disabled).toBe(false);
+});
+
+test("an unanswered compat check leaves the actions to the server", async () => {
+  vi.mocked(api.fetchJob).mockResolvedValue(job("j1", { status: "done" }));
+  vi.mocked(api.fetchJobCompat).mockRejectedValue(new Error("502 schema"));
+  await mount();
+  expect(actionButton("Clone").disabled).toBe(false);
+  expect(actionButton("Restart").disabled).toBe(false);
 });

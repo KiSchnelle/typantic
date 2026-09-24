@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sqlite3
 import stat
@@ -18,6 +19,7 @@ from typantic.web.backends.scheduler import SchedulerError
 from typantic.web.launcher import (
     JobNotTerminalError,
     Launcher,
+    StaleSettingsError,
     UnknownBackendError,
     UnknownCommandError,
     UnknownProjectError,
@@ -25,6 +27,7 @@ from typantic.web.launcher import (
 from typantic.web.models import (
     BackendMeta,
     CommandMeta,
+    JobCompat,
     JobRecord,
     JobStatus,
     LaunchRequest,
@@ -935,6 +938,95 @@ def test_a_script_without_a_distribution_is_skipped(monkeypatch):
     assert launcher_mod._app_version("app") == "9"
     monkeypatch.setattr(launcher_mod, "entry_points", lambda **_: scripts[:1])
     assert launcher_mod._app_version("app") is None
+
+
+# --- settings from another version of the app ---
+
+
+def _installed_settings(monkeypatch, launcher, *names):
+    """The installed command's form has exactly these settings."""
+    schema = {"type": "object", "properties": {name: {} for name in names}}
+    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: schema)
+    launcher.schema_cache.clear()  # as installing that version would
+
+
+def _done(launcher, backend, record):
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    return launcher.get(record.id)
+
+
+def test_launch_refuses_a_setting_the_installed_app_lacks(wired, monkeypatch):
+    # A form left open across an upgrade still sends the old settings.
+    launcher, backend, store = wired
+    _installed_settings(monkeypatch, launcher, "iou", "nms")
+    with pytest.raises(StaleSettingsError, match="has no run setting end2end"):
+        launcher.launch(_request(values={"iou": 0.5, "end2end": None}))
+    assert backend.launched == []
+    assert [path for path in store.root.iterdir() if path.is_dir()] == []
+
+
+def test_restarting_another_versions_settings_is_refused_untouched(
+    wired,
+    monkeypatch,
+):
+    launcher, backend, _ = wired
+    _installed_settings(monkeypatch, launcher, "end2end")
+    record = _done(launcher, backend, launcher.launch(_request(values={"end2end": 1})))
+    config = Path(record.config_path).read_text()
+    _installed_settings(monkeypatch, launcher, "nms")  # the app was upgraded
+    with pytest.raises(StaleSettingsError, match="end2end"):
+        launcher.restart(record.id)
+    # Refused before anything changed: still the finished run, same settings.
+    assert launcher.get(record.id).status is JobStatus.DONE
+    assert Path(record.config_path).read_text() == config
+    assert len(backend.launched) == 1
+
+
+def test_a_newer_versions_settings_are_refused_after_a_downgrade(wired, monkeypatch):
+    launcher, backend, _ = wired
+    _installed_settings(monkeypatch, launcher, "nms")
+    record = _done(launcher, backend, launcher.launch(_request(values={"nms": False})))
+    _installed_settings(monkeypatch, launcher, "end2end")  # downgraded
+    with pytest.raises(StaleSettingsError, match="has no run setting nms"):
+        launcher.restart(record.id)
+
+
+def test_restarting_with_edited_stale_settings_is_refused(wired, monkeypatch):
+    launcher, backend, _ = wired
+    _installed_settings(monkeypatch, launcher, "nms")
+    record = _done(launcher, backend, launcher.launch(_request()))
+    edited = _request(values={"foo": 1, "end2end": None})
+    with pytest.raises(StaleSettingsError, match="settings end2end, foo"):
+        launcher.restart(record.id, edited)
+
+
+def test_without_a_schema_the_cli_checks_the_settings(wired, caplog):
+    # `app` is not on PATH here, so its schema cannot be fetched.
+    launcher, _, _ = wired
+    with caplog.at_level(logging.WARNING, logger="typantic.web"):
+        record = launcher.launch(_request(values={"anything": 1}))
+    assert record.status is JobStatus.RUNNING
+    assert "without checking its settings" in caplog.text
+
+
+def test_compat_reports_the_versions_and_the_stale_settings(wired, monkeypatch):
+    launcher, _, _ = wired
+    monkeypatch.setattr(launcher_mod, "_app_version", lambda _app: "0.2.0")
+    _installed_settings(monkeypatch, launcher, "end2end", "iou")
+    record = launcher.launch(_request(values={"end2end": None, "iou": 0.7}))
+    monkeypatch.setattr(launcher_mod, "_app_version", lambda _app: "0.3.0")
+    _installed_settings(monkeypatch, launcher, "nms", "iou")
+    assert launcher.compat(record.id) == JobCompat(
+        app_version="0.2.0",
+        installed_version="0.3.0",
+        unknown_settings=["end2end"],
+    )
+    assert launcher.compat("missing") is None
+
+
+def test_a_schema_without_properties_knows_no_settings():
+    stale = launcher_mod._stale_settings({"b": 1, "a": 2}, {"type": "object"})
+    assert stale == ["a", "b"]
 
 
 # --- when a job finished, and a history that is current ---

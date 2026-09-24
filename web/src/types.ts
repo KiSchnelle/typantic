@@ -90,6 +90,12 @@ export interface JobRecord {
   exit_code: number | null;
 }
 
+export interface JobCompat {
+  app_version: string | null;
+  installed_version: string | null;
+  unknown_settings: string[];
+}
+
 export interface JobPage {
   jobs: JobRecord[];
   total: number;

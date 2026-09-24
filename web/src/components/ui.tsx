@@ -33,12 +33,15 @@ export function Button({
   onClick,
   variant = "default",
   disabled,
+  title,
   type = "button",
 }: {
   children: ReactNode;
   onClick?: () => void;
   variant?: "default" | "primary" | "danger";
   disabled?: boolean;
+  // A tooltip, e.g. why the button is disabled.
+  title?: string;
   type?: "button" | "submit";
 }): ReactNode {
   const styles = {
@@ -51,6 +54,7 @@ export function Button({
       type={type}
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={cn(
         "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
         "disabled:cursor-not-allowed disabled:opacity-50",

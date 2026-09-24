@@ -191,6 +191,24 @@ class JobRecord(BaseModel):
         return self.status in TERMINAL_STATUSES
 
 
+class JobCompat(BaseModel):
+    """Whether a job's settings still fit the installed version of its command."""
+
+    app_version: str | None = Field(
+        description="The app version the job ran with (None if unknown).",
+    )
+    installed_version: str | None = Field(
+        description="The app version installed now (None if unknown).",
+    )
+    unknown_settings: list[str] = Field(
+        description=(
+            "The job's settings the installed command does not have (renamed or "
+            "removed since, or added by a newer version); any lock Clone and "
+            "Restart."
+        ),
+    )
+
+
 class JobPage(BaseModel):
     """A page of jobs plus the total number matching the query."""
 

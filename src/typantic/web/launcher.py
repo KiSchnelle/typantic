@@ -34,13 +34,14 @@ from typantic.web.models import (
     BackendMeta,
     CommandMeta,
     History,
+    JobCompat,
     JobRecord,
     JobStatus,
     LaunchPreview,
     LaunchRequest,
     ProjectGroup,
 )
-from typantic.web.schema import SchemaCache, normalize_for_form
+from typantic.web.schema import SchemaCache, SchemaError, normalize_for_form
 from typantic.web.store import FolderNotRemovedError, JobStore
 
 logger = logging.getLogger("typantic.web")
@@ -153,8 +154,26 @@ def _app_version(app: str) -> str | None:
     return None
 
 
+def _stale_settings(values: dict[str, Any], schema: dict[str, object]) -> list[str]:
+    """The settings in ``values`` that the command's current schema does not have.
+
+    A setting a newer version of the app renamed or removed, or one an older
+    version never had: either way the installed CLI refuses it as unknown.
+    Top-level settings only.
+    """
+    properties = schema.get("properties")
+    known: set[str] = set()
+    if isinstance(properties, dict):
+        known = set(cast("dict[str, object]", properties))
+    return sorted(key for key in values if key not in known)
+
+
 class UnknownCommandError(ValueError):
     """Raised when a launch names a command that is not installed/discovered."""
+
+
+class StaleSettingsError(ValueError):
+    """Raised when settings name one the installed command does not have."""
 
 
 class UnknownBackendError(ValueError):
@@ -235,6 +254,58 @@ class Launcher:
         """Return the JSON Schema for a command's form."""
         return self.schema_cache.get(self.command(key))
 
+    def _refuse_stale_settings(self, meta: CommandMeta, values: dict[str, Any]) -> None:
+        """Refuse settings the installed command does not have, before anything runs.
+
+        The CLI refuses them too, but only once the job has started -- and a job
+        cloned or restarted from another version's settings cannot be fixed in
+        the form, which draws only the current settings. When the schema cannot
+        be fetched the check is skipped and the CLI's own validation stands.
+
+        Raises:
+            StaleSettingsError: If ``values`` holds a setting the command's
+                current schema does not have.
+        """
+        try:
+            schema = self.schema_cache.get(meta)
+        except SchemaError:
+            logger.warning(
+                "Could not fetch the schema of %s; launching without checking "
+                "its settings.",
+                meta.key,
+                exc_info=True,
+            )
+            return
+        unknown = _stale_settings(values, schema)
+        if unknown:
+            noun = "setting" if len(unknown) == 1 else "settings"
+            msg = (
+                f"The installed {meta.app} has no {meta.command} {noun} "
+                f"{', '.join(unknown)}: these settings come from another version "
+                f"of it. Start a new job from a freshly loaded form."
+            )
+            raise StaleSettingsError(msg)
+
+    def compat(self, job_id: str) -> JobCompat | None:
+        """Whether a job's settings still fit the installed version of its command.
+
+        ``None`` if the job does not exist.
+
+        Raises:
+            UnknownCommandError: If the job's command is no longer installed.
+            SchemaError: If the command's schema cannot be fetched.
+        """
+        record = self.store.load(job_id)
+        if record is None:
+            return None
+        meta = self.command(record.command_key)
+        values = self._request_from_record(record).values
+        return JobCompat(
+            app_version=record.app_version,
+            installed_version=_app_version(meta.app),
+            unknown_settings=_stale_settings(values, self.schema_cache.get(meta)),
+        )
+
     def preview(self, request: LaunchRequest) -> LaunchPreview:
         """Dry-run a launch: the config and the command/script that would run."""
         meta = self.command(request.command_key)
@@ -263,10 +334,13 @@ class Launcher:
             UnknownCommandError: If the command is not installed.
             UnknownBackendError: If the backend is not installed.
             UnknownProjectError: If ``project_id`` names no existing project.
+            StaleSettingsError: If the values hold a setting the installed
+                command does not have.
         """
         meta = self.command(request.command_key)
         backend = self._backend(request.backend)
         self._check_project(request.project_id)
+        self._refuse_stale_settings(meta, request.values)
 
         created_at = datetime.now(UTC)
         job_id = f"{created_at:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
@@ -620,6 +694,8 @@ class Launcher:
 
         Raises:
             JobNotTerminalError: If the job is still active.
+            StaleSettingsError: If the settings it would run with hold one the
+                installed command does not have.
         """
         with self._job_lock(job_id):
             record = self.get(job_id)
@@ -644,6 +720,7 @@ class Launcher:
             # rejected restart must leave the job exactly as it was.
             backend = self._backend(new_request.backend)
             self._check_project(new_request.project_id)
+            self._refuse_stale_settings(meta, new_request.values)
             # One set of paths, the store's: a record from a pre-0.8.0 relative
             # jobs root holds relative ones.
             job_dir = self.store.job_dir(job_id)
