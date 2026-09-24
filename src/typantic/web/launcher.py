@@ -278,11 +278,16 @@ class Launcher:
             return
         unknown = _stale_settings(values, schema)
         if unknown:
-            noun = "setting" if len(unknown) == 1 else "settings"
+            names = ", ".join(unknown)
+            what = (
+                f"setting {names}; it comes"
+                if len(unknown) == 1
+                else f"settings {names}; they come"
+            )
             msg = (
-                f"The installed {meta.app} has no {meta.command} {noun} "
-                f"{', '.join(unknown)}: these settings come from another version "
-                f"of it. Start a new job from a freshly loaded form."
+                f"The installed {meta.app} has no {meta.command} {what} from "
+                f"another version of {meta.app}. Start a new job from a freshly "
+                f"loaded form."
             )
             raise StaleSettingsError(msg)
 

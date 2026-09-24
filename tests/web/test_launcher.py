@@ -959,8 +959,12 @@ def test_launch_refuses_a_setting_the_installed_app_lacks(wired, monkeypatch):
     # A form left open across an upgrade still sends the old settings.
     launcher, backend, store = wired
     _installed_settings(monkeypatch, launcher, "iou", "nms")
-    with pytest.raises(StaleSettingsError, match="has no run setting end2end"):
+    with pytest.raises(StaleSettingsError) as exc:
         launcher.launch(_request(values={"iou": 0.5, "end2end": None}))
+    assert str(exc.value) == (
+        "The installed app has no run setting end2end; it comes from another "
+        "version of app. Start a new job from a freshly loaded form."
+    )
     assert backend.launched == []
     assert [path for path in store.root.iterdir() if path.is_dir()] == []
 
@@ -996,7 +1000,7 @@ def test_restarting_with_edited_stale_settings_is_refused(wired, monkeypatch):
     _installed_settings(monkeypatch, launcher, "nms")
     record = _done(launcher, backend, launcher.launch(_request()))
     edited = _request(values={"foo": 1, "end2end": None})
-    with pytest.raises(StaleSettingsError, match="settings end2end, foo"):
+    with pytest.raises(StaleSettingsError, match="settings end2end, foo; they come"):
         launcher.restart(record.id, edited)
 
 
