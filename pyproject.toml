@@ -93,7 +93,7 @@ dev = [
     "uvicorn>=0.53.0",
     "websockets>=17.1",
     "pillow>=12.3.0",
-    "httpx2>=2.13.0",
+    "httpx2>=2.13.1",
 ]
 
 [project.urls]
