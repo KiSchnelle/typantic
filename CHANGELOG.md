@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a data URI, like `/api/meta`'s) into the page it serves, so every browser
   shows them from the start. The page no longer puts typantic's title back in
   the tab while `/api/meta` has not answered.
+- **The dashboard kept drawing an app's old form after the app was upgraded.**
+  The server fetches a command's schema the first time its form is opened and
+  kept it until it restarted, so upgrading an app under a running server left
+  its forms showing the old settings and defaults — and a launch then sent the
+  CLI a setting the new version rejects as unknown. The server now notes the
+  app's executable (path, modification time, size) with the schema and fetches
+  it afresh when that changes, as installing or upgrading the app rewrites it.
+  Source edits to an editable install leave the executable alone; `POST
+  /api/commands/refresh` or a restart still picks those up.
 
 ## [0.8.0] - 2026-09-23
 

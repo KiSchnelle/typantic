@@ -11,6 +11,7 @@ import json
 import shutil
 import subprocess
 import threading
+from pathlib import Path
 from typing import cast
 
 from typantic.web._subprocess import run_tool
@@ -33,41 +34,67 @@ class SchemaError(RuntimeError):
     """Raised when a command's ``--schema`` invocation fails or is unparseable."""
 
 
+# Path, modification time (ns) and size of an app's executable.
+type _Fingerprint = tuple[str, int, int]
+
+
+def _app_fingerprint(meta: CommandMeta) -> _Fingerprint | None:
+    """Identify the installed app behind a command by its executable's stat.
+
+    Installing or upgrading an app rewrites its console script, so a different
+    fingerprint means the app the schema came from has been replaced. ``None``
+    when the executable is missing or cannot be read.
+    """
+    executable = shutil.which(meta.app)
+    if executable is None:
+        return None
+    try:
+        stat = Path(executable).stat()
+    except OSError:
+        return None
+    return (executable, stat.st_mtime_ns, stat.st_size)
+
+
 class SchemaCache:
     """Lazily fetches and caches each command's JSON Schema by command key.
 
-    Schemas are stable for an installed version, so a process-lifetime cache is
-    enough; the launcher and API share one instance. Requests run on a thread
-    pool, so two guards apply: concurrent first requests for one command share
-    a single fetch (each spawns the app, which may import a heavy stack), and a
-    fetch that was already running when :meth:`clear` refreshed the cache does
-    not store its now-stale result.
+    A schema is stable for an installed app, so it is kept for as long as the
+    app's executable is unchanged; installing or upgrading the app rewrites that
+    script, and the next request fetches the schema afresh. Source edits to an
+    editable install leave the script alone -- :meth:`clear` (``POST
+    /api/commands/refresh``) or a restart picks those up. The launcher and API
+    share one instance. Requests run on a thread pool, so two guards apply:
+    concurrent first requests for one command share a single fetch (each spawns
+    the app, which may import a heavy stack), and a fetch that was already
+    running when :meth:`clear` refreshed the cache does not store its now-stale
+    result.
     """
 
     def __init__(self) -> None:
         """Create an empty schema cache."""
-        self._cache: dict[str, dict[str, object]] = {}
+        self._cache: dict[str, tuple[_Fingerprint | None, dict[str, object]]] = {}
         self._lock = threading.Lock()  # guards the three fields below
         self._fetching: dict[str, threading.Lock] = {}
         self._generation = 0
 
     def get(self, meta: CommandMeta) -> dict[str, object]:
-        """Return the command's JSON Schema, fetching and caching on first use."""
+        """Return the command's JSON Schema, fetching it for a new or changed app."""
+        fingerprint = _app_fingerprint(meta)
         with self._lock:
             cached = self._cache.get(meta.key)
-            if cached is not None:
-                return cached
+            if cached is not None and cached[0] == fingerprint:
+                return cached[1]
             fetching = self._fetching.setdefault(meta.key, threading.Lock())
         with fetching:
             with self._lock:
                 cached = self._cache.get(meta.key)
-                if cached is not None:
-                    return cached  # fetched while this request waited its turn
+                if cached is not None and cached[0] == fingerprint:
+                    return cached[1]  # fetched while this request waited its turn
                 generation = self._generation
             schema = fetch_schema(meta)
             with self._lock:
                 if generation == self._generation:
-                    self._cache[meta.key] = schema
+                    self._cache[meta.key] = (fingerprint, schema)
             return schema
 
     def clear(self) -> None:

@@ -17,6 +17,7 @@ from typantic.web import _paths
 from typantic.web import api as api_mod
 from typantic.web import filesystem as fs_mod
 from typantic.web import launcher as launcher_mod
+from typantic.web import schema as schema_mod
 from typantic.web.api import _tail_log, make_api
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.backends.slurm import SlurmBackend
@@ -133,8 +134,8 @@ def test_refresh_commands_requires_token(env):
     assert env.client.post("/api/commands/refresh").status_code == 401
 
 
-def test_command_schema_cached(env):
-    env.launcher.schema_cache._cache["app/run"] = {"title": "Run"}
+def test_command_schema_served(env, monkeypatch):
+    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: {"title": "Run"})
     resp = env.client.get("/api/commands/app/run/schema", headers=AUTH)
     assert resp.json() == {"title": "Run"}
 

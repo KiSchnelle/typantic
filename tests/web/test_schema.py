@@ -177,6 +177,46 @@ def test_schema_cache_caches_then_clears(monkeypatch):
     assert calls == [meta.key, meta.key]  # refetched after clear
 
 
+def test_a_reinstalled_app_is_fetched_afresh(tmp_path, monkeypatch):
+    # A server running across an upgrade must not keep drawing the old form.
+    executable = tmp_path / "app"
+    executable.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(schema_mod.shutil, "which", lambda _: str(executable))
+    served = iter([{"version": "OLD"}, {"version": "NEW"}])
+    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: next(served))
+    cache = SchemaCache()
+    meta = _meta(("x",))
+    assert cache.get(meta) == {"version": "OLD"}
+    assert cache.get(meta) == {"version": "OLD"}  # unchanged app: still cached
+    executable.write_text("#!/bin/sh\n# reinstalled\n")  # install rewrites it
+    assert cache.get(meta) == {"version": "NEW"}
+
+
+@pytest.mark.parametrize("which", [None, "missing-executable"])
+def test_an_app_that_is_gone_is_not_served_from_the_cache(
+    tmp_path,
+    monkeypatch,
+    which,
+):
+    executable = tmp_path / "app"
+    executable.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(schema_mod.shutil, "which", lambda _: str(executable))
+    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: {"ok": True})
+    cache = SchemaCache()
+    meta = _meta(("x",))
+    cache.get(meta)
+    # Uninstalled: no executable on PATH, or a path that no longer exists.
+    gone = None if which is None else str(tmp_path / which)
+    monkeypatch.setattr(schema_mod.shutil, "which", lambda _: gone)
+
+    def fetch_fails(_meta):
+        raise SchemaError("not found on PATH")
+
+    monkeypatch.setattr(schema_mod, "fetch_schema", fetch_fails)
+    with pytest.raises(SchemaError, match="not found"):
+        cache.get(meta)
+
+
 # --- normalize_for_form ---
 
 

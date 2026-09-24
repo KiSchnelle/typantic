@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from typantic.web import launcher as launcher_mod
+from typantic.web import schema as schema_mod
 from typantic.web.backends.base import Launched, LaunchUncertainError, PollResult
 from typantic.web.backends.scheduler import SchedulerError
 from typantic.web.launcher import (
@@ -106,9 +107,9 @@ def test_unknown_backend(wired):
         launcher.launch(_request(backend="ghost"))
 
 
-def test_schema_for(wired):
+def test_schema_for(wired, monkeypatch):
     launcher, _, _ = wired
-    launcher.schema_cache._cache[META.key] = {"title": "Run"}
+    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: {"title": "Run"})
     assert launcher.schema_for("app/run") == {"title": "Run"}
 
 
