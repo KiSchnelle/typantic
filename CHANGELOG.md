@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A long line in a job's log pushed the job's buttons off-screen.** The
+  page's main column grew to fit its widest content, and a job log does not
+  wrap, so one long line (a download progress bar can be ~900 characters)
+  widened the whole page. Clone, Restart, Cancel and Delete, and the log's own
+  wrap, copy and download buttons, ended up far to the right, out of sight. The
+  column now keeps to the window, and the log, the Config panel and the jobs
+  table scroll sideways in their own boxes.
+
 ## [0.8.1] - 2026-09-24
 
 ### Added

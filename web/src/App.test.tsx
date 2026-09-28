@@ -99,3 +99,13 @@ test("until the server answers, the tab keeps the page's title", async () => {
   await settle();
   expect(document.title).toBe("catchEM");
 });
+
+test("the main column may shrink, so a long log line scrolls in the log, not the page", async () => {
+  // jsdom lays nothing out, so this pins the class that does. Without it the
+  // column, a flex item, grew to its widest content: a 900-character progress
+  // bar in a job's log pushed the job's Clone and Restart ~5000px off-screen.
+  vi.mocked(api.fetchMeta).mockResolvedValue(UNBRANDED);
+  render(<App />);
+  await settle();
+  expect(screen.getByRole("main").parentElement?.classList.contains("min-w-0")).toBe(true);
+});

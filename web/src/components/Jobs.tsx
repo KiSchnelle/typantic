@@ -145,7 +145,7 @@ export default function Jobs(): ReactNode {
         </p>
       ) : (
         <>
-          <div className="overflow-hidden rounded-lg border border-slate-800">
+          <div className="overflow-x-auto rounded-lg border border-slate-800">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-900/60 text-xs uppercase text-slate-500">
                 <tr>

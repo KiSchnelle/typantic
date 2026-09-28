@@ -145,7 +145,7 @@ export default function App(): ReactNode {
         </nav>
       </aside>
 
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         <header className="flex items-center justify-between border-b border-slate-800 px-6 py-3">
           <h1 className="text-sm font-semibold text-slate-300">{HEADER[view]}</h1>
           <div className="flex items-center gap-2 text-xs text-slate-500">
