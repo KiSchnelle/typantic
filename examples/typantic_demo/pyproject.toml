@@ -3,7 +3,7 @@ name = "typantic-demo"
 version = "0.0.0"
 description = "A tiny demo typantic[web] app (docs / screenshots / a runnable example)."
 requires-python = ">=3.12"
-dependencies = ["typantic", "pillow>=11", "typer>=0.26", "pydantic>=2.10"]
+dependencies = ["typantic", "pillow>=12.3.0", "typer>=0.27.2", "pydantic>=2.13.5"]
 
 [project.scripts]
 typantic-demo = "typantic_demo:main"
@@ -13,7 +13,7 @@ typantic-demo = "typantic_demo:main"
 typantic-demo = "typantic_demo:WEB_COMMANDS"
 
 [build-system]
-requires = ["uv_build>=0.11.1,<0.12.0"]
+requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]

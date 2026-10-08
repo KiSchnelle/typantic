@@ -41,13 +41,13 @@ def extract_base_type(annotation: object) -> object:
     Recursively walks through ``Annotated``, ``Union``, ``list``, ``set`` and
     ``tuple`` wrappers, discarding everything except the base types that
     Typer can interpret. ``Literal`` annotations are passed through
-    untouched -- Typer renders them as CLI choices.
+    untouched; Typer renders them as CLI choices.
 
     Typer renders only ``list`` among the collections, so a ``set`` /
     ``frozenset`` / ``Sequence`` / ``deque`` / variadic ``tuple[X, ...]`` is mapped
     to ``list[X]``: the CLI gathers repeated values into a list and Pydantic
     coerces it back to the declared type, which it does natively. A *fixed* tuple
-    (``tuple[int, int]``) keeps its shape -- Typer renders it as a multi-value
+    (``tuple[int, int]``) keeps its shape, which Typer renders as a multi-value
     option. A ``NewType`` or a PEP 695 ``type`` alias is replaced by what it wraps.
 
     Args:
@@ -58,7 +58,7 @@ def extract_base_type(annotation: object) -> object:
 
     Examples:
         >>> from typing import Annotated
-        >>> from pydantic import AfterValidator, Field
+        >>> from pydantic import Field
         >>> extract_base_type(Annotated[float, Field(description="x")])
         <class 'float'>
     """
@@ -114,7 +114,7 @@ def model_hints(model_cls: type[BaseModel]) -> dict[str, object]:
     raises ``NameError`` for a class Pydantic itself handles fine. Reading the
     already-resolved annotation off each field sidesteps that entirely.
 
-    The ``Annotated`` metadata is not carried here -- Pydantic moves it onto
+    The ``Annotated`` metadata is not carried here. Pydantic moves it onto
     ``FieldInfo.metadata``, which is where the constraint helpers read it from,
     and :func:`extract_base_type` discards it anyway.
     """
@@ -171,8 +171,8 @@ def accepted_keys(model_cls: type[BaseModel], name: str, field: FieldInfo) -> li
     """The top-level mapping keys under which ``model_cls`` accepts field ``name``.
 
     Pydantic's precedence order: aliases first, then the field's own name where
-    the model accepts it. An ``AliasPath`` contributes its first key -- the value
-    under it is the path's nested structure, not a flat value.
+    the model accepts it. An ``AliasPath`` contributes its first key, since the
+    value under it is the path's nested structure, not a flat value.
     """
     keys = [path[0] for path in _key_paths(model_cls, name, field)]
     return list(dict.fromkeys(key for key in keys if isinstance(key, str)))
@@ -195,7 +195,7 @@ def canonical_key_path(
     """The one key path typantic writes field ``name`` under.
 
     A generated template writes the field there, a passed flag is re-nested
-    there, and a config file's other spellings are moved onto it -- so a flag
+    there, and a config file's other spellings are moved onto it. A flag thus
     always overrides the file, whichever spelling the file used. The field's
     name wins when the model accepts it (it matches the flag the user types);
     otherwise the first alias Pydantic would accept. An ``AliasPath`` is a nested
@@ -226,7 +226,7 @@ def field_input_key(model_cls: type[BaseModel], name: str, field: FieldInfo) -> 
     ``populate_by_name``. Passing the field name to an aliased model would land in
     ``extra`` and be dropped in silence, so the value must be re-keyed onto an
     accepted key before the model is built (see :func:`canonical_key_path`). The
-    flag the user types is unaffected -- it always follows the field name.
+    flag the user types is unaffected and always follows the field name.
 
     Args:
         model_cls: The model the value will be passed to.
@@ -253,7 +253,7 @@ def field_input_key(model_cls: type[BaseModel], name: str, field: FieldInfo) -> 
 
 
 def nested_model(annotation: object) -> type[BaseModel] | None:
-    """The model a field holds -- directly, or as the one member of ``X | None``."""
+    """The model a field holds, directly or as the one member of ``X | None``."""
     base = extract_base_type(annotation)
     if is_model_type(base):
         return base

@@ -3,7 +3,7 @@
 A backend turns a built argv into a tracked job. The launcher is
 backend-agnostic: it always writes the job's log itself (subprocess capture, or
 a scheduler ``--output``) so tailing works the same everywhere, and it never
-branches on backend identity — each backend reports its own initial
+branches on backend identity. Each backend reports its own initial
 :class:`~typantic.web.models.JobStatus` via :attr:`Launched.status`.
 """
 

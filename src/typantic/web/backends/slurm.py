@@ -18,7 +18,7 @@ from typantic.web.backends.scheduler import (
 )
 from typantic.web.models import TERMINAL_STATUSES, JobStatus
 
-# sacct State -> our normalised status. Unrecognised states fall through to
+# sacct State -> normalised status. Unrecognised states fall through to
 # QUEUED rather than being guessed terminal.
 _RUNNING_STATES = frozenset({"RUNNING", "COMPLETING", "SIGNALING", "STAGE_OUT"})
 _DONE_STATES = frozenset({"COMPLETED"})

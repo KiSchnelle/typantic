@@ -2,9 +2,9 @@
 
 A job's submitted config can carry a secret the form took as plain text, and its
 log whatever the command printed. On a shared login node the usual 022 umask
-made both readable by every user. The store's folders are therefore created
-0700 and the files typantic writes into them 0600 -- including a file an older
-version left readable, which is reset whenever it is rewritten.
+would make both readable by every user. The store's folders are therefore
+created 0700 and the files typantic writes into them 0600. An existing file's
+mode is reset whenever it is rewritten.
 """
 
 import os

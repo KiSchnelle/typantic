@@ -1,7 +1,7 @@
 """Apptainer backend: run a job inside an Apptainer/Singularity container.
 
 Apptainer has no daemon and runs the container in the foreground as the invoking
-user, with the host filesystem bind-mounted by default — so it behaves like the
+user, with the host filesystem bind-mounted by default, so it behaves like the
 local backend with the command wrapped in ``apptainer exec <image>``. The job
 dir (and thus the ``--config`` path) is visible in the container without extra
 mounts.

@@ -1,9 +1,9 @@
 """Generate ``web/src/types.ts`` from the Pydantic models in ``models.py``.
 
 The dashboard's TypeScript types are a projection of the web API's Pydantic
-models. Rather than mirror them by hand (which silently drifts — a field added
-to a model but not to ``types.ts`` goes unnoticed until something breaks), this
-emits the whole file from ``typantic.web.models``.
+models. Rather than mirror them by hand, where a field added to a model but not
+to ``types.ts`` would go unnoticed, this emits the whole file from
+``typantic.web.models``.
 
 Usage::
 
@@ -12,7 +12,7 @@ Usage::
 
 The ``--check`` form is the CI drift guard. A couple of frontend-only shapes
 (``JsonSchema``, ``JobQuery``) have no Pydantic source and are emitted verbatim
-from ``STATIC`` below.
+from ``_STATIC`` below.
 """
 
 import sys

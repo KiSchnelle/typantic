@@ -1,10 +1,10 @@
 """Discover launchable commands from installed apps, without importing them.
 
-The gateway enumerates the ``typantic.web_commands`` entry-point group and loads
-each app's list of command mappings. Those modules are dependency-free by
-contract, so discovery never imports an app's runtime code — heavy dependencies
-never enter the web process. A newly installed app shows up automatically, with
-no central file edited.
+The launcher enumerates the ``typantic.web_commands`` entry-point group and
+loads each app's list of command mappings. Those modules are dependency-free by
+contract, so discovery never imports an app's runtime code and heavy
+dependencies never enter the web process. A newly installed app shows up
+automatically, with no central file edited.
 
 An app registers its commands in ``pyproject.toml``::
 
@@ -53,7 +53,7 @@ def _deduplicate(commands: list[CommandMeta]) -> list[CommandMeta]:
 
     The key is what everything downstream looks a command up by, so a duplicate
     would show twice in the catalog while every lookup resolved to just one of
-    them -- clicking either would launch the same command.
+    them, so clicking either would launch the same command.
     """
     seen: dict[str, CommandMeta] = {}
     for meta in commands:

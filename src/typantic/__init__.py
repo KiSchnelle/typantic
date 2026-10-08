@@ -1,4 +1,4 @@
-"""typantic — Auto-generate Typer CLI interfaces from Pydantic models."""
+"""Type-safe Typer CLIs, plus an optional web launcher, from Pydantic v2 models."""
 
 import importlib.metadata
 

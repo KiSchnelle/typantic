@@ -270,7 +270,7 @@ class SchedulerBackend(abc.ABC):
         which holds whatever the scheduler still remembers. A query that could
         not run (missing tool, timeout, controller down) says nothing about the
         job, so the last known status is kept rather than reading the empty
-        output as "not in the queue" -- which would report a dead cluster as
+        output as "not in the queue", which would report a dead cluster as
         QUEUED forever. A job the scheduler no longer knows, with no marker,
         ended before its command did (killed, timed out, lost with its node):
         FAILED, once the marker has had time to show up.

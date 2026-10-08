@@ -1,9 +1,10 @@
 """Process backends: run a job as a detached local subprocess.
 
 The job is spawned in a new session (``start_new_session=True``) so it outlives
-the web process — a restart never kills a running job, and a still-running job
-is re-attached by polling its pid. A detached child is reparented away from us,
-so we cannot ``waitpid`` for its exit code; instead the launch wraps the command
+the web process. A restart never kills a running job, and a still-running job
+is re-attached by polling its pid. A detached child is reparented away from the
+server, which then cannot ``waitpid`` for its exit code; instead the launch wraps
+the command
 so it records its exit code into a ``.typantic-exit`` marker in the job dir when
 it finishes. That on-disk marker is the durable truth ``poll`` reads back.
 
@@ -36,8 +37,8 @@ def _pid_start_time(pid: int) -> int | None:
 
     A ``(pid, start-time)`` pair identifies a specific process *instance*, so it
     survives the pid being recycled onto a different process after a restart.
-    ``/proc`` is Linux-only; where it is absent the read fails and we return
-    ``None``, and the caller falls back to a bare liveness probe.
+    ``/proc`` is Linux-only; where it is absent the read fails, ``None`` is
+    returned, and the caller falls back to a bare liveness probe.
     """
     try:
         stat = (_PROC / str(pid) / "stat").read_text()
@@ -55,44 +56,44 @@ def _reap(pid: int, *, attempts: int = 20, delay: float = 0.005) -> None:
     """Harvest a finished child so it doesn't linger as a zombie.
 
     ``poll`` calls this the moment it first reads the exit-code marker, which the
-    wrapper writes *just before* it exits -- so the ``sh`` may not be reapable
+    wrapper writes *just before* it exits, so the ``sh`` may not be reapable
     yet. A single ``WNOHANG`` then harvests nothing and, because the record is
     now terminal and never polled again, the child would linger defunct for the
     server's lifetime. Retry briefly until ``waitpid`` collects it (or it turns
-    out not to be our child, e.g. reparented across a restart).
+    out not to be the server's child, e.g. reparented across a restart).
     """
     with contextlib.suppress(OSError):
         for _ in range(attempts):
             try:
                 reaped, _status = os.waitpid(pid, os.WNOHANG)
             except ChildProcessError:
-                return  # not our child -- nothing to harvest
+                return  # not the server's child, nothing to harvest
             if reaped == pid:
                 return  # harvested
             time.sleep(delay)
 
 
 def _process_running(pid: int, pid_start: int | None = None) -> bool:
-    """Whether ``pid`` is still executing our job (not reaped, not recycled).
+    """Whether ``pid`` is still executing the tracked job (not reaped, not recycled).
 
-    A detached job spawned by this (long-lived) process stays its child, so on
-    exit it becomes a zombie that ``os.kill(pid, 0)`` still reports as alive. We
-    first reap it non-blocking with ``waitpid``; if that harvests it, it has
-    exited. After a restart the job is no longer our child (reparented to init),
-    ``waitpid`` raises ``ChildProcessError``, and we fall back to a signal-0
-    liveness probe.
+    A detached job spawned by the long-lived server stays its child, so on exit
+    it becomes a zombie that ``os.kill(pid, 0)`` still reports as alive. It is
+    first reaped non-blocking with ``waitpid``; if that harvests it, it has
+    exited. After a restart the job is not the server's child (reparented to
+    init), ``waitpid`` raises ``ChildProcessError``, and a signal-0 liveness
+    probe is used instead.
 
     ``pid_start`` is the start-time recorded at launch. After a restart a bare
-    signal-0 probe cannot tell our job from a *recycled* pid now naming an
-    unrelated process; when we can read the pid's current start-time and it
-    differs, the pid has been recycled and our job is gone. So has it when the
-    probe is refused: the tracked pid is always our own shell, so a pid we may
-    not signal belongs to another user by now.
+    signal-0 probe cannot tell the job from a *recycled* pid naming an unrelated
+    process; when the pid's current start-time is readable and differs, the pid
+    has been recycled and the job is gone. So is it when the probe is refused:
+    the tracked pid is always the server's own shell, so a pid the server may
+    not signal belongs to another user.
     """
     try:
         reaped_pid, _status = os.waitpid(pid, os.WNOHANG)
     except ChildProcessError:
-        reaped_pid = 0  # not our child (e.g. after a restart)
+        reaped_pid = 0  # not the server's child (e.g. after a restart)
     if reaped_pid == pid:
         return False  # just exited; zombie harvested
     if pid_start is not None:
@@ -182,7 +183,7 @@ class ProcessBackend:
         return ended
 
     def cancel(self, record: JobRecord) -> None:
-        """SIGTERM the job's process group, if that process is still our job."""
+        """SIGTERM the job's process group, if that process is still the job."""
         self._signal(record)
 
     def _signal(self, record: JobRecord) -> bool:
@@ -192,8 +193,8 @@ class ProcessBackend:
         (the job exited and the pid was reused, say across a server restart), and
         signalling its group would kill that. So the pid is signalled only while
         it still runs with the start time recorded at launch (where ``/proc``
-        tells), and still leads its own process group -- as the job's shell does,
-        having been started in a new session.
+        tells), and still leads its own process group, as the job's shell does
+        after being started in a new session.
 
         Raises:
             ForeignHostError: If the job runs on another host: its pid names

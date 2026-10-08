@@ -109,12 +109,7 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 fail_under = 100
-# Deliberately minimal. Every pattern here is a hole in the 100% gate, so only
-# ones that earn their keep are listed: the bare `...` bodies of the Protocol in
-# web/backends/base.py, plus coverage.py's own escape hatch (which the project
-# does not currently use anywhere). `if TYPE_CHECKING:` and `raise
-# NotImplementedError` matched nothing, and `@abstractmethod` was redundant --
-# its docstring-only bodies are counted and covered without it.
+# Kept minimal: the Protocol's bare `...` bodies and coverage.py's escape hatch.
 exclude_lines = [
     "pragma: no cover",
     "^\\s*\\.\\.\\.$",
@@ -139,14 +134,8 @@ line-length = 88
 [tool.ruff.lint]
 extend-select = ["ALL"]
 ignore = [
-    # CPY001: stabilized in ruff 0.16 -- the repo deliberately carries no
-    # per-file copyright headers (the MIT license at the root covers it).
+    # No per-file copyright headers; the MIT license at the root covers it.
     "CPY001",
-    "TD003",
-    "FIX002",
-    "TD002",
-    "TD004",
-    "ERA001",
     "COM812",
     "TC002",
     "TC003",
@@ -199,8 +188,8 @@ disallow_untyped_defs = true
 disallow_untyped_calls = true
 disallow_incomplete_defs = true
 strict = true
-exclude = '(?:^|/)(tests|manual_tests|dist)(?:/|$)'
+exclude = '(?:^|/)(tests|dist)(?:/|$)'
 
 [tool.pyright]
-ignore = ["tests/**", "manual_tests/**", "dist/**"]
+ignore = ["tests/**", "dist/**"]
 typeCheckingMode = "strict"

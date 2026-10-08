@@ -1,7 +1,7 @@
 """Fetch each command's JSON Schema by subprocessing the CLI (not importing it).
 
 A command's form is derived from its settings model's JSON Schema. Rather than
-import the model — which may pull in heavy runtime dependencies — the gateway
+import the model, which may pull in heavy runtime dependencies, the launcher
 runs ``<app> <argv> --schema`` (added generically by typantic's config-file
 support) and reads the JSON from stdout. The heavy import happens in the CLI's
 own process; the web process only ever sees JSON.
@@ -61,7 +61,7 @@ class SchemaCache:
     A schema is stable for an installed app, so it is kept for as long as the
     app's executable is unchanged; installing or upgrading the app rewrites that
     script, and the next request fetches the schema afresh. Source edits to an
-    editable install leave the script alone -- :meth:`clear` (``POST
+    editable install leave the script alone; :meth:`clear` (``POST
     /api/commands/refresh``) or a restart picks those up. The launcher and API
     share one instance. Requests run on a thread pool, so two guards apply:
     concurrent first requests for one command share a single fetch (each spawns
@@ -161,14 +161,14 @@ def normalize_for_form(schema: object) -> object:
 
     - ``X | None`` becomes ``anyOf: [X, {"type": "null"}]``, which RJSF renders
       as an ``Option 1 / Option 2`` selector. How that is rewritten depends on
-      ``X`` -- see :func:`_collapse_nullable_union`. The rule throughout: an
+      ``X`` (see :func:`_collapse_nullable_union`). The rule throughout: an
       untouched field must submit what the model's own default would give.
     - A fixed tuple (e.g. ``tuple[int, int]``) becomes ``prefixItems: [...]``,
       which the renderer cannot handle ("Missing items definition"). It moves to
       the Draft-07 array form ``items: [...]`` so each element gets its own input.
 
-    Only positions that hold schemas are rewritten -- ``properties`` values,
-    ``items``, the branches of a union, ``$defs`` entries -- never a property
+    Only positions that hold schemas are rewritten (``properties`` values,
+    ``items``, the branches of a union, ``$defs`` entries), never a property
     *name* or a data keyword such as ``default`` or ``enum``, so a field called
     ``prefixItems`` keeps its name. The root ``$defs`` resolve a ``$ref`` branch,
     which is what tells an optional model from an optional enum.
@@ -258,18 +258,18 @@ def _collapse_nullable_union(
 
     - a plain scalar: inline it as ``type: [X, "null"]``. RJSF renders the
       single input, and AJV accepts both the kept ``None`` default and an empty
-      input -- a bare ``type`` with a null default would block submit.
+      input. A bare ``type`` with a null default would block submit.
     - a choice (a ``Literal``, or a ``$ref`` to an ``Enum``): inline it as
       ``enum`` + ``type`` with no default. RJSF's select starts empty, the key
       is omitted on submit, and the model's ``None`` applies; a null default
-      outside the enum is what made AJV refuse the untouched form.
+      outside the enum would make AJV refuse the untouched form.
     - an array of one item schema: inline it without the null default; an
       untouched array is dropped on submit and ``None`` applies.
-    - anything else -- a model (``$ref`` or inline object), a fixed tuple, a
-      nested union: keep the union, with the null branch titled "None" and the
-      null default kept. RJSF otherwise fills in a model's nested defaults, a
-      tuple's slots or a union's first branch, and the untouched form submits a
-      value the user never chose instead of ``None``.
+    - anything else (a model given as ``$ref`` or inline object, a fixed
+      tuple, a nested union): keep the union, with the null branch titled
+      "None" and the null default kept. RJSF otherwise fills in a model's
+      nested defaults, a tuple's slots or a union's first branch, and the
+      untouched form submits a value the user never chose instead of ``None``.
     """
     for union_key in ("anyOf", "oneOf"):
         variants = node.get(union_key)

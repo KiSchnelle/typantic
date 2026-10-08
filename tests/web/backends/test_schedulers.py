@@ -151,7 +151,7 @@ def test_slurm_poll_without_id_is_failed(tmp_path):
     ("sacct", "status", "exit_code"),
     [
         # sacct prints "0:0" for a job that has not finished, so a non-terminal
-        # state must report no exit code at all -- PollResult documents exit_code
+        # state must report no exit code at all. PollResult documents exit_code
         # as set "once finished", and the dashboard renders a 0 as "exit 0".
         ("RUNNING|0:0", JobStatus.RUNNING, None),
         ("PENDING|0:0", JobStatus.QUEUED, None),
@@ -159,7 +159,7 @@ def test_slurm_poll_without_id_is_failed(tmp_path):
         ("FAILED|1:0", JobStatus.FAILED, 1),
         ("CANCELLED by 1001|0:0", JobStatus.CANCELLED, 0),
         # The signal half: killed by SIGTERM / SIGKILL reads as 128 + signal,
-        # the way a shell reports it; it used to read as exit 0.
+        # the way a shell reports it.
         ("CANCELLED by 1001|0:15", JobStatus.CANCELLED, 143),
         ("FAILED|0:9", JobStatus.FAILED, 137),
         ("WEIRD|x:0", JobStatus.QUEUED, None),

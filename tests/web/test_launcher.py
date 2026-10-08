@@ -172,8 +172,8 @@ def test_refresh_updates_status(wired):
 
 def test_refresh_external_cancel_stamps_the_finish_time(wired):
     # A job cancelled outside the dashboard (scancel, kill) reaches CANCELLED
-    # through refresh, and is just as finished as one that failed -- it must not
-    # be left showing no finish time at all.
+    # through refresh, and is just as finished as one that failed, so it must
+    # get a finish time.
     launcher, backend, _ = wired
     record = launcher.launch(_request())
     backend.poll_result = PollResult(status=JobStatus.CANCELLED)
@@ -466,8 +466,8 @@ def test_read_values_helper(tmp_path):
 
 
 def test_launch_with_an_unknown_project_starts_nothing(wired):
-    # project_id is a foreign key, so an unknown one used to fail at save() --
-    # after the process was already spawned, leaving it running and untracked.
+    # project_id is a foreign key, so an unknown one would fail at save(), after
+    # the process was already spawned, leaving it running and untracked.
     launcher, backend, store = wired
     with pytest.raises(UnknownProjectError):
         launcher.launch(_request(project_id="does-not-exist"))
@@ -665,8 +665,8 @@ def test_a_refresh_that_changes_nothing_new_stores_nothing(wired):
 
 
 def test_delete_does_not_cancel_a_job_that_has_finished(wired):
-    # The stored row still said RUNNING; cancelling it signalled a pid that may
-    # name an unrelated process by now.
+    # The stored row still says RUNNING; cancelling it would signal a pid that
+    # may name an unrelated process.
     launcher, backend, _ = wired
     record = launcher.launch(_request())
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)

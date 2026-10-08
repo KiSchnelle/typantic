@@ -89,18 +89,11 @@ def test_save_is_upsert(store):
     loaded = store.load("j1")
     assert loaded is not None
     assert loaded.status is JobStatus.DONE
-    assert len(store.list_records()) == 1
+    assert store.query_jobs()[1] == 1
 
 
 def test_load_missing_returns_none(store):
     assert store.load("nope") is None
-
-
-def test_list_records_newest_first(store):
-    store.save(_record("a", created_at=_dt(1)))
-    store.save(_record("c", created_at=_dt(3)))
-    store.save(_record("b", created_at=_dt(2)))
-    assert [r.id for r in store.list_records()] == ["c", "b", "a"]
 
 
 def _insert_bad_row(store, job_id):
@@ -127,10 +120,10 @@ def test_load_malformed_record_returns_none(store):
     assert store.load("bad") is None
 
 
-def test_list_records_skips_malformed(store):
+def test_query_jobs_skips_malformed(store):
     store.save(_record("good"))
     _insert_bad_row(store, "bad")
-    assert [r.id for r in store.list_records()] == ["good"]
+    assert [r.id for r in store.query_jobs()[0]] == ["good"]
 
 
 def test_delete_existing_job(store):
@@ -168,7 +161,7 @@ def test_delete_project_deletes_its_jobs(store):
     proj = store.create_project("P")
     store.create_job_dir("j1")
     store.save(_record("j1", project_id=proj.id))
-    store.save(_record("j2"))  # ungrouped — must survive
+    store.save(_record("j2"))  # ungrouped, must survive
     assert store.delete_project(proj.id) is True
     assert store.load("j1") is None
     assert not store.job_dir("j1").exists()
@@ -322,7 +315,7 @@ def _mode(path):
 
 def test_the_store_is_private(tmp_path):
     # A job's config can carry a secret the form took as plain text, and on a
-    # shared login node the usual 022 umask made it readable by everyone.
+    # shared login node the usual 022 umask would make it readable by everyone.
     store = JobStore(tmp_path / "jobs")
     assert _mode(store.root) == 0o700
     assert _mode(store.root / "index.sqlite3") == 0o600
@@ -368,8 +361,8 @@ def _locked_output(store, job_id):
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
 def test_a_delete_that_leaves_files_behind_says_so(store):
-    # A container that ran as root leaves root-owned output in the job folder;
-    # the delete reported success and left it all on disk, unseen.
+    # A container that ran as root leaves root-owned output in the job folder,
+    # which the delete must report rather than leave on disk unseen.
     store.save(_record("j1"))
     locked = _locked_output(store, "j1")
     try:

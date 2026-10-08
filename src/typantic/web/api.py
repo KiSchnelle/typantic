@@ -1,7 +1,7 @@
 """The read/launch HTTP API + a live log-tail WebSocket, over a :class:`Launcher`.
 
 Thin by design: routes call the launcher/store and serialise their pydantic
-models. The only "live" surface is the log tail — every job writes one log file
+models. The only "live" surface is the log tail. Every job writes one log file
 (subprocess capture or a scheduler ``--output``), so tailing is the same across
 backends. The built SPA (if present) is served from ``web_dist`` so one process
 serves both.
@@ -75,8 +75,7 @@ _WS_POLICY_VIOLATION = 1008
 _PAGE_TITLE = re.compile(r"<title>.*?</title>", re.DOTALL)
 _PAGE_ICONS = re.compile(r'\s*<link rel="icon"[^>]*>')
 
-# Domain error -> HTTP status. Kept in one place so every route that can raise
-# them answers the same way; they used to be hand-mapped per route, and had drifted.
+# Domain error -> HTTP status, so every route that can raise them answers alike.
 _ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
     (UnknownCommandError, 404),
     (UnknownBackendError, 400),
@@ -135,8 +134,8 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
     Args:
         launcher: The job launcher the routes delegate to.
         token: Shared secret required on ``/api`` and ``/ws`` (via ``Authorization:
-            Bearer`` or a ``?token=`` query param). ``None`` disables auth — only
-            appropriate for a localhost dev run — and then serves only requests
+            Bearer`` or a ``?token=`` query param). ``None`` disables auth (only
+            appropriate for a localhost dev run) and then serves only requests
             addressed to a loopback name or ``host`` (see
             :class:`~typantic.web.security.LocalHostOnly`).
         title: The dashboard's name; overrides the brand's.
@@ -444,12 +443,12 @@ async def _tail_log(
 ) -> None:
     """Stream appended log bytes until the job is terminal, then close.
 
-    Every frame is a JSON envelope -- ``{"log": …}``, ``{"reset": true}`` when
-    the log started over (the client clears what it has), ``{"end": …}`` -- so a
-    log line can never be mistaken for a signal.
+    Every frame is a JSON envelope (``{"log": …}``, ``{"reset": true}`` when
+    the log started over and the client clears what it has, ``{"end": …}``), so
+    a log line can never be mistaken for a signal.
 
-    This is the only async path in the app -- every route is a sync ``def`` that
-    runs in a threadpool -- so its blocking work (reading the log, and a
+    This is the only async path in the app; every route is a sync ``def`` that
+    runs in a threadpool. Its blocking work (reading the log, and a
     ``launcher.get`` that may shell out to a scheduler) is handed to a thread.
     Run inline, one slow ``sacct`` would stall the event loop for every client.
     The wait between polls listens for the client leaving: a quiet job sends

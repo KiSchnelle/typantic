@@ -1,9 +1,9 @@
 """``add_endpoint``: the in-process web analog of ``add_command``.
 
 Register a POST endpoint that validates the request body into a Pydantic model
-and calls a handler with the validated instance — the FastAPI mirror of
-typantic's Pydantic → Typer CLI bridge — plus a ``GET {path}/schema`` route that
-emits the model's form-ready JSON Schema. Unlike the launcher, this runs the
+and calls a handler with the validated instance, mirroring typantic's
+Pydantic-to-Typer CLI bridge in FastAPI. A ``GET {path}/schema`` route emits the
+model's form-ready JSON Schema. Unlike the launcher, this runs the
 handler *in process*, so it is the simple case for a small app that wants a web
 form over the same settings model it already defined.
 """
@@ -42,7 +42,7 @@ def add_endpoint[ModelT: BaseModel](
     run: Callable[..., Any]
     if inspect.iscoroutinefunction(handler):
         # Calling an async handler from a sync route would return the coroutine
-        # itself, which FastAPI cannot serialise -- a 500 instead of a result.
+        # itself, which FastAPI cannot serialise (a 500 instead of a result).
         async def run(payload: Any) -> Any:  # noqa: ANN401 - set on __annotations__
             return await handler(payload)
     else:

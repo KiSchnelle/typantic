@@ -9,11 +9,11 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21473880.svg)](https://doi.org/10.5281/zenodo.21473880)
 
-Auto-generate [Typer](https://typer.tiangolo.com/) CLI interfaces from [Pydantic](https://docs.pydantic.dev/) models — a **Pydantic → Typer** bridge.
+Type-safe interfaces from [Pydantic](https://docs.pydantic.dev/) v2 models: a **Pydantic → [Typer](https://typer.tiangolo.com/)** CLI bridge, plus an optional web launcher and dashboard.
 
 Define your config **once** as a Pydantic model with validators and get a typed,
-validated command-line interface for free — no duplication, no drift — plus
-optional YAML/JSON config files (`--config` / `--generate-config`).
+validated command-line interface without duplicating it, plus optional YAML/JSON
+config files (`--config` / `--generate-config`).
 
 ## Installation
 
@@ -54,7 +54,7 @@ class Config(BaseModel):
     ]
 
 
-# 2. Use the decorator — that's it
+# 2. Use the decorator
 app = typer.Typer()
 
 @app.command()
@@ -99,7 +99,7 @@ The `@pydantic_to_typer(Model)` decorator:
 3. Maps `kw_only=False` → `typer.Argument`, `kw_only=True` → `typer.Option`
 4. Flattens nested `BaseModel` fields into prefixed parameters
 5. Rewrites the function's `__signature__` so Typer sees the expanded parameters
-6. At call time, re-nests the values you actually passed (a flag, its environment variable, or a prompt — never a flag's default) and hands them to `Model(...)`, so Pydantic applies its own defaults and runs every validator
+6. At call time, re-nests the values you actually passed (a flag, its environment variable, or a prompt, never a flag's default) and hands them to `Model(...)`, so Pydantic applies its own defaults and runs every validator
 
 Your function receives the **validated model instance**, exactly as `Model(**what_you_passed)` would build it: `model_fields_set` holds only the fields you gave, a validator that derives a value "when unset" fires, a `default_factory` runs once per run (with the validated data, if it takes it), and a secret's default is its real value. A flag passed under a nested model with a default instance keeps that instance's other values, the ones `--help` advertises.
 
@@ -128,7 +128,7 @@ Your function receives the **validated model instance**, exactly as `Model(**wha
 Validators that raise `ValueError` / `AssertionError` surface as Typer
 parameter errors; other exception types propagate unchanged.
 
-A type no flag can express — a `dict`, a list of lists, a list of models — is
+A type no flag can express (a `dict`, a list of lists, a list of models) is
 refused when the command is decorated, naming the field. Such a model belongs in
 a file: `config_file="only"` (see [Config files](#config-files)) makes the command
 read every field from `--config`.
@@ -207,7 +207,7 @@ add_command(app, Config, run, name="go")  # or set it explicitly
 
 Large configs composed from mixins can group their options into titled Rich
 help panels. Opt in with `subpanels=True` and give each mixin a `cli_panel`
-class attribute — every option lands in the panel of the class that defines
+class attribute. Every option lands in the panel of the class that defines
 its field:
 
 ```python
@@ -262,13 +262,13 @@ Some configs are too large or too nested to pass as flags every time. Opt in wit
 `config_file=True` and the command can be driven by a YAML/JSON file as well. Three
 options are injected:
 
-- `--generate-config PATH` — write an editable default template, then exit without
+- `--generate-config PATH`: write an editable default template, then exit without
   running;
-- `--config PATH` — load settings from a file as the base; any flags you also pass
+- `--config PATH`: load settings from a file as the base; any flags you also pass
   **override** the file;
-- `--schema` — print the settings model's JSON Schema to stdout, then exit (a web
-  front-end can subprocess this to build a form from the model without importing
-  it, keeping heavy app dependencies out of the web process).
+- `--schema`: print the settings model's JSON Schema to stdout, then exit (a web
+  front-end can run this to build a form from the model without importing it,
+  keeping heavy app dependencies out of the web process).
 
 ```python
 from typing import Annotated
@@ -301,11 +301,11 @@ def run(config: Config) -> None:
 add_command(app, Config, run, name="run", config_file=True)
 ```
 
-Generate a template — required fields become `<REQUIRED: ...>` placeholders,
+Generate a template. Required fields become `<REQUIRED: ...>` placeholders,
 nested models are expanded so their shape is visible, and any
 `default_factory` field becomes a `<DEFAULT: computed at runtime>` sentinel
-(rather than a frozen value) so it is recomputed fresh when the file is loaded —
-handy for host/time-sensitive defaults like a timestamped output folder or a CPU
+(rather than a frozen value) so it is recomputed fresh when the file is loaded.
+This suits host/time-sensitive defaults like a timestamped output folder or a CPU
 count that shouldn't be baked into a shared template. A secret's default gets the
 same sentinel, so it is never written to the file. A file still holding a
 `<REQUIRED: ...>` placeholder is refused on load, naming each one, rather than run
@@ -364,14 +364,14 @@ file's own directory.
 
 Because `--config` may supply them, required fields are made optional at the Typer
 layer; Pydantic re-checks requiredness *after* merging file and flags, so a value
-missing from both is still reported as an error — it just no longer renders as
+missing from both is still reported as an error, but it does not render as
 `[required]` in `--help`. A `--config` document must be a mapping; a bad suffix,
 unparseable content, or a non-mapping top level is a usage error (exit 2) naming
 the file.
 
 An **unknown key** in the file is rejected up front, so a typo like `wrokers: 8`
 fails fast instead of being silently dropped and leaving the field at its
-default. A field is accepted under exactly the keys Pydantic accepts for it —
+default. A field is accepted under exactly the keys Pydantic accepts for it:
 its alias, and its own name only where the model allows that (a field's name on
 a model that only takes its alias is reported with the key to use). The check
 looks inside nested models, `Model | None` values and each item of a list of
@@ -401,21 +401,21 @@ for an unsupported suffix, unparseable content, or a non-mapping top level.
 
 ### File-only commands
 
-Some models can't map onto flat flags at all — nested-model lists, or
+Some models can't map onto flat flags at all, such as nested-model lists or
 `scalar | (min, max)` ranges. For those, pass `config_file="only"`: the command
-exposes **just** `--config` / `--generate-config`, with no per-field flags.
+exposes **just** `--config`, `--generate-config` and `--schema`, with no
+per-field flags.
 
 ```python
 add_command(app, TuneConfig, run, config_file="only", help="Tune from a config file.")
 ```
 
-File-only commands still expose `--schema`, so a web front-end can build their
-form the same way.
+A web front-end builds their form from `--schema`, as for any other command.
 
 ## Entry point (`make_main`)
 
-`make_main` builds the `main()` you point your console script at. It is optional —
-`main = app` works — but it handles four things a hand-written entry point usually
+`make_main` builds the `main()` you point your console script at. It is optional
+(`main = app` works), but it handles four things a hand-written entry point usually
 gets wrong:
 
 ```python
@@ -453,9 +453,9 @@ myapp = "myapp.cli:main"
   traceback; a non-zero `Exit` code propagates unchanged. Ctrl-C while the
   command modules import exits 130.
 
-Pass `run_context` to wrap the run in a context manager — typically logging setup
+Pass `run_context` to wrap the run in a context manager, typically logging setup
 that has to be torn down even when the command raises. It is entered only for a
-real run — not for `--version`, shell completion, or an introspection flag, so a
+real run, not for `--version`, shell completion, or an introspection flag, so a
 context that logs to stdout cannot corrupt `--schema`'s JSON:
 
 ```python
@@ -464,7 +464,7 @@ main = make_main(_load_app, package_name="myapp", run_context=MyLogger.running)
 
 ## Web (`typantic[web]`)
 
-The optional `[web]` extra turns the same settings models into web interfaces —
+The optional `[web]` extra turns the same settings models into web interfaces,
 the FastAPI counterpart of the Typer bridge. Install it with:
 
 ```bash
@@ -474,7 +474,7 @@ pip install 'typantic[web]'
 The base `import typantic` never pulls in FastAPI; only `typantic.web` (and
 `typantic web …`) does.
 
-![typantic web — the command catalog](https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-launch.png)
+![The typantic web command catalog](https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-launch.png)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-form.png" width="49%" alt="A form derived from a settings model, with a schema-driven backend options subform" />
@@ -485,21 +485,20 @@ The base `import typantic` never pulls in FastAPI; only `typantic.web` (and
   <img src="https://raw.githubusercontent.com/KiSchnelle/typantic/main/docs/img/dashboard-projects.png" width="49%" alt="Projects with grouped job history" />
 </p>
 
-There are **two ways** to put a settings model on the web — pick the one that
-matches what you need:
+There are **two ways** to put a settings model on the web:
 
 | You want… | Use | What it gives you |
 |---|---|---|
-| one form + endpoint inside a FastAPI app you already run | [`add_endpoint`](#add_endpoint--one-web-form-for-a-model) | a `POST` that validates the body into your model and calls your handler, in-process |
-| a ready-made dashboard that runs your commands as tracked jobs | [`typantic web serve`](#typantic-web-serve--a-dashboard-for-your-commands) | a form per command, live log tail, output-image gallery, and searchable history |
+| one form + endpoint inside a FastAPI app you already run | [`add_endpoint`](#add_endpoint-one-web-form-for-a-model) | a `POST` that validates the body into your model and calls your handler, in-process |
+| a ready-made dashboard that runs your commands as tracked jobs | [`typantic web serve`](#typantic-web-serve-a-dashboard-for-your-commands) | a form per command, live log tail, output-image gallery, and searchable history |
 
-### `add_endpoint` — one web form for a model
+### `add_endpoint`: one web form for a model
 
 The mirror of `add_command`, but for [FastAPI](https://fastapi.tiangolo.com/):
 register a `POST` endpoint that validates the request body into your model and
 calls a handler, plus a `GET …/schema` route serving the form-ready JSON Schema.
-The handler runs **in your own process** — reach for this when you just want one
-form on an app you already have.
+The handler runs **in your own process**. Use this for one form on an app you
+already have.
 
 ```python
 from fastapi import FastAPI
@@ -521,10 +520,10 @@ app = FastAPI()
 add_endpoint(app, Config, run)     # POST /run  +  GET /run/schema
 ```
 
-### `typantic web serve` — a dashboard for your commands
+### `typantic web serve`: a dashboard for your commands
 
 `typantic web serve` is a ready-made **dashboard** that finds your commands,
-shows a form for each, and launches them as tracked background jobs — streaming
+shows a form for each, and launches them as tracked background jobs, streaming
 the log and showing any output images. It **runs your CLI** (it never imports
 your code), so heavy dependencies stay out of the web process.
 
@@ -563,7 +562,7 @@ def main() -> None:
     app()
 ```
 
-**2. Advertise it** to the dashboard by listing your commands (as plain data —
+**2. Advertise it** to the dashboard by listing your commands (as plain data, so
 nothing heavy is imported at discovery time) under the `typantic.web_commands`
 entry-point group:
 
@@ -590,23 +589,29 @@ myapp = "myapp.cli:main"
 myapp = "myapp.web_meta:WEB_COMMANDS"
 ```
 
-**3. Install and serve** — in the same environment:
+**3. Install and serve** in the same environment:
 
 ```bash
 pip install . 'typantic[web]'
 typantic web serve
-#   typantic web is running. Open:
+#   typantic web is running.
+#
+#   Open in a browser:
 #     http://127.0.0.1:54321/?token=…
+#
+#   Remote host? First forward the port from your machine:
+#     ssh -N -L 54321:127.0.0.1:54321 you@node1.example.org
+#   then open the URL above locally.
+#
+#   The token in the URL is the credential; keep it private.
 ```
 
 Open the printed URL: **"Detect objects"** is in the catalog. Fill the form and
-click **Launch** — the dashboard writes your values to a config file, runs
-`myapp detect --config …` as a background job, and streams its log. That's it.
+click **Launch**. The dashboard writes your values to a config file, runs
+`myapp detect --config …` as a background job, and streams its log.
 
-**A few things worth knowing:**
-
-- **It runs as you, on your machine**, on a free port with a token in the URL —
-  just open the URL it prints. On a remote server, forward the port over SSH (the
+- **It runs as you, on your machine**, on a free port with a token in the URL;
+  open the URL it prints. On a remote server, forward the port over SSH (the
   command prints a ready-to-run `ssh -N -L …` line with your user and host filled
   in). Name the page with `--title`, or brand it (below).
 - **Backends decide *where* a job runs**, chosen per launch in the form.
@@ -615,8 +620,8 @@ click **Launch** — the dashboard writes your values to a config file, runs
   run in a container, and `ssh` runs on another host. You can register your own
   under the `typantic.web_backends` entry-point group.
 - **Brand it as your own.** A package can show the dashboard under its own
-  name, mark and accent colour by registering a brand — a `Brand` or a plain
-  mapping of its fields — under the `typantic.web_brand` entry-point group:
+  name, mark and accent colour by registering a brand (a `Brand` or a plain
+  mapping of its fields) under the `typantic.web_brand` entry-point group:
 
   ```python
   # myapp/web_brand.py
@@ -640,28 +645,28 @@ click **Launch** — the dashboard writes your values to a config file, runs
   mark and cyan. The icon is shown as an image (the sidebar mark and the tab's
   icon), so it cannot take the accent through `currentColor`: give it colours
   of its own.
-- **Projects & history** — file jobs under a project, then search, filter, sort,
+- **Projects & history**: file jobs under a project, then search, filter, sort,
   and page through the history (a stdlib SQLite index; nothing to set up).
 - **Keep the token generated.** The printed URL carries a fresh random token;
   `--token X` works too, but a command line is visible in `ps` to every user
   of the machine. `--no-token` is for a loopback-only development run.
 - **One server per job store.** Servers on several login nodes can share a
-  store on a common filesystem — each job records the host its process runs
-  on, and only that host's server probes or cancels it — but they do not
+  store on a common filesystem. Each job records the host its process runs
+  on, and only that host's server probes or cancels it, but the servers do not
   coordinate otherwise.
 - **Jobs outlive the server**, so restarting it never kills a local job. Two
   exceptions: a server run as a `systemd --user` service takes its jobs down
   when the service stops (set `KillMode=process`), and one started inside a
   Slurm allocation takes them down when the allocation ends (use the `slurm`
   backend instead).
-- **Upgrading an app needs no restart**: its forms follow the version installed
-  now. A newly installed app, and source edits to an editable install, show up
+- **Upgrading an app needs no restart**: its forms follow the installed
+  version. A newly installed app, and source edits to an editable install, show up
   after `POST /api/commands/refresh` (with the token) or a restart; upgrading
   typantic itself needs a restart. Each job records the app version it ran
-  with, and a job whose settings the installed version does not have — renamed
-  or removed since, or added by a newer version before a downgrade — cannot be
+  with, and a job whose settings the installed version does not have (renamed
+  or removed since, or added by a newer version before a downgrade) cannot be
   cloned or restarted: it names those settings, and you launch a new one.
-- **Where things live** — each job's folder (config, log, outputs) under
+- **Where things live**: each job's folder (config, log, outputs) under
   `~/.typantic/jobs`, or `$TYPANTIC_WEB_JOBS_DIR`, readable by you alone: a
   submitted config can hold a secret typed into the form. Write outputs you
   share with colleagues to an output folder elsewhere. Gallery thumbnails are

@@ -52,16 +52,17 @@ class _Leaf(NamedTuple):
     """One flattened CLI parameter and the names it is known by.
 
     The flag the user types follows the field *names* (``name_path``), while the
-    value is re-nested under the field's *input keys* (``key_path``) -- its
-    aliases, where the model needs them. The two differ only for aliased models.
+    value is re-nested under the field's *input keys* (``key_path``), which are
+    its aliases where the model needs them. The two differ only for aliased
+    models.
     """
 
     cli_name: str
     key_path: tuple[str, ...]
     name_path: tuple[str, ...]
     flags: tuple[str, ...]
-    # Whether the field itself is required (no default, no parent default) --
-    # kept apart from the Typer default, which config mode relaxes to None.
+    # Whether the field itself is required (no default, no parent default). Kept
+    # apart from the Typer default, which config mode relaxes to None.
     required: bool = False
     # The collection the field declares (set, tuple, deque...), to rebuild from
     # the list the CLI gathers; None where a list is what the field takes.
@@ -80,8 +81,9 @@ class _Nested(NamedTuple):
     required: list[tuple[str, ...]]
 
 
-# Python identifiers for the injected config-file parameters (kept distinct from
-# any model field name); the user-facing flags are --config / --generate-config.
+# Python identifiers for the injected config-file parameters, kept distinct from
+# any model field name. The user-facing flags are --config, --generate-config
+# and --schema.
 _CTX_PARAM = "_typantic_ctx"
 _CONFIG_PARAM = "_typantic_config"
 _GENERATE_PARAM = "_typantic_generate_config"
@@ -148,9 +150,9 @@ def _non_finite(value: object) -> bool:
 def _without_non_finite(schema: object) -> object:
     """``schema`` minus every non-finite float, so it prints as strict JSON.
 
-    JSON has no Infinity/NaN; ``json.dumps`` would print the bare tokens, which a
-    strict parser -- the web front-end's among them -- rejects. A ``default``
-    (or bound) of ``inf`` is dropped: the model still applies it.
+    JSON has no Infinity/NaN. ``json.dumps`` would print the bare tokens, which a
+    strict parser such as the web front-end's rejects. A ``default`` (or bound)
+    of ``inf`` is dropped; the model still applies it.
     """
     if isinstance(schema, dict):
         return {
@@ -190,15 +192,15 @@ def _collect(
     """Build the model's input mapping from ``base`` and the flags actually passed.
 
     Only values the user supplied (on the command line, through an environment
-    variable, or at a prompt) are written -- never a flag's default. Pydantic then
+    variable, or at a prompt) are written, never a flag's default. Pydantic then
     applies its own defaults, so ``model_fields_set`` holds exactly what was
     given, validators that derive a value "when unset" fire, factories run in
     Pydantic (once, with the validated data where they take it), and a secret's
     default is its real value rather than the mask Click renders it as.
 
     A passed flag under a defaulted nested model is written into a copy of that
-    default instance, so the leaves you did not pass keep the values ``--help``
-    advertised for them -- unless ``base`` (a ``--config`` file) already defines
+    default instance, so the leaves not passed keep the values ``--help``
+    advertised for them, unless ``base`` (a ``--config`` file) already defines
     that model. A nested model with no default is given an empty mapping when its
     parent is present, so its own field defaults build it.
     """
@@ -228,7 +230,7 @@ def _collect(
 def _load_base(model_cls: type[BaseModel], config: Path | None) -> dict[str, Any]:
     """The ``--config`` file's settings, the base the passed flags override.
 
-    An unknown key in the file is rejected up front -- a silently-dropped typo
+    An unknown key in the file is rejected up front. A silently dropped typo
     would let a run proceed with the default in place of the intended value.
     """
     if config is None:
@@ -236,8 +238,7 @@ def _load_base(model_cls: type[BaseModel], config: Path | None) -> dict[str, Any
     try:
         data = dict(load_config_file(config))
     except (OSError, ValueError) as exc:
-        # A missing or malformed file is a bad --config value, not a crash:
-        # report it the way every other parameter error is reported.
+        # A missing or malformed file is reported as a bad --config value.
         raise typer.BadParameter(str(exc)) from exc
     unknown = unknown_config_keys(model_cls, data)
     if unknown:
@@ -264,14 +265,12 @@ def _config_file_base(
     generate = cast("Path | None", kwargs.pop(_GENERATE_PARAM))
     config = cast("Path | None", kwargs.pop(_CONFIG_PARAM))
     if cast("bool", kwargs.pop(_SCHEMA_PARAM)):
-        # The web front-end subprocesses this to build a form from the model
-        # without importing it (keeping torch out of its process).
+        # The web front-end runs this in a subprocess to build a form from the
+        # model without importing it.
         finite = _without_non_finite(model_cls.model_json_schema())
         typer.echo(json.dumps(finite, indent=2, allow_nan=False))
         raise typer.Exit
     if generate is not None and config is not None:
-        # Without this, generation would silently win and the run be skipped;
-        # the two are mutually exclusive.
         msg = "Pass either --config or --generate-config, not both."
         raise typer.BadParameter(msg)
     if generate is not None:
@@ -362,7 +361,7 @@ def _panel_for_field(model_cls: type[BaseModel], field_name: str) -> str | None:
     """Return the help panel title for a field, or ``None`` for the default group.
 
     The panel is taken from the ``cli_panel`` class attribute of the class that
-    *defines* the field -- the most-base class in the MRO whose ``model_fields``
+    *defines* the field: the most-base class in the MRO whose ``model_fields``
     contains it. Classes that declare no ``cli_panel`` of their own contribute
     no panel, so grouping is fully explicit and opt-in per (mixin) class.
 
@@ -388,8 +387,8 @@ def _numeric_type(typer_type: object) -> type | None:
     """Return ``int``/``float`` if ``typer_type`` is that scalar or an optional one.
 
     ``extract_base_type`` leaves an ``Optional[int]`` as the union ``int | None``,
-    so a plain identity check misses it; unwrap a ``T | None`` union to recover
-    the numeric member (Typer still applies ``min`` / ``max`` to the option).
+    so a ``T | None`` union is unwrapped to recover the numeric member (Typer
+    still applies ``min`` / ``max`` to the option).
     """
     if typer_type is int or typer_type is float:
         return cast("type", typer_type)
@@ -441,8 +440,7 @@ def _as_bound(value: object) -> float | None:
     if isinstance(value, float):
         return value
     if isinstance(value, Decimal):
-        # A Decimal bound is exact; float() is the only thing Click understands,
-        # and Pydantic still enforces the exact bound after parsing.
+        # Click needs a float; Pydantic still enforces the exact Decimal bound.
         return float(value)
     return None
 
@@ -451,12 +449,8 @@ def _factory_takes_data(factory: Callable[..., Any]) -> bool:
     """Whether ``factory`` is a Pydantic 2.10+ factory taking the validated data.
 
     Such a factory needs the model's other fields, so it can only run inside
-    Pydantic -- Click would call it with no arguments and raise ``TypeError``.
-
-    The test mirrors Pydantic's own ``takes_validated_data_argument``: exactly one
-    positional parameter with no default. Matching it exactly matters -- a looser
-    test would mistake an ordinary one-argument callable (say a class with a
-    single ``__init__`` field) for a data-taking factory and drop its value.
+    Pydantic. The test mirrors Pydantic's ``takes_validated_data_argument``:
+    exactly one positional parameter with no default.
     """
     try:
         parameters = list(inspect.signature(factory).parameters.values())
@@ -512,8 +506,8 @@ def _option_decls(
 
     Declaring anything explicitly suppresses Click's automatic
     ``--flag / --no-flag`` pair for a boolean, which would leave a ``True``
-    default impossible to turn off -- so a boolean's long flag always carries its
-    ``/--no-`` counterpart.
+    default impossible to turn off. A boolean's long flag therefore always
+    carries its ``/--no-`` counterpart.
 
     Args:
         cli_name: The (possibly nested) flattened parameter name.
@@ -557,7 +551,7 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
 
     The flag a user types always follows the *field name*, while the value is
     re-nested under the field's *input key* (its alias, when the model is not
-    ``populate_by_name``) -- so an aliased model keeps a readable flag and still
+    ``populate_by_name``). An aliased model thus keeps a readable flag and still
     receives the value. See :func:`typantic._introspect.field_input_key`.
 
     Args:
@@ -682,8 +676,8 @@ def _item_type(tp: object) -> tuple[object, str | None] | object:
 def _cli_type(tp: object) -> tuple[object, str | None] | None:
     """How Click takes a field of structural type ``tp``: ``(type, metavar)``.
 
-    Types Typer parses itself are passed through. Any other single value -- a
-    ``Decimal``, a date, a URL, an IP address, ``Any``, a union of values -- is
+    Types Typer parses itself are passed through. Any other single value (a
+    ``Decimal``, a date, a URL, an IP address, ``Any``, a union of values) is
     taken as text for Pydantic to parse, with a metavar naming what it must be
     (``<decimal>``). Lists and fixed tuples of such values work item by item.
     ``None`` means no flag can express the type (a dict, a list of lists or of
@@ -702,7 +696,7 @@ def _cli_type(tp: object) -> tuple[object, str | None] | None:
 def _union_cli_type(tp: object) -> tuple[object, str | None] | None:
     """A union: ``X | None`` stays optional ``X``; a union of values is text."""
     members = [arg for arg in get_args(tp) if arg is not type(None)]
-    if len(members) == 1:  # X | None -- a one-member union is always optional
+    if len(members) == 1:  # X | None: a one-member union is always optional
         inner = _cli_type(members[0])
         return None if inner is None else (inner[0] | None, inner[1])  # type: ignore[operator]
     if any(_is_structure(member) for member in members):
@@ -742,15 +736,12 @@ def _declared_container(annotation: object) -> Callable[[Iterable[Any]], object]
 def _nested_default(field_info: FieldInfo, override: object) -> BaseModel | None:
     """The model instance a nested field defaults to, if it has one.
 
-    A ``db: Database = Database(host="prod")`` default must win over
-    ``Database``'s own field defaults -- otherwise the CLI silently advertises
-    (and submits) ``host="localhost"``. A parent ``override`` takes precedence,
-    since it is already the resolved value for this field.
+    A ``db: Database = Database(host="prod")`` default wins over ``Database``'s
+    own field defaults. A parent ``override`` takes precedence, since it is
+    already the resolved value for this field.
 
     A ``default_factory`` is evaluated once here, so its instance seeds the
-    flattened options too. The flattened form has to show *some* value, and the
-    factory's is the true one; the alternative -- ignoring it -- is what silently
-    substituted the inner class's defaults.
+    flattened options too.
     """
     if override is not _MISSING:
         # A parent's default instance may hold None for an optional nested model.
@@ -775,13 +766,13 @@ def _check_name_collisions(
     A nested field's CLI name is its path joined by ``_`` (``db.host`` becomes
     ``db_host``), which can collide with a sibling field literally named
     ``db_host``. Left unchecked this surfaces as an opaque ``inspect.Signature``
-    ``ValueError`` at decoration time; name the offending fields instead.
+    ``ValueError`` at decoration time.
 
     Two fields can also claim the same *flag* through ``cli_name`` / ``cli_short``
     even when their parameter names differ. Click keeps only the last such option,
-    so the other field would silently stop being settable -- name them too. The
-    same goes for a flag typantic injects itself (``reserved``, flag -> purpose),
-    such as ``--config``.
+    so the other field would silently stop being settable. The same goes for a
+    flag typantic injects itself (``reserved``, flag -> purpose), such as
+    ``--config``.
     """
     seen: dict[str, tuple[str, ...]] = {}
     flags: dict[str, tuple[str, ...]] = {}
@@ -826,7 +817,7 @@ def _declared_flags(
     """The flags a leaf claims, including the ones Typer derives implicitly.
 
     An argument is positional and claims none. A boolean's ``--x/--no-x`` covers
-    two flags, so it is split -- otherwise ``--no-x`` could silently collide with
+    two flags, so it is split; otherwise ``--no-x`` could silently collide with
     a sibling's flag. With no explicit decls, Typer derives the long flag from the
     parameter name, and for a boolean its ``--no-`` off switch as well.
     """
@@ -908,7 +899,8 @@ def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
             when the field's own default applies.
 
     Returns:
-        A ``(parameter, annotation)`` pair for the rewritten signature.
+        A ``(parameter, annotation, flags)`` tuple: the parameter and annotation
+        for the rewritten signature, and the flags the leaf claims.
     """
     help_text = field_info.description or ""
     extra = _cli_extra(field_info)
@@ -941,10 +933,8 @@ def _build_leaf(  # noqa: PLR0913 - one leaf's full context; all keyword-only
         default = default_override
         show_default = "None" if default is None else True
     elif field_info.default_factory is not None:
-        # Pydantic runs the factory -- once per run, with the validated data where
-        # it takes it -- because an unpassed flag never reaches the model. Handing
-        # Click the callable would only run it again (on --help and --schema too)
-        # or, for a factory taking the data, call it with no argument. A frozen
+        # Pydantic runs the factory once per run, with the validated data where
+        # it takes it, because an unpassed flag never reaches the model. A frozen
         # sample would mislead for time/identity factories, so show a sentinel.
         default = None
         show_default = "computed at runtime"
@@ -1016,11 +1006,10 @@ def pydantic_to_typer(
         - ``kw_only=True`` (or unset)  ->  ``typer.Option``
         - ``Field(description=...)``  ->  ``help=...``
         - ``Field(default=...)``  ->  Typer default value
-        - ``Field(default_factory=...)``  ->  the factory is passed through to
-          Click as a callable default, so it runs once per invocation;
-          ``--help`` shows ``[default: (computed at runtime)]`` rather than a
-          frozen sample. A factory taking the validated data (pydantic 2.10+)
-          is left for Pydantic to run instead
+        - ``Field(default_factory=...)``  ->  no Click default; Pydantic runs
+          the factory once per invocation (with the validated data, where it
+          takes it). ``--help`` shows ``[default: (computed at runtime)]``
+          rather than a frozen sample
         - ``Field(alias=...)`` / ``validation_alias`` / ``alias_generator``  ->
           the flag still follows the field *name*; the value is submitted under
           the alias, so an aliased model works unchanged
@@ -1058,12 +1047,12 @@ def pydantic_to_typer(
             ``--generate-config PATH`` writes an editable default template and
             exits without running, and ``--schema`` prints the model's JSON
             Schema to stdout and exits (so a web front-end can build a form from
-            the model by subprocessing the CLI, without importing it). To let
-            ``--config`` supply them, required
-            fields are made optional at the Typer layer and re-checked by
-            Pydantic after merge (so they no longer render as ``[required]``).
-            Pass ``"only"`` for a **file-only** command: no per-field flags are
-            generated at all (just ``--config`` / ``--generate-config``), for
+            the model by running the CLI, without importing it). To let
+            ``--config`` supply them, required fields are made optional at the
+            Typer layer and re-checked by Pydantic after merge (so they do not
+            render as ``[required]``). Pass ``"only"`` for a **file-only**
+            command: no per-field flags are generated at all (just ``--config``
+            / ``--generate-config`` / ``--schema``), for
             models that cannot map onto flat flags (nested-model lists,
             ``scalar | (min, max)`` ranges).
 
@@ -1098,8 +1087,8 @@ def pydantic_to_typer(
                 mapping,
                 _CONFIG_FLAGS if config_file else None,
             )
-            # Required fields first, by the field's own requiredness -- not the
-            # Typer default config mode relaxes -- so switching config_file on
+            # Required fields first, by the field's own requiredness rather than
+            # the Typer default config mode relaxes, so switching config_file on
             # never reorders the positional arguments a command takes.
             required = {leaf.cli_name for leaf in mapping if leaf.required}
             new_params.sort(
@@ -1133,7 +1122,7 @@ def pydantic_to_typer(
     return decorator
 
 
-def add_command[ModelT: BaseModel](  # noqa: PLR0913
+def add_command[ModelT: BaseModel](  # noqa: PLR0913 - mirrors app.command's options
     app: typer.Typer,
     model_cls: type[ModelT],
     handler: Callable[[ModelT], Any],
@@ -1154,7 +1143,7 @@ def add_command[ModelT: BaseModel](  # noqa: PLR0913
         handler: A function accepting the validated model instance.
         name: The command name. Defaults to ``handler.__name__``.
         subpanels: Forwarded to :func:`pydantic_to_typer`.
-        config_file: Forwarded to :func:`pydantic_to_typer` -- add
+        config_file: Forwarded to :func:`pydantic_to_typer`. Adds
             ``--config`` / ``--generate-config`` / ``--schema`` support
             (``"only"`` for a file-only command with no per-field flags).
         help: Command help text. Defaults to the handler's docstring.

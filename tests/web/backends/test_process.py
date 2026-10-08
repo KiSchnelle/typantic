@@ -213,7 +213,7 @@ def test_cancel_already_gone_is_suppressed(tmp_path, monkeypatch):
     LocalBackend().cancel(_record(tmp_path, pid=4242))
 
 
-# --- cancel signals only a process that is still our job ---
+# --- cancel signals only a process that is still the tracked job ---
 
 
 def _signals(monkeypatch):
@@ -343,8 +343,8 @@ def test_process_running_not_our_child_gone(monkeypatch):
 
 
 def test_process_running_eperm_means_our_job_is_gone(monkeypatch):
-    # The tracked pid is always our own shell, so a pid we may not signal now
-    # belongs to another user: ours has exited and the pid was reused.
+    # The tracked pid is always the server's own shell, so a pid it may not
+    # signal belongs to another user: the job has exited and the pid was reused.
     def raise_child(*_a, **_k):
         raise ChildProcessError
 
@@ -426,7 +426,7 @@ def test_a_local_job_records_its_host(tmp_path):
 
 def test_a_job_on_another_host_keeps_its_last_status(tmp_path, monkeypatch):
     # A store shared across login nodes: this host's process table says nothing
-    # about a pid on another, and read it as dead -- recorded FAILED for good.
+    # about a pid on another; reading it as dead would record FAILED for good.
     def no_probe(*_args):
         raise AssertionError("probed a pid that lives on another host")
 

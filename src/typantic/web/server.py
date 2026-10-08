@@ -1,7 +1,7 @@
 """Serve the dashboard as the invoking user, Jupyter-style (free port + token).
 
 Running as the Unix user who launches it means file access and scheduler
-accounting inherit their identity — no central auth, no impersonation. A random
+accounting inherit their identity, with no central auth or impersonation. A random
 token in a localhost URL is the credential; the user reaches it over an SSH
 tunnel.
 """
@@ -37,10 +37,10 @@ def _is_ipv6(host: str) -> bool:
 def is_loopback_host(host: str) -> bool:
     """Whether ``host`` is a loopback address the OS will not expose off-machine.
 
-    Anything that is not a loopback literal -- ``0.0.0.0``, ``::``, an empty
-    string, or a hostname this process cannot resolve -- is treated as routable.
-    The check is deliberately conservative in that direction: the cost of calling
-    a routable host loopback is an unauthenticated dashboard on the network.
+    Anything that is not a loopback literal (``0.0.0.0``, ``::``, an empty
+    string, or a hostname this process cannot resolve) is treated as routable,
+    since calling a routable host loopback would put an unauthenticated
+    dashboard on the network.
     """
     if host == "localhost":
         return True
@@ -78,7 +78,7 @@ def _fqdn_via_hostname() -> str:
     """FQDN from ``hostname -f`` (empty string if it is unavailable or fails).
 
     ``getfqdn`` returns the *short* name on hosts whose ``/etc/hosts`` maps only
-    the bare node name (common on Debian/Ubuntu, where ``127.0.1.1 grobi`` has no
+    the bare node name (common on Debian/Ubuntu, where ``127.0.1.1 node1`` has no
     qualified alias); ``hostname -f`` still resolves the fully-qualified name via
     the OS resolver. Capped at two seconds so a slow resolver cannot hang startup.
     """
@@ -133,9 +133,9 @@ def startup_banner(
     Shows the URL to open, then a ready-to-run ``ssh -N -L`` line (with this
     host's user and name filled in) for reaching the dashboard from a remote
     machine. With a token, the banner says to keep it private; without one it
-    says plainly that the dashboard is unauthenticated, rather than staying
-    silent about it -- ``serve`` only permits that on a loopback bind, but
-    anyone with an account on this machine can still reach it.
+    says plainly that the dashboard is unauthenticated. ``serve`` permits that
+    only on a loopback bind, but anyone with an account on this machine can
+    still reach it.
     """
     url = dashboard_url(host, port, token)
     ssh_command = ssh_forward_command(host, port, user=user, server=server)

@@ -6,7 +6,7 @@ for a local job, and the local ``ssh`` client's exit status propagates the remot
 exit code. Assumes a shared filesystem: the ``--config`` path the launcher writes
 must be valid on the remote host (an NFS home directory is the common case).
 Cancelling SIGTERMs the local ``ssh`` client; without a remote pty the remote
-process may linger — a known streamed-mode limitation.
+process may linger, a known streamed-mode limitation.
 """
 
 import shlex
@@ -51,7 +51,7 @@ class SshOptions(BaseModel):
 def _remote_cd(directory: str) -> str:
     """``cd`` into ``directory``, leaving a leading ``~`` for the remote shell.
 
-    Quoted whole, ``~/work`` named a folder literally called ``~``.
+    Quoted whole, ``~/work`` would name a folder literally called ``~``.
     """
     if directory == "~":
         return "cd ~"

@@ -233,8 +233,9 @@ def test_thumbnail_missing_source(tmp_path):
 
 def test_transparent_png_thumbnails_onto_white_not_black(tmp_path):
     # convert("RGB") alone drops alpha and keeps the colour beneath it, so a
-    # transparent PNG (black under a clear background) came out a black tile --
-    # disagreeing with the full-size view the browser composites over the page.
+    # transparent PNG (black under a clear background) would come out a black
+    # tile, disagreeing with the full-size view the browser composites over the
+    # page.
     src = tmp_path / "plot.png"
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     img.putpixel((32, 32), (255, 0, 0, 255))
@@ -458,7 +459,7 @@ def test_a_colour_keyed_png_leaves_no_fringe(tmp_path):
 
 def test_an_image_over_the_pixel_limit_is_not_decoded(tmp_path, monkeypatch):
     # Pillow refuses only twice its limit at open and decodes anything below
-    # that in full -- a 150 MP plot is a 600 MB decode for one tile.
+    # that in full: a 150 MP plot is a 600 MB decode for one tile.
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 3000)
     src = tmp_path / "huge.png"
     Image.new("RGB", (64, 64)).save(src)  # 4096 px: over the limit, under twice it

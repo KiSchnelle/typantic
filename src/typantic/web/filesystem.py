@@ -1,10 +1,7 @@
-"""Directory browsing + folder creation for the path-picker widget.
+"""Directory browsing and folder creation for the path-picker widget.
 
-Kept out of the HTTP layer (:mod:`typantic.web.api`) so the routes stay thin:
-these functions do the actual filesystem work and return plain data, raising
-:class:`FileSystemError` (mapped to HTTP 400 by the API) for a bad request. The
-image gallery is the sibling precedent -- output-image scanning lives in
-:mod:`typantic.web.gallery`, not inline in the route.
+These functions do the filesystem work and return plain data, raising
+:class:`FileSystemError` (mapped to HTTP 400 by the API) for a bad request.
 """
 
 import os
@@ -31,7 +28,7 @@ _INVALID_DIR_CHARS = frozenset({"/", "\\", "\x00"})
 
 
 def _absolute(path: Path) -> Path:
-    """``path`` made absolute from the user's home, lexically -- not resolved.
+    """``path`` made absolute from the user's home, lexically and unresolved.
 
     A relative path is taken from home rather than the server's working
     directory (which a user never sees), and symlinks are kept as spelled: the
@@ -92,7 +89,7 @@ def make_directory(path: str, name: str) -> FsListing:
 
     Raises:
         FileSystemError: The name is invalid, the parent is missing, or the
-            underlying ``mkdir`` failed -- each a bad request (HTTP 400).
+            underlying ``mkdir`` failed (each a bad request, HTTP 400).
     """
     clean = name.strip()
     if (

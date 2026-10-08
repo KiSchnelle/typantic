@@ -409,7 +409,7 @@ def test_schema_prints_json_schema_and_exits():
 
 
 # ---------------------------------------------------------------------------
-# CLI behaviour (config_file="only" -- file-only command)
+# CLI behaviour (config_file="only": file-only command)
 # ---------------------------------------------------------------------------
 def _build_file_only_app() -> tuple[typer.Typer, dict[str, object]]:
     seen: dict[str, object] = {}
@@ -492,7 +492,7 @@ def test_file_only_schema_prints():
 
 def test_template_uses_input_keys_so_it_reloads(tmp_path: Path) -> None:
     # The template is fed straight back through Model(**data), so its keys must
-    # be the ones the model accepts -- the alias, not the field name.
+    # be the ones the model accepts: the alias, not the field name.
     class Cfg(BaseModel):
         threshold: Annotated[float, Field(default=0.5, alias="thr")]
 

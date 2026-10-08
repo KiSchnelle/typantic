@@ -69,14 +69,12 @@ def _run(record: JobRecord) -> _Run:
 def _clean_form_values(values: dict[str, Any]) -> dict[str, Any]:
     """Drop keys the form can only express as "empty", so the model default wins.
 
-    RJSF cannot leave an optional array field *unset* — an untouched array
-    submits ``[]``, never omitted. Dropping empty lists lets the settings model
+    RJSF cannot leave an optional array field *unset*: an untouched array
+    submits ``[]`` and is never omitted. Dropping empty lists lets the settings model
     fall back to its real default rather than pinning the field to ``[]``.
 
-    Nested objects are recursed into, inside arrays too: an array one level
-    down is submitted the same way, and stripping only the top level made a
-    nested field behave differently from an identical top-level one for no
-    reason the user could see.
+    Nested objects are recursed into, inside arrays too, since an array one
+    level down is submitted the same way.
 
     Known limit: an empty array is therefore always read as "untouched", so a
     field whose default is non-empty cannot be *cleared* from the form. The
@@ -257,7 +255,7 @@ class Launcher:
     def _refuse_stale_settings(self, meta: CommandMeta, values: dict[str, Any]) -> None:
         """Refuse settings the installed command does not have, before anything runs.
 
-        The CLI refuses them too, but only once the job has started -- and a job
+        The CLI refuses them too, but only once the job has started, and a job
         cloned or restarted from another version's settings cannot be fixed in
         the form, which draws only the current settings. When the schema cannot
         be fetched the check is skipped and the CLI's own validation stands.
@@ -378,7 +376,7 @@ class Launcher:
             raise  # the job may run, and needs its folder
         except Exception:
             # Nothing is running yet (or the backend failed to start it), so the
-            # half-built folder is ours to remove rather than leave orphaned.
+            # half-built folder is removed rather than left orphaned.
             shutil.rmtree(job_dir, ignore_errors=True)
             raise
 
@@ -425,8 +423,8 @@ class Launcher:
     def _check_project(self, project_id: str | None) -> None:
         """Reject an unknown project before a job is started for it.
 
-        ``jobs.project_id`` is a foreign key, so an unknown one fails at ``save``
-        -- by which point the process is already running and untracked.
+        ``jobs.project_id`` is a foreign key, so an unknown one would fail at
+        ``save``, by which point the process is already running and untracked.
         """
         if project_id is not None and self.store.get_project(project_id) is None:
             msg = f"Unknown project {project_id!r}."
@@ -472,8 +470,8 @@ class Launcher:
     def refresh(self, record: JobRecord) -> JobRecord:
         """Re-resolve a non-terminal job's status from its backend and persist it.
 
-        The poll runs unlocked -- a scheduler query can take seconds -- so by the
-        time it answers, the job may have been cancelled, restarted or deleted.
+        The poll runs unlocked, since a scheduler query can take seconds, so by
+        the time it answers, the job may have been cancelled, restarted or deleted.
         What it found is stored only while the stored row is still the run that
         was polled, and not yet terminal; otherwise the stored row is returned.
         """
@@ -627,7 +625,7 @@ class Launcher:
                 return False
             if not record.is_terminal:
                 # Asked afresh: a job that has finished since the row was stored
-                # must not be signalled -- its pid may name another process now.
+                # must not be signalled, as its pid may name another process.
                 self._forget_poll(job_id)
                 record = self.refresh(record)
             if not record.is_terminal:
@@ -643,8 +641,8 @@ class Launcher:
     def _cancel_before_delete(self, record: JobRecord) -> None:
         """Cancel a job about to be deleted; a failure is logged, not raised.
 
-        Deleting is what was asked for, and the job's row and folder go either
-        way -- but a job the backend could not stop may run on, so say so.
+        The job's row and folder are deleted either way, but a job the backend
+        could not stop may run on, so that is logged.
         """
         backend = self._backends.get(record.backend)
         if backend is None:
@@ -733,8 +731,8 @@ class Launcher:
             request_path = self.store.request_path(job_id)
             log_path = self.store.log_path(job_id)
             argv = meta.invocation("--config", str(config_path))
-            # Options the backend would refuse are refused now, not after the
-            # new settings have replaced the old.
+            # Options the backend would refuse are refused here, before the new
+            # settings replace the old.
             backend.preview(
                 argv,
                 job_dir=job_dir,
@@ -751,7 +749,7 @@ class Launcher:
                     )
                     write_private(request_path, new_request.model_dump_json(indent=2))
                 # The new run's log starts empty: a queued scheduler job writes
-                # nothing until it runs, and showed the old run's log till then.
+                # nothing until it runs, and would show the old run's log.
                 write_private(log_path, "")
                 self._forget_poll(job_id)
                 launched = backend.launch(

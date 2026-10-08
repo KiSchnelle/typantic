@@ -5,8 +5,8 @@ server that shells out on every request:
 
 - The child inherits the server's stdin, so a tool that prompts reads the
   operator's terminal and hangs until the timeout.
-- Output is decoded strictly, so one byte that is not UTF-8 -- a native
-  library's warning on stderr, a Latin-1 job name from ``sacct`` -- raises
+- Output is decoded strictly, so one byte that is not UTF-8 (a native
+  library's warning on stderr, a Latin-1 job name from ``sacct``) raises
   ``UnicodeDecodeError`` out of the call and turns the request into an HTTP 500.
 - A timeout kills only the direct child; a wrapper script's children keep
   running.

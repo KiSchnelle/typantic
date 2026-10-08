@@ -3,7 +3,7 @@
 Each entry resolves to a factory (a class or function) returning a
 :class:`LaunchBackend`. The built-ins (local, ssh, slurm, pbs, docker, podman,
 apptainer) are registered in typantic's own ``pyproject.toml``; a third-party
-backend is a pure registry addition — no core edit.
+backend needs only a registry entry, not a core edit.
 """
 
 import logging

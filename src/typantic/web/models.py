@@ -24,7 +24,7 @@ class CommandMeta(BaseModel):
 
     Built by validating the plain mappings an app registers under the
     ``typantic.web_commands`` entry-point group. Unknown keys are ignored so a
-    newer app may add fields without breaking an older gateway.
+    newer app may add fields without breaking an older launcher.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -119,8 +119,8 @@ class LaunchPreview(BaseModel):
     """A dry-run of a launch: the config that would be written, and the argv/script.
 
     ``config`` is exactly the ``submit_config.json`` content that would be
-    launched via ``--config``; ``script`` is what the backend would actually run
-    -- a rendered submit script for the schedulers, the wrapped shell command for
+    launched via ``--config``; ``script`` is what the backend would actually run:
+    a rendered submit script for the schedulers, the wrapped shell command for
     the process family. Every backend renders one, so it is always present.
     """
 
@@ -302,7 +302,7 @@ class Brand(BaseModel):
 
     @model_validator(mode="after")
     def _fill_wordmark(self) -> Self:
-        # Split exactly as the dashboard always has: at the title's first space.
+        # Split at the title's first space.
         if not self.lead and not self.rest:
             self.lead, _, self.rest = self.title.partition(" ")
         return self

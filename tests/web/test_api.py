@@ -126,7 +126,7 @@ def test_refresh_commands_rediscovers(env, monkeypatch):
     resp = env.client.post("/api/commands/refresh", headers=AUTH)
     assert resp.status_code == 200
     assert {c["key"] for c in resp.json()} == {"app/run", "app2/go"}
-    # the list endpoint now reflects the re-discovery, no restart needed
+    # the list endpoint reflects the re-discovery, no restart needed
     assert len(env.client.get("/api/commands", headers=AUTH).json()) == 2
 
 

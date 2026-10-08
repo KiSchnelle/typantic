@@ -28,7 +28,7 @@ def test_is_loopback_host():
     assert server.is_loopback_host("::1")
     assert server.is_loopback_host("localhost")
     # Everything else is treated as reachable, including the wildcards and any
-    # hostname this process cannot resolve -- guessing wrong the other way would
+    # hostname this process cannot resolve. Guessing wrong the other way would
     # leave an unauthenticated dashboard on the network.
     assert not server.is_loopback_host("0.0.0.0")  # noqa: S104 - asserting it is refused
     assert not server.is_loopback_host("::")
@@ -65,27 +65,27 @@ def test_local_server_name_prefers_fqdn(monkeypatch):
 
 
 def test_local_server_name_uses_hostname_f_when_getfqdn_short(monkeypatch):
-    # getfqdn returns only the bare name (the reported `grobi` behaviour) ->
-    # `hostname -f` supplies the qualified name
-    monkeypatch.setattr(server.socket, "getfqdn", lambda: "grobi")
-    monkeypatch.setattr(server, "_fqdn_via_hostname", lambda: "grobi.biologie.uos.de")
-    assert server.local_server_name() == "grobi.biologie.uos.de"
+    # getfqdn returns only the bare name -> `hostname -f` supplies the
+    # qualified name
+    monkeypatch.setattr(server.socket, "getfqdn", lambda: "node1")
+    monkeypatch.setattr(server, "_fqdn_via_hostname", lambda: "node1.example.org")
+    assert server.local_server_name() == "node1.example.org"
 
 
 def test_local_server_name_falls_back_to_bare_name(monkeypatch):
     # neither source qualified -> bare node name
-    monkeypatch.setattr(server.socket, "getfqdn", lambda: "grobi")
+    monkeypatch.setattr(server.socket, "getfqdn", lambda: "node1")
     monkeypatch.setattr(server, "_fqdn_via_hostname", lambda: "")
-    monkeypatch.setattr(server.socket, "gethostname", lambda: "grobi")
-    assert server.local_server_name() == "grobi"
+    monkeypatch.setattr(server.socket, "gethostname", lambda: "node1")
+    assert server.local_server_name() == "node1"
 
 
 def test_fqdn_via_hostname_reads_command(monkeypatch):
     class _Result:
-        stdout = "grobi.biologie.uos.de\n"
+        stdout = "node1.example.org\n"
 
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: _Result())
-    assert server._fqdn_via_hostname() == "grobi.biologie.uos.de"
+    assert server._fqdn_via_hostname() == "node1.example.org"
 
 
 def test_fqdn_via_hostname_swallows_failure(monkeypatch):

@@ -32,7 +32,7 @@ app = typer.Typer(
 
 @app.callback()
 def _root() -> None:
-    """Keep ``serve`` an explicit subcommand (room for more commands later)."""
+    """Keep ``serve`` an explicit subcommand."""
 
 
 @app.command("serve")
@@ -87,7 +87,7 @@ def serve_command(
     launcher = Launcher(JobStore(jobs_dir))
     if not launcher.commands:
         logger.warning(
-            "No commands discovered — install apps that register under the "
+            "No commands discovered. Install apps that register under the "
             "'typantic.web_commands' entry-point group so their commands appear.",
         )
     resolved_token = resolve_token(token, disable=no_token)

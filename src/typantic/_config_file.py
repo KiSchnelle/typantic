@@ -3,15 +3,6 @@
 Backs typantic's opt-in ``config_file=True`` CLI behaviour (a ``--config`` to load
 settings from a file and a ``--generate-config`` to emit an editable default
 template), and is usable directly.
-
-:func:`build_config_template` produces a default-value mapping straight from a
-model's fields -- required fields become ``<REQUIRED: ...>`` placeholders (nested
-models recurse and required lists become a single-element example list, so their
-structure is shown and the shape reloads validly), factory-defaulted fields
-become a ``<DEFAULT: ...>`` sentinel that :func:`load_config_file` strips (so a
-host/time-sensitive default is recomputed fresh rather than frozen into a shared
-template), and every other field is serialised the way pydantic would in JSON
-mode, so nested models, sets, datetimes, paths and enums all round-trip.
 """
 
 import json
@@ -41,7 +32,7 @@ _SUFFIXES = _YAML_SUFFIXES | {".json"}
 # Placeholder for a field whose default is produced by a ``default_factory``.
 # Such values are host/time-sensitive (a timestamped path, a CPU count) and must
 # not be frozen into a shared template, so the template shows this sentinel and
-# ``load_config_file`` strips it -- letting the factory run fresh on reload.
+# ``load_config_file`` strips it, letting the factory run fresh on reload.
 _DEFAULT_SENTINEL = "<DEFAULT: computed at runtime>"
 
 # How a required field's placeholder starts; a loaded file still holding one was
@@ -83,7 +74,7 @@ def load_config_file(path: Path) -> dict[str, Any]:
     unfilled = _placeholders(data)
     if unfilled:
         # An unedited template would otherwise run with the placeholder text as
-        # the value -- a path literally named "<REQUIRED: Output directory.>".
+        # the value, e.g. a path literally named "<REQUIRED: Output directory.>".
         msg = f"Config file {path} still needs values for: {', '.join(unfilled)}"
         raise ValueError(msg)
     return cast("dict[str, Any]", _strip_default_sentinels(data))
@@ -134,7 +125,7 @@ def unknown_config_keys(
     """Config-file keys ``model_cls`` would not accept (recursing into models).
 
     A field is accepted under exactly the keys Pydantic accepts for it (see
-    :func:`typantic._introspect.accepted_keys`) -- its alias, and its own name
+    :func:`typantic._introspect.accepted_keys`): its alias, and its own name
     only where the model allows that. Computed-field names are allowed too, so a
     written run-config (which serialises them) still round-trips. Anything else is
     almost certainly a typo Pydantic would drop in silence; a field's own name on
@@ -198,8 +189,8 @@ def canonicalize(model_cls: type[BaseModel], data: dict[str, Any]) -> dict[str, 
     A config file may spell a field any way Pydantic accepts (an alias, a choice,
     or the field's name), but a passed flag is re-nested under the canonical key
     (:func:`typantic._introspect.canonical_key_path`). Moving the file's spelling
-    onto that key first is what lets the flag override the file -- otherwise both
-    keys reach Pydantic and its alias-first precedence lets the file win. Where
+    onto that key first lets the flag override the file. Otherwise both keys
+    would reach Pydantic and its alias-first precedence would let the file win. Where
     the file spells a field twice, the spelling Pydantic would have used wins.
 
     Written-back computed fields are dropped: Pydantic recomputes them, and a
@@ -287,8 +278,8 @@ def build_config_template(
     JSON mode. Integer defaults render in decimal, so an octal mode such as
     ``0o775`` appears as ``509``.
 
-    Each entry is keyed by the field's *input key* -- its alias, where the model
-    needs one -- so the written file is one the model can actually load back.
+    Each entry is keyed by the field's *input key* (its alias, where the model
+    needs one), so the model can load the written file back.
 
     Args:
         model_cls: The settings model to template.
@@ -330,7 +321,7 @@ def _template_value(value: object) -> object:
     """``value`` as a template entry that loads back into the same value.
 
     A model instance (at any depth, including inside containers) is written field
-    by field under each field's canonical key -- the key a load accepts -- rather
+    by field under each field's canonical key, the key a load accepts, rather
     than dumped by serialization alias, which a load rejects. Everything else is
     serialised the way Pydantic would in JSON mode.
     """

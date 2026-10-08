@@ -1,10 +1,10 @@
 """Output-image gallery: find and thumbnail images a job produced.
 
-Generic by design — any image files a job writes into its folder (both the
-process and scheduler backends run with the job folder as the working
-directory, so a command's default relative output lands there) are shown as a
-thumbnail grid. An absolute ``output_folder`` in the submitted config, if the
-command has one, is scanned too. Thumbnails are generated with Pillow and cached
+Any image files a job writes into its folder are shown as a thumbnail grid.
+Both the process and scheduler backends run with the job folder as the working
+directory, so a command's default relative output lands there. An absolute
+``output_folder`` in the submitted config, if the command has one, is scanned
+too. Thumbnails are generated with Pillow and cached
 on disk; the walk is bounded and cycle-safe.
 
 The thumbnail cache lives in ``$TYPANTIC_WEB_CACHE_DIR/thumbnails``, else in
@@ -259,8 +259,9 @@ def _render(source: Path, width: int) -> bytes | None:
             small: Image.Image = img
             if img.mode.startswith("I;16"):
                 # A browser scales 16-bit samples down to 8 bits for display;
-                # convert("L") clips them, so a detector image or a 12-bit
-                # capture came out almost pure white. Pillow cannot shrink I;16.
+                # convert("L") would clip them, so a detector image or a 12-bit
+                # capture would come out almost pure white. Pillow cannot shrink
+                # I;16.
                 small = img.point(lambda value: value / 256).convert("L")
             elif img.mode in ("1", "P", "PA") or "transparency" in img.info:
                 # Pillow shrinks palette and bilevel images nearest-neighbour,

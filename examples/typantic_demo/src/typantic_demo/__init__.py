@@ -1,4 +1,4 @@
-"""A tiny demo ``typantic[web]`` app — a runnable example (and docs/screenshots).
+"""A tiny demo ``typantic[web]`` app: a runnable example for docs and screenshots.
 
 It defines two commands whose settings models become both a CLI (via
 ``add_command``) and a web form (via ``typantic web serve``). ``detect`` streams
@@ -37,7 +37,7 @@ def _setup_logging() -> None:
 
 
 class DetectSettings(BaseModel):
-    """Run a (simulated) detection over a folder of images."""
+    """Run a (simulated) detection over a batch of generated demo images."""
 
     output_dir: Annotated[
         Path,

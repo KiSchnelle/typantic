@@ -1,7 +1,7 @@
 """Per-user job store: a SQLite index over one folder per job.
 
 Each job owns a folder under ``~/.typantic/jobs/<job_id>/`` holding its
-artifacts — the submitted config, the launch request, and the captured log. The
+artifacts: the submitted config, the launch request, and the captured log. The
 root and every job folder are private to their owner (0700).
 Job and project *metadata* live in a single SQLite database
 (``index.sqlite3``) in the same root, which is the authoritative record and the
@@ -81,8 +81,8 @@ _JOB_COLUMNS = (
     "record_json",
 )
 
-# Columns a job query may sort on (allowlisted — the value is interpolated into
-# the SQL, so it must never come straight from user input).
+# Columns a job query may sort on. Allowlisted, because the value is
+# interpolated into the SQL and must never come straight from user input.
 _JOB_SORT_COLUMNS = {
     "created_at": "created_at",
     "status": "status",
@@ -95,7 +95,7 @@ def _escape_like(term: str) -> str:
     """Escape a search term so LIKE matches it literally.
 
     ``%`` and ``_`` are LIKE wildcards, and job names routinely contain
-    underscores -- unescaped, a search for ``job_1`` also matches ``job11``.
+    underscores. Unescaped, a search for ``job_1`` would also match ``job11``.
     """
     for char in ("\\", "%", "_"):
         term = term.replace(char, f"\\{char}")
@@ -106,7 +106,7 @@ class FolderNotRemovedError(RuntimeError):
     """A job is deleted, but files in its folder could not be removed.
 
     A container that ran as root leaves root-owned output behind, which its
-    user cannot delete; saying nothing left it all on disk, unseen.
+    user cannot delete. Saying nothing would leave it all on disk, unseen.
     """
 
     @classmethod
@@ -246,14 +246,6 @@ class JobStore:
             ).fetchone()
         return _record_from_row(row)
 
-    def list_records(self) -> list[JobRecord]:
-        """All job records, newest first (by creation time)."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT project_id, record_json FROM jobs ORDER BY created_at DESC",
-            ).fetchall()
-        return [record for row in rows if (record := _record_from_row(row)) is not None]
-
     def query_jobs(  # noqa: PLR0913 - a filter/sort/page query surface
         self,
         *,
@@ -272,7 +264,7 @@ class JobStore:
 
         Filters (all optional, ANDed): exact ``status`` / ``app`` / ``backend``,
         a ``project_id`` (or ``ungrouped`` for jobs filed under no project), and
-        ``search`` — a literal substring matched against a job's name, command,
+        ``search``, a literal substring matched against a job's name, command,
         title, or key, case-insensitively for ASCII (SQLite's ``LIKE`` folds no
         other alphabet). ``sort`` is one of ``created_at`` / ``status`` /
         ``name`` / ``app`` (anything else falls back to ``created_at``), ordered
@@ -397,7 +389,7 @@ class JobStore:
         """Delete a project **and all of its jobs** (their rows and folders).
 
         Returns ``True`` if the project existed. This does not stop a running
-        job's process — the launcher cancels first (see ``Launcher.delete_project``).
+        job's process; the launcher cancels first (see ``Launcher.delete_project``).
 
         Raises:
             FolderNotRemovedError: If some job folders could not be removed

@@ -1,6 +1,7 @@
 """PBS backend: submit via ``qsub``, track via ``qstat -x`` / ``qdel``.
 
-Targets PBS Pro (``qstat -x`` keeps finished jobs in the listing). The submit
+Targets PBS Pro (``qstat -x`` keeps finished jobs in the listing) and also
+reads Torque's spellings of the finished state and exit status. The submit
 script mirrors the Slurm backend's, translated to ``#PBS`` directives.
 """
 
@@ -17,7 +18,7 @@ from typantic.web.backends.scheduler import (
 )
 from typantic.web.models import JobStatus
 
-# PBS job_state letters we treat as running (E = exiting/epilogue).
+# PBS job_state letters treated as running (E = exiting/epilogue).
 _RUNNING_STATES = frozenset({"R", "E"})
 # Terminal letters (C = Torque complete, F = PBS Pro finished).
 _FINISHED_STATES = frozenset({"C", "F"})

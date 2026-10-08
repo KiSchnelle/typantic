@@ -367,8 +367,8 @@ def test_concurrent_first_loads_fetch_once(monkeypatch):
         calls.append(1)
         if len(calls) == 2:
             two_in_flight.set()
-        # Hold the first fetch until a second one starts (which the fix
-        # prevents) -- bounded, so the fixed code just proceeds.
+        # Hold the first fetch until a second one would start. The wait is
+        # bounded, so a single in-flight fetch just proceeds.
         two_in_flight.wait(timeout=0.5)
         return {"type": "object"}
 
@@ -454,8 +454,8 @@ def test_an_optional_discriminated_union_keeps_none():
 )
 def test_an_optional_choice_is_a_plain_select_left_empty(field, choices):
     # No null default: RJSF's select starts empty, the key is omitted on submit,
-    # and the model's own None default applies -- a null default outside the
-    # enum is what made AJV refuse to submit.
+    # and the model's own None default applies. A null default outside the
+    # enum would make AJV refuse to submit.
     prop = _props()[field]
     assert prop["enum"] == choices
     assert prop["type"] == "string"

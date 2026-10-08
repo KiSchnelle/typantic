@@ -45,7 +45,7 @@ def utf8(name: str) -> bool:
 
     Linux filesystems accept arbitrary bytes in a name; Python hands the
     undecodable ones back as lone surrogates (``'caf\udce9.png'``), which cannot
-    be encoded -- one such name would make a whole listing fail to serialise.
+    be encoded. One such name would make a whole listing fail to serialise.
     """
     try:
         name.encode("utf-8")

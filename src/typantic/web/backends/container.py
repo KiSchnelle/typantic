@@ -10,9 +10,9 @@ inside the container.
 
 The container runs with ``--init``: a process running as PID 1 ignores SIGTERM
 unless it installs a handler, so without an init in front of it a Python app
-shrugged off every cancel. It is also named ``typantic-<job id>``, so a cancel
-can stop it by name when the client process is gone -- the daemon owns the
-container, which then runs on.
+would ignore every cancel. It is also named ``typantic-<job id>``, so a cancel
+can stop it by name when the client process is gone, since the daemon owns the
+container and keeps it running.
 """
 
 import contextlib

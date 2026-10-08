@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`JobStore.list_records()`.** Nothing called it. `query_jobs()` returns the
+  same records, newest first, and skips malformed rows the same way.
+
+### Changed
+
+- **Docstrings and README match the code.** The `default_factory` mapping
+  rule, `config_file`'s `"only"` mode (it adds `--schema` too) and the README's
+  `typantic web serve` startup banner were out of date. The "No commands
+  discovered." warning is reworded.
+
 ### Fixed
 
 - **A long line in a job's log pushed the job's buttons off-screen.** The

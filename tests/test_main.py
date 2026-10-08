@@ -148,8 +148,8 @@ def test_run_context_wraps_a_clean_run(monkeypatch):
 
 
 def test_run_context_exits_when_the_command_crashes(monkeypatch):
-    # The context must be torn down even when the command raises -- that is the
-    # whole reason a caller passes one (flushing a logger, say).
+    # The context must be torn down even when the command raises (flushing a
+    # logger, say).
     events = []
     monkeypatch.setattr(sys, "argv", ["typantic"])
     with pytest.raises(SystemExit):

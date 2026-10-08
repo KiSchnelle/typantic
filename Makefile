@@ -14,12 +14,11 @@ wheel: frontend
 	uv build --wheel
 
 # The Python check gate (ruff + mypy + 100%-coverage pytest). Lints the whole
-# tree, exactly as CI does — linting only src/tests let an examples/ violation
-# pass locally and fail in CI.
+# tree, as CI does.
 check:
 	uv run ruff check .
 	# README code fences stay hand-aligned for readability; the formatter
-	# would unwrap them, so the check is scoped to src+tests like the siblings.
+	# would unwrap them, so the check is scoped to src+tests.
 	uv run ruff format --check src tests
 	uv run mypy src
 	uv run pytest -q

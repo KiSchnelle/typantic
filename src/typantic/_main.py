@@ -5,11 +5,6 @@ answers ``--version`` from package metadata *before* the (possibly heavy) comman
 modules are imported, hands shell-completion requests straight to Typer, runs the
 app inside a caller-supplied context, and logs the wall-clock duration of a real
 run. The app supplies only a loader for its Typer app and its distribution name.
-
-This is deliberately not what :mod:`typantic._cli` does for typantic's own entry
-point: that one declares ``--version`` as an eager Typer callback, which is
-simpler but only works because typantic has no expensive imports to defer. An app
-that pulls a heavy stack at import time needs the argv short-circuit here.
 """
 
 import logging
@@ -25,10 +20,10 @@ import typer
 
 _VERSION_TOKENS = {"--version", "-V", "version"}
 _HELP_FLAGS = {"--help", "-h", "help"}
-# Meta-operations (introspect / template, not a real run) that exit 0 without
-# doing work; the timing log is skipped for them so a machine-readable stdout
-# (e.g. the JSON Schema from --schema, which a web front-end parses) stays
-# uncontaminated.
+# Meta operations (introspection or a template, not a real run) exit 0 without
+# doing work. They skip the run context and the timing log, so machine-readable
+# stdout (e.g. the JSON Schema from --schema, which a web front-end parses)
+# stays clean.
 _META_FLAGS = _HELP_FLAGS | {"--schema", "--generate-config"}
 
 
@@ -52,12 +47,10 @@ def _is_autocompleting() -> bool:
     """Whether this is a shell-completion invocation (not a real run).
 
     Completion is driven by *this* program's ``_<PROG>_COMPLETE=complete_<shell>``
-    environment variable (typer 0.26 no longer injects a ``__complete`` token into
-    argv). ``<PROG>`` is derived exactly as Typer derives it, from ``argv[0]``'s
-    basename with only ``-`` mapped to ``_`` -- so a program named ``my.tool`` is
-    completed through ``_MY.TOOL_COMPLETE``, which is the variable Typer actually
-    reads (click alone would also map the ``.``). Deriving it any other way makes
-    the completion request fall through to a real run.
+    environment variable. ``<PROG>`` is derived exactly as Typer derives it, from
+    ``argv[0]``'s basename with only ``-`` mapped to ``_``. A program named
+    ``my.tool`` is therefore completed through ``_MY.TOOL_COMPLETE`` (click alone
+    would also map the ``.``).
     """
     prog_name = Path(sys.argv[0]).name
     completion_var = f"_{prog_name}_COMPLETE".replace("-", "_").upper()
@@ -81,7 +74,7 @@ def make_main(
         package_name: Installed distribution name, used to answer ``--version``
             from package metadata and to name the run logger.
         run_context: Optional zero-argument callable returning a context manager
-            to wrap the run in -- typically a logging setup that must be torn
+            to wrap the run in, typically a logging setup that must be torn
             down even when the command raises. Entered only for a real run: not
             for ``--version``, shell completion, or a meta flag (``--help``,
             ``--schema``, ``--generate-config``), whose stdout a context that logs
@@ -110,8 +103,6 @@ def make_main(
         module_logger = logging.getLogger(package_name)
         start_time = time.monotonic()
 
-        # A meta op prints machine-readable output (--schema's JSON, which a web
-        # front-end parses) and does no real work, so it runs without the context.
         with nullcontext() if run_context is None or invoked_meta else run_context():
             try:
                 # Inside the guard so an import error in the (heavy) command
@@ -120,11 +111,8 @@ def make_main(
                 app = load_app()
                 app()
             except SystemExit as system_exit:
-                # A non-zero code is an error status and propagates unchanged; a
-                # clean exit (0, or None from a bare sys.exit()) is swallowed so
-                # main() returns. invoked_meta only gates the timing log: a
-                # meta/introspection op (--help/--schema/--generate-config) exits
-                # 0 without a real run, so its machine-readable stdout stays clean.
+                # A non-zero code propagates unchanged; a clean exit (0, or None
+                # from a bare sys.exit()) is swallowed so main() returns.
                 if system_exit.code not in (0, None):
                     raise
                 if not invoked_meta:
@@ -140,6 +128,6 @@ def make_main(
                 module_logger.exception(
                     "An error occurred while running the application.",
                 )
-                raise SystemExit(1) from None  # non-zero exit on crash
+                raise SystemExit(1) from None
 
     return main

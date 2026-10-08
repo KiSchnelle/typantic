@@ -218,7 +218,7 @@ class TestSignature:
 
     def test_default_factory_is_left_to_pydantic(self) -> None:
         # Click never sees the factory: an unpassed flag never reaches the model,
-        # so Pydantic runs it -- once per run -- and Click must not run it again.
+        # so Pydantic runs it once per run and Click must not run it again.
         app, _ = _make_app(FullConfig)
         sig = inspect.signature(self._callback(app))
         assert sig.parameters["threshold"].default is None
@@ -276,7 +276,7 @@ class TestHelp:
 
 
 # ---------------------------------------------------------------------------
-# Tests: invocation & validation
+# Tests: invoking a command and validating its input
 # ---------------------------------------------------------------------------
 
 
@@ -454,7 +454,7 @@ class TupleAnnotatedModel(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Tests: Enum
+# Tests: Enum fields
 # ---------------------------------------------------------------------------
 
 
@@ -514,7 +514,7 @@ class TestEnum:
 
 
 # ---------------------------------------------------------------------------
-# Tests: Tuple
+# Tests: tuple fields
 # ---------------------------------------------------------------------------
 
 
@@ -609,7 +609,7 @@ class SelfTitledModel(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Tests: subpanels
+# Tests: subpanels option
 # ---------------------------------------------------------------------------
 
 
@@ -785,10 +785,9 @@ class TestLazyFactory:
 # ---------------------------------------------------------------------------
 # Tests: only what the user supplied reaches the model
 #
-# Default mode used to hand pydantic every Click-resolved default as though the
-# user had typed it: a secret default arrived as its mask, model_fields_set held
-# every field, "derive when unset" validators never fired, and nested factories
-# were bypassed. Both modes now pass only values the user actually supplied.
+# Both modes pass only values the user supplied, so a secret default is its real
+# value, model_fields_set holds only the given fields, "derive when unset"
+# validators fire, and nested factories run in Pydantic.
 # ---------------------------------------------------------------------------
 
 
@@ -978,7 +977,7 @@ class TestOnlySuppliedValues:
 
 
 # ---------------------------------------------------------------------------
-# Tests: SecretStr
+# Tests: SecretStr fields
 # ---------------------------------------------------------------------------
 
 
@@ -1321,7 +1320,7 @@ def test_numeric_bounds_ignores_non_ge_le_constraints() -> None:
         x: Annotated[int, annotated_types.Gt(0)]
 
     # A constraint that is neither Ge, Le, nor Interval (here exclusive Gt) is
-    # skipped -- Typer has no exclusive min/max, so it maps to no bound.
+    # skipped. Typer has no exclusive min/max, so it maps to no bound.
     assert _numeric_bounds(M.model_fields["x"]) == (None, None)
 
 
@@ -1362,8 +1361,8 @@ def test_extract_base_type_passes_through_parameterless_generics() -> None:
 # Tests: field aliases
 #
 # Pydantic populates by alias, not by field name. Keying the model kwargs off
-# the field name made an aliased field either unrunnable (required) or silently
-# defaulted (optional) -- the CLI accepted the flag and threw the value away.
+# the field name would make an aliased field either unrunnable (required) or
+# silently defaulted (optional), with the flag's value thrown away.
 # ---------------------------------------------------------------------------
 
 
@@ -1514,7 +1513,7 @@ class TestNestedDefaults:
         app, seen = _make_app(Cfg)
         result = runner.invoke(app, [])
         assert result.exit_code == 0
-        # Not localhost:5432 -- the field's own default must not be discarded.
+        # Not localhost:5432: the field's own default must not be discarded.
         assert (seen[0].db.host, seen[0].db.port) == ("prod", 9999)
 
     def test_help_advertises_the_outer_default(self) -> None:
@@ -1937,10 +1936,9 @@ def test_a_required_positional_is_filled_first_in_both_modes(make) -> None:
 # ---------------------------------------------------------------------------
 # Tests: field types a flag can carry
 #
-# Every type below used to crash Typer while it built the command group, which
-# took down every command of the app, --help included. Anything Pydantic can
-# parse from a string now reaches the model as that string; what a flag truly
-# cannot express is refused at decoration, naming the field.
+# Typer cannot build a command for any type below on its own. Anything Pydantic
+# can parse from a string reaches the model as that string; what a flag cannot
+# express is refused at decoration, naming the field.
 # ---------------------------------------------------------------------------
 
 Port = typing.NewType("Port", int)

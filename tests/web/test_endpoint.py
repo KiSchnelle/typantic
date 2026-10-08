@@ -62,7 +62,7 @@ def test_explicit_path():
 
 def test_async_handler_is_awaited():
     # Calling an async handler from a sync route returns the coroutine itself,
-    # which FastAPI cannot serialise -- a 500 instead of the result.
+    # which FastAPI cannot serialise (a 500 instead of the result).
     app = FastAPI()
 
     class Settings(BaseModel):
