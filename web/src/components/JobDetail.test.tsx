@@ -1,10 +1,11 @@
 // The job detail: a log shown once whatever its socket goes through, the app
 // version in its header, and the actions its settings allow.
 
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { beforeEach, expect, test, vi } from "vitest";
 import * as api from "../api.ts";
 import { REQUEST, job } from "../__fixtures__/jobs.ts";
+import { fakeTimersPerTest, settle } from "../__fixtures__/timers.ts";
 import JobDetail from "./JobDetail.tsx";
 
 vi.mock("../api.ts", async (importOriginal) => ({
@@ -29,8 +30,9 @@ class FakeSocket {
 
 let sockets: FakeSocket[] = [];
 
+fakeTimersPerTest();
+
 beforeEach(() => {
-  vi.useFakeTimers();
   sockets = [];
   vi.mocked(api.fetchJob).mockResolvedValue(job("j1"));
   vi.mocked(api.fetchJobCompat).mockResolvedValue({
@@ -47,14 +49,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-});
-
 async function mount(): Promise<void> {
   render(<JobDetail id="j1" />);
-  await act(() => vi.advanceTimersByTimeAsync(0)); // let the first fetches land
+  await settle(); // let the first fetches land
 }
 
 function shownLog(): string {
@@ -71,7 +68,7 @@ test("a reconnect shows the log once, not twice", async () => {
   });
   expect(shownLog()).toBe("line 1\n");
   act(() => sockets[0].onclose?.()); // the server restarted
-  await act(() => vi.advanceTimersByTimeAsync(1000));
+  await settle(1000);
   act(() => {
     sockets[1].onopen?.();
     sockets[1].deliver({ log: "line 1\n" });

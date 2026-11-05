@@ -1,7 +1,8 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as api from "../api.ts";
 import { job } from "../__fixtures__/jobs.ts";
+import { fakeTimersPerTest, settle } from "../__fixtures__/timers.ts";
 import { JOB_STATUSES } from "../types.ts";
 import type { JobPage, JobQuery } from "../types.ts";
 import Jobs from "./Jobs.tsx";
@@ -27,8 +28,9 @@ const NO_OUTPUT = {
   kept_reason: null,
 };
 
+fakeTimersPerTest();
+
 beforeEach(() => {
-  vi.useFakeTimers();
   vi.mocked(api.fetchJobRemoval).mockReset();
   vi.mocked(api.deleteJob).mockReset();
   vi.mocked(api.fetchJobRemoval).mockResolvedValue(NO_OUTPUT);
@@ -36,14 +38,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
-async function settle(): Promise<void> {
-  await act(() => vi.advanceTimersByTimeAsync(0));
-}
 
 test("losing the last job on the last page goes back a page", async () => {
   // Page 2 held one job; once it was deleted the list sat on an empty page 2
@@ -59,7 +55,7 @@ test("losing the last job on the last page goes back a page", async () => {
   await settle();
   expect(screen.getAllByLabelText("Delete job")).toHaveLength(1);
   total = 25; // the last job is gone
-  await act(() => vi.advanceTimersByTimeAsync(2000)); // the next poll sees it
+  await settle(2000); // the next poll sees it
   await settle();
   expect(screen.getAllByLabelText("Delete job")).toHaveLength(25);
   expect(screen.getByText("Page 1 / 1")).toBeTruthy();

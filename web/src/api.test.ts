@@ -2,7 +2,14 @@
 // job as {"end": ...}, so no log text can ever be mistaken for the end signal.
 
 import { expect, test, vi } from "vitest";
-import { deleteJob, fetchJob, isEndFrame, isResetFrame, logChunk } from "./api.ts";
+import {
+  deleteJob,
+  deleteProject,
+  fetchJob,
+  isEndFrame,
+  isResetFrame,
+  logChunk,
+} from "./api.ts";
 
 test("a log frame yields its text and is not the end", () => {
   const frame = JSON.stringify({ log: "step 1\n" });
@@ -49,6 +56,23 @@ test("an API error reads as its detail, not the JSON around it", async () => {
   );
   await expect(deleteJob("j1")).rejects.toThrow("409 Job j1 is deleted, but not its folder");
   vi.unstubAllGlobals();
+});
+
+test.each([
+  ["a job", () => deleteJob("j1", ["/out/a"]), "/api/jobs/j1"],
+  ["a project", () => deleteProject("p1", ["/out/a"]), "/api/projects/p1"],
+])("deleting %s sends the confirmed folders", async (_name, remove, url) => {
+  const fetchStub = vi.fn((_url: string, _init: RequestInit) =>
+    Promise.resolve(new Response(null, { status: 204 })),
+  );
+  vi.stubGlobal("fetch", fetchStub);
+  await remove();
+  vi.unstubAllGlobals();
+  const [sentUrl, init] = fetchStub.mock.calls[0];
+  expect(sentUrl).toBe(url);
+  expect(init.method).toBe("DELETE");
+  expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+  expect(JSON.parse(String(init.body))).toEqual({ output_folders: ["/out/a"] });
 });
 
 test("an error body that is not JSON is shown as it is", async () => {

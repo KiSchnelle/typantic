@@ -1,9 +1,10 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as api from "./api.ts";
 import App from "./App.tsx";
 import { useStore } from "./store.ts";
 import type { ApiMeta, CommandMeta } from "./types.ts";
+import { fakeTimersPerTest, settle } from "./__fixtures__/timers.ts";
 
 vi.mock("./api.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api.ts")>()),
@@ -32,8 +33,9 @@ const CATCHEM: ApiMeta = {
 
 const initial = useStore.getState();
 
+fakeTimersPerTest();
+
 beforeEach(() => {
-  vi.useFakeTimers();
   useStore.setState(initial, true);
   document.head.innerHTML = '<link rel="icon" type="image/svg+xml" href="/favicon.svg">';
   vi.mocked(api.fetchCommands).mockResolvedValue([]);
@@ -41,14 +43,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
   document.documentElement.removeAttribute("style");
 });
-
-async function settle(ms = 0): Promise<void> {
-  await act(() => vi.advanceTimersByTimeAsync(ms));
-}
 
 function sidebarMark(): string | null {
   return document.querySelector("aside img")?.getAttribute("src") ?? null;
