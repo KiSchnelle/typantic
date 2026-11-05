@@ -82,10 +82,7 @@ export default function App(): ReactNode {
         .then((c) => {
           if (!active) return;
           const previous = useStore.getState().commands;
-          const changed =
-            c.length !== previous.length ||
-            c.some((cmd, i) => cmd.key !== previous[i]?.key);
-          if (changed) setCommands(c);
+          if (JSON.stringify(c) !== JSON.stringify(previous)) setCommands(c);
           setConnected(true);
         })
         .catch(() => {

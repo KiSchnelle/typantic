@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as api from "./api.ts";
 import App from "./App.tsx";
 import { useStore } from "./store.ts";
-import type { ApiMeta } from "./types.ts";
+import type { ApiMeta, CommandMeta } from "./types.ts";
 
 vi.mock("./api.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api.ts")>()),
@@ -108,4 +108,41 @@ test("the main column may shrink, so a long log line scrolls in the log, not the
   render(<App />);
   await settle();
   expect(screen.getByRole("main").parentElement?.classList.contains("min-w-0")).toBe(true);
+});
+
+const COMMAND: CommandMeta = {
+  app: "app",
+  command: "run",
+  argv: ["app", "run"],
+  title: "Run",
+  description: "",
+  default_backend: "local",
+  key: "app/run",
+};
+
+test("a command edited on the server reaches the catalog under the same key", async () => {
+  vi.mocked(api.fetchMeta).mockResolvedValue(UNBRANDED);
+  vi.mocked(api.fetchCommands)
+    .mockResolvedValueOnce([COMMAND])
+    .mockResolvedValue([{ ...COMMAND, title: "Run faster", default_backend: "slurm" }]);
+  render(<App />);
+  await settle();
+  expect(screen.getByText("Run")).toBeTruthy();
+  await settle(5000);
+  expect(screen.getByText("Run faster")).toBeTruthy();
+  expect(useStore.getState().commands[0]?.default_backend).toBe("slurm");
+});
+
+test("a poll with the same commands leaves the store alone", async () => {
+  vi.mocked(api.fetchMeta).mockResolvedValue(UNBRANDED);
+  vi.mocked(api.fetchCommands).mockImplementation(() =>
+    Promise.resolve([{ ...COMMAND }]),
+  );
+  render(<App />);
+  await settle();
+  const first = useStore.getState().commands;
+  expect(first).toHaveLength(1);
+  await settle(5000);
+  expect(api.fetchCommands).toHaveBeenCalledTimes(2);
+  expect(useStore.getState().commands).toBe(first);
 });

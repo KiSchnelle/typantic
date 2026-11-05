@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An edited command reaches an open dashboard.** The catalog was updated only when the
+  list of command keys changed, so a server upgrade that kept the keys left the old title,
+  description and default backend on screen until a reload.
 - **The folder picker shows a folder it just created.** Going back up showed the cached
   listing without the new folder until Refresh.
 - **Double-clicking a folder in the picker no longer picks anything.** The first click had
