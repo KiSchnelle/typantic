@@ -181,8 +181,8 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   // Only auto-scroll the log when the user is already at the bottom.
   const stick = useRef(true);
 
-  // Every job action goes through here: a rejected Clone/Cancel/Delete/Restart
-  // used to be an unhandled rejection, so the button just did nothing at all.
+  // Every job action goes through here, so a rejected
+  // Clone/Cancel/Delete/Restart is shown as an error.
   const run = (action: Promise<unknown>): void => {
     setActionError(null);
     void action.catch((e: unknown) => setActionError(errorText(e)));
@@ -235,8 +235,7 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
   }, [id, runEpoch]);
 
   // Tail the log. The server closes the socket when the job ends, so a close is
-  // only worth retrying while the job is still live — without this a dropped
-  // connection left the log silently frozen with no hint anything was wrong.
+  // only worth retrying while the job is still live.
   useEffect(() => {
     setLog("");
     let active = true;

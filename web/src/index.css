@@ -215,8 +215,7 @@ pre,
   align-items: center;
   gap: 0.3rem;
   margin-top: 0.35rem;
-  /* A dark plate of the accent: with typantic's cyan, within a hair of the
-     #0e3b42 it used to be. */
+  /* A dark plate of the accent. */
   background: color-mix(in oklab, var(--color-brand-400) 41%, black);
   border: 1px solid color-mix(in oklab, var(--color-brand-400) 35%, transparent);
   color: var(--color-brand-300);
@@ -228,7 +227,7 @@ pre,
 }
 
 .rjsf-add-btn:hover {
-  background: color-mix(in oklab, var(--color-brand-400) 47%, black); /* was #124a54 */
+  background: color-mix(in oklab, var(--color-brand-400) 47%, black);
 }
 
 .rjsf-icon-btn {

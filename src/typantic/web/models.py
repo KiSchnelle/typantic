@@ -76,7 +76,7 @@ class JobStatus(StrEnum):
 
 
 TERMINAL_STATUSES = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED})
-"""The states a job never leaves (mirrored by the dashboard's own list)."""
+"""The states a job never leaves; ``gen_types.py`` emits this for the dashboard."""
 
 
 class LaunchRequest(BaseModel):

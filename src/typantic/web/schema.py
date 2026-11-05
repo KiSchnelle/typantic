@@ -73,7 +73,7 @@ class SchemaCache:
     def __init__(self) -> None:
         """Create an empty schema cache."""
         self._cache: dict[str, tuple[_Fingerprint | None, dict[str, object]]] = {}
-        self._lock = threading.Lock()  # guards the three fields below
+        self._lock = threading.Lock()  # guards _cache, _fetching and _generation
         self._fetching: dict[str, threading.Lock] = {}
         self._generation = 0
 

@@ -148,18 +148,9 @@ def is_model_type(tp: object) -> TypeGuard[type[BaseModel]]:
 
 
 def model_hints(model_cls: type[BaseModel]) -> dict[str, object]:
-    """Each field's annotation, as Pydantic already resolved it.
+    """Each field's annotation, as Pydantic resolved it when the class was built.
 
-    Pydantic resolves a model's annotations when the class is built, capturing the
-    namespace it was defined in. Re-resolving them with ``get_type_hints`` only
-    sees the *module* globals, so a model defined in a local scope under
-    ``from __future__ import annotations`` (where the annotation is a string)
-    raises ``NameError`` for a class Pydantic itself handles fine. Reading the
-    already-resolved annotation off each field sidesteps that entirely.
-
-    The ``Annotated`` metadata is not carried here. Pydantic moves it onto
-    ``FieldInfo.metadata``, which is where the constraint helpers read it from,
-    and :func:`extract_base_type` discards it anyway.
+    So a local-scope model works under ``from __future__ import annotations``.
     """
     return {name: field.annotation for name, field in model_cls.model_fields.items()}
 
@@ -291,14 +282,6 @@ def field_input_key(model_cls: type[BaseModel], name: str, field: FieldInfo) -> 
     ``extra`` and be dropped in silence, so the value must be re-keyed onto an
     accepted key before the model is built (see :func:`canonical_key_path`). The
     flag the user types is unaffected and always follows the field name.
-
-    Args:
-        model_cls: The model the value will be passed to.
-        name: The field name.
-        field: The field's metadata.
-
-    Returns:
-        The field's canonical key.
 
     Raises:
         ValueError: If every spelling Pydantic accepts is a nested ``AliasPath``,

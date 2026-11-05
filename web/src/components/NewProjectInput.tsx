@@ -7,7 +7,7 @@ import { cn, errorText } from "./ui.tsx";
 
 // The inline "type a name → Create" widget, shared by the Launch form and the
 // Projects tab. It owns its own name + error state so a failed create is always
-// surfaced — one of the two former copies silently swallowed the rejection.
+// surfaced.
 // `preventDefault` on Enter is harmless standalone and required inside the RJSF
 // <form> on the Launch screen (else Enter submits the launch form).
 export function NewProjectInput({

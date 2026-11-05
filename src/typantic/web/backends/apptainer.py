@@ -1,10 +1,12 @@
 """Apptainer backend: run a job inside an Apptainer/Singularity container.
 
 Apptainer has no daemon and runs the container in the foreground as the invoking
-user, with the host filesystem bind-mounted by default, so it behaves like the
-local backend with the command wrapped in ``apptainer exec <image>``. The job
-dir (and thus the ``--config`` path) is visible in the container without extra
-mounts.
+user, so it behaves like the local backend with the command wrapped in
+``apptainer exec <image>``. Apptainer binds only its default paths into the
+container: ``$HOME``, ``/tmp``, ``/var/tmp``, ``/proc``, ``/sys``, ``/dev`` and
+the working directory. The job runs in its own folder, so that folder (and thus
+the ``--config`` path) is visible without extra mounts. An input or output folder
+anywhere else has to be listed in ``binds``.
 """
 
 from pathlib import Path
@@ -26,7 +28,11 @@ class ApptainerOptions(BaseModel):
     )
     binds: list[str] = Field(
         default_factory=list,
-        description="Extra --bind mounts, each 'src' or 'src:dst'.",
+        description=(
+            "Extra --bind mounts, each 'src' or 'src:dst'. Apptainer's default binds "
+            "cover your home, /tmp and the job's folder, not the whole host, so list "
+            "any input or output folder elsewhere here."
+        ),
     )
 
 
@@ -39,7 +45,7 @@ class ApptainerBackend(ProcessBackend):
         self,
         argv: list[str],
         *,
-        job_dir: Path,  # noqa: ARG002 - host FS is bind-mounted by default
+        job_dir: Path,  # noqa: ARG002 - the working directory is bound by default
         backend_options: dict[str, Any],
     ) -> list[str]:
         """Wrap ``argv`` as ``apptainer exec <image> <argv>``."""
