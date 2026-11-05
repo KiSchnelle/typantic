@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A log client's messages no longer speed up the log poll.** Any frame a connected
+  client sent, such as a keep-alive ping, ended the one-second wait, so the server
+  queried the job's status (for a scheduler job, `sacct` or `squeue`) once per frame.
 - **A job from another host no longer has its pid reaped here.** Polling a finished
   job of another login node waited on the same pid number on this machine, which
   could take the exit status of an unrelated child of the server.

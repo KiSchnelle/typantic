@@ -496,14 +496,15 @@ async def _tail_log(
 
 
 async def _client_left(websocket: WebSocket, *, within: float) -> bool:
-    """Wait up to ``within`` seconds for the client to leave; whether it did."""
+    """Wait out ``within`` seconds, whatever the client sends; whether it left."""
     try:
         async with asyncio.timeout(within):
-            message = await websocket.receive()
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return True
     except TimeoutError:
         return False
-    kind: str = message["type"]
-    return kind == "websocket.disconnect"
 
 
 async def _drain(websocket: WebSocket, cursor: _LogCursor) -> None:

@@ -18,7 +18,7 @@ from typantic.web import api as api_mod
 from typantic.web import filesystem as fs_mod
 from typantic.web import launcher as launcher_mod
 from typantic.web import schema as schema_mod
-from typantic.web.api import _tail_log, make_api
+from typantic.web.api import _client_left, _tail_log, make_api
 from typantic.web.backends.base import Launched, PollResult
 from typantic.web.backends.slurm import SlurmBackend
 from typantic.web.models import Brand, CommandMeta, JobRecord, JobStatus
@@ -1000,6 +1000,43 @@ def test_the_tail_stops_when_its_client_leaves(tmp_path):
     asyncio.run(_tail_log(ws, SimpleNamespace(get=get), "j", log, interval=0))
     assert len(calls) == 1
     assert not ws.closed  # nothing to close: the client already has
+
+
+class _ChattyWS(FakeWS):
+    """A client that sends ``frames`` frames, then leaves (never, if ``None``)."""
+
+    def __init__(self, frames=None):
+        super().__init__()
+        self.frames = frames
+
+    async def receive(self):
+        await asyncio.sleep(0)
+        if self.frames == 0:
+            return {"type": "websocket.disconnect", "code": 1001}
+        if self.frames is not None:
+            self.frames -= 1
+        return {"type": "websocket.receive", "text": "ping"}
+
+
+def test_client_frames_do_not_shorten_the_poll(tmp_path):
+    # Each frame ended the wait early, turning a 1 s poll into a loop of
+    # scheduler queries for as long as the client kept sending.
+    log = tmp_path / "job.log"
+    log.write_text("")
+    calls = []
+
+    def get(_id):
+        calls.append(_id)
+        return _rec(JobStatus.RUNNING)
+
+    ws = _ChattyWS(frames=50)
+    asyncio.run(_tail_log(ws, SimpleNamespace(get=get), "j", log, interval=60))
+    assert len(calls) == 1
+
+
+def test_a_client_that_keeps_sending_still_lets_the_wait_end():
+    left = asyncio.run(_client_left(_ChattyWS(), within=0.01))
+    assert left is False
 
 
 def test_a_replaced_log_is_streamed_from_its_start(tmp_path):
