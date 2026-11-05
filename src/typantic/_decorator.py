@@ -69,15 +69,27 @@ class _Leaf(NamedTuple):
     container: Callable[[Iterable[Any]], object] | None = None
 
 
+class _NestedDefault(NamedTuple):
+    """A nested model's default: the instance, and the factory that made it, if any.
+
+    A run calls ``factory`` afresh, as Pydantic would; ``instance`` then only
+    seeded the flags and help.
+    """
+
+    path: tuple[str, ...]
+    instance: BaseModel
+    factory: Callable[[], object] | None
+
+
 class _Nested(NamedTuple):
     """What the collector needs to know about the nested models under a command.
 
-    ``defaults`` pairs each nested model's input-key path with the instance its
-    field defaults to (shallowest first); ``required`` lists the paths of nested
-    models that have no default at all.
+    ``defaults`` lists each nested model's input-key path with what its field
+    defaults to (shallowest first); ``required`` lists the paths of nested models
+    that have no default at all.
     """
 
-    defaults: list[tuple[tuple[str, ...], BaseModel]]
+    defaults: list[_NestedDefault]
     required: list[tuple[str, ...]]
 
 
@@ -201,8 +213,9 @@ def _collect(
     A passed flag under a defaulted nested model is written into a copy of that
     default instance, so the leaves not passed keep the values ``--help``
     advertised for them, unless ``base`` (a ``--config`` file) already defines
-    that model. A nested model with no default is given an empty mapping when its
-    parent is present, so its own field defaults build it.
+    that model. A default from a ``default_factory`` is made afresh for the run.
+    A nested model with no default is given an empty mapping when its parent is
+    present, so its own field defaults build it.
     """
     data = base
     passed = [
@@ -210,10 +223,12 @@ def _collect(
         for leaf in mapping
         if leaf.cli_name in kwargs and _value_is_explicit(ctx, leaf.cli_name)
     ]
-    for path, default in nested.defaults:
+    for path, instance, factory in nested.defaults:
         touched = any(leaf.key_path[: len(path)] == path for leaf in passed)
         if touched and not isinstance(_lookup(data, path), dict):
-            _set_nested(data, path, _raw_values(default))
+            default = factory() if factory is not None else instance
+            if isinstance(default, BaseModel):
+                _set_nested(data, path, _raw_values(default))
     for leaf in passed:
         value = kwargs[leaf.cli_name]
         if leaf.container is not None and isinstance(value, list | tuple):
@@ -593,7 +608,14 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
         if model is not None and model not in nested_seen:
             nested_default = _nested_default(field_info, override)
             if nested_default is not None:
-                nested.defaults.append((key_path, nested_default))
+                factory = field_info.default_factory if override is _MISSING else None
+                nested.defaults.append(
+                    _NestedDefault(
+                        key_path,
+                        nested_default,
+                        cast("Callable[[], object] | None", factory),
+                    ),
+                )
             elif field_info.is_required():
                 nested.required.append(key_path)
             sub = _build_params(
@@ -740,8 +762,9 @@ def _nested_default(field_info: FieldInfo, override: object) -> BaseModel | None
     own field defaults. A parent ``override`` takes precedence, since it is
     already the resolved value for this field.
 
-    A ``default_factory`` is evaluated once here, so its instance seeds the
-    flattened options too.
+    A ``default_factory`` is called here, once, when the command is decorated, so
+    its instance seeds the flattened options and their help. A run that passes a
+    flag under the field calls it again (see ``_collect``).
     """
     if override is not _MISSING:
         # A parent's default instance may hold None for an optional nested model.

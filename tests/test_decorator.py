@@ -888,6 +888,119 @@ class TestOnlySuppliedValues:
         assert runner.invoke(app, []).exit_code == 0
         assert seen[0].db.port != seen[1].db.port
 
+    def test_nested_factory_runs_per_run_when_a_nested_flag_is_passed(self) -> None:
+        made = iter(range(100))
+
+        class Stamped(BaseModel):
+            port: int = 1
+            stamp: int = 0
+
+        class Cfg(BaseModel):
+            db: Annotated[
+                Stamped,
+                Field(
+                    default_factory=lambda: Stamped(stamp=next(made)),
+                    kw_only=True,
+                ),
+            ]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["--db-port", "5"]).exit_code == 0
+        assert runner.invoke(app, ["--db-port", "6"]).exit_code == 0
+        assert [m.db.port for m in seen] == [5, 6]
+        assert seen[0].db.stamp == 1  # 0 went to the decoration call
+        assert seen[1].db.stamp == 2
+
+    def test_deeper_nested_factory_runs_per_run(self) -> None:
+        made = iter(range(100))
+
+        class Pool(BaseModel):
+            size: int = 1
+            stamp: int = 0
+
+        class Middle(BaseModel):
+            name: str = "m"
+            pool: Annotated[
+                Pool,
+                Field(
+                    default_factory=lambda: Pool(stamp=next(made)),
+                    kw_only=True,
+                ),
+            ]
+
+        class Cfg(BaseModel):
+            middle: Annotated[Middle, Field(default_factory=Middle, kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["--middle-pool-size", "5"]).exit_code == 0
+        assert runner.invoke(app, ["--middle-pool-size", "6"]).exit_code == 0
+        assert [m.middle.pool.size for m in seen] == [5, 6]
+        assert seen[0].middle.pool.stamp != seen[1].middle.pool.stamp
+
+    def test_nested_factory_under_a_required_parent_runs_per_run(self) -> None:
+        made = iter(range(100))
+
+        class Pool(BaseModel):
+            size: int = 1
+            stamp: int = 0
+
+        class Middle(BaseModel):
+            pool: Annotated[
+                Pool,
+                Field(
+                    default_factory=lambda: Pool(stamp=next(made)),
+                    kw_only=True,
+                ),
+            ]
+
+        class Cfg(BaseModel):
+            middle: Annotated[Middle, Field(kw_only=True)]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["--middle-pool-size", "5"]).exit_code == 0
+        assert runner.invoke(app, ["--middle-pool-size", "6"]).exit_code == 0
+        assert seen[0].middle.pool.stamp != seen[1].middle.pool.stamp
+
+    def test_a_parent_default_instance_is_not_replaced_by_a_field_factory(self) -> None:
+        made = iter(range(100))
+
+        class Pool(BaseModel):
+            size: int = 1
+            stamp: int = 0
+
+        class Middle(BaseModel):
+            pool: Annotated[
+                Pool,
+                Field(
+                    default_factory=lambda: Pool(stamp=next(made)),
+                    kw_only=True,
+                ),
+            ]
+
+        held = Middle()
+
+        class Cfg(BaseModel):
+            middle: Annotated[Middle, Field(kw_only=True)] = held
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["--middle-pool-size", "5"]).exit_code == 0
+        assert seen[0].middle.pool.stamp == held.pool.stamp
+
+    def test_nested_factory_that_stops_returning_a_model_leaves_it_to_pydantic(
+        self,
+    ) -> None:
+        calls = iter([_Database(port=1), None])
+
+        class Cfg(BaseModel):
+            db: Annotated[
+                _Database | None,
+                Field(default_factory=lambda: next(calls), kw_only=True),
+            ]
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["--db-port", "5"]).exit_code == 0
+        assert seen[0].db.port == 5
+
     def test_factory_runs_once_per_run_and_never_for_meta_flags(
         self,
         tmp_path: Path,

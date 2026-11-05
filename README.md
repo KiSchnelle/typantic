@@ -101,7 +101,7 @@ The `@pydantic_to_typer(Model)` decorator:
 5. Rewrites the function's `__signature__` so Typer sees the expanded parameters
 6. At call time, re-nests the values you actually passed (a flag, its environment variable, or a prompt, never a flag's default) and hands them to `Model(...)`, so Pydantic applies its own defaults and runs every validator
 
-Your function receives the **validated model instance**, exactly as `Model(**what_you_passed)` would build it: `model_fields_set` holds only the fields you gave, a validator that derives a value "when unset" fires, a `default_factory` runs once per run (with the validated data, if it takes it), and a secret's default is its real value. A flag passed under a nested model with a default instance keeps that instance's other values, the ones `--help` advertises.
+Your function receives the **validated model instance**, exactly as `Model(**what_you_passed)` would build it: `model_fields_set` holds only the fields you gave, a validator that derives a value "when unset" fires, a `default_factory` runs once per run (with the validated data, if it takes it), and a secret's default is its real value. A flag passed under a nested model with a default instance keeps that instance's other values, the ones `--help` advertises. A nested model's `default_factory` also runs once when the command is decorated (at import), to seed its flags and help. A flag passed under it goes into a fresh call's instance, so a value that differs per call can differ from the one `--help` showed.
 
 ## Features
 

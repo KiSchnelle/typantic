@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A project delete no longer orphans a job launched meanwhile.** A job launched or
   restarted into a project while it was being deleted lost its row and folder with
   its process still running. It now keeps running, ungrouped, and can be restarted.
+- **A nested model's `default_factory` runs per run when a nested flag is passed.**
+  With `--db-port 5`, the model's other fields kept the values from the factory call
+  made when the command was decorated, so a timestamp or counter stayed at its import
+  time value. That call still happens, to seed the flags and help.
 
 ### Removed
 
