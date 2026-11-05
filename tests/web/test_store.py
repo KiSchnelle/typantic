@@ -1,12 +1,11 @@
 import logging
-import os
 import sqlite3
-import stat
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from _helpers import file_mode, locked_folder
 
 from typantic.web import store as store_mod
 from typantic.web.models import JobRecord, JobStatus
@@ -310,17 +309,13 @@ def test_a_symlinked_jobs_root_keeps_its_spelling(tmp_path):
 # --- the store is private to its owner ---
 
 
-def _mode(path):
-    return stat.S_IMODE(path.stat().st_mode)
-
-
 def test_the_store_is_private(tmp_path):
     # A job's config can carry a secret the form took as plain text, and on a
     # shared login node the usual 022 umask would make it readable by everyone.
     store = JobStore(tmp_path / "jobs")
-    assert _mode(store.root) == 0o700
-    assert _mode(store.root / "index.sqlite3") == 0o600
-    assert _mode(store.create_job_dir("j")) == 0o700
+    assert file_mode(store.root) == 0o700
+    assert file_mode(store.root / "index.sqlite3") == 0o600
+    assert file_mode(store.create_job_dir("j")) == 0o700
 
 
 def test_an_existing_permissive_store_is_left_but_warned_about(tmp_path, caplog):
@@ -328,7 +323,7 @@ def test_an_existing_permissive_store_is_left_but_warned_about(tmp_path, caplog)
     root.mkdir()
     root.chmod(0o755)
     JobStore(root)
-    assert _mode(root) == 0o755
+    assert file_mode(root) == 0o755
     assert "chmod 700" in caplog.text
 
 
@@ -351,28 +346,24 @@ def test_search_takes_underscores_and_percents_literally(store):
 # --- a delete that cannot remove everything says so ---
 
 
-def _locked_output(store, job_id):
-    """A job folder holding a file its owner may not delete (a container's, say)."""
-    locked = store.create_job_dir(job_id) / "out"
-    locked.mkdir()
-    (locked / "result.txt").write_text("x")
-    locked.chmod(0o500)
-    return locked
+def _output(store, job_id):
+    """A job's output folder holding a file, to lock as a container's would be."""
+    output = store.create_job_dir(job_id) / "out"
+    output.mkdir()
+    (output / "result.txt").write_text("x")
+    return output
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
 def test_a_delete_that_leaves_files_behind_says_so(store):
     # A container that ran as root leaves root-owned output in the job folder,
     # which the delete must report rather than leave on disk unseen.
     store.save(_record("j1"))
-    locked = _locked_output(store, "j1")
-    try:
+    output = _output(store, "j1")
+    with locked_folder(output):
         with pytest.raises(FolderNotRemovedError, match=r"result\.txt"):
             store.delete("j1")
         assert store.load("j1") is None  # the job itself is gone
-        assert (locked / "result.txt").exists()
-    finally:
-        locked.chmod(0o700)
+        assert (output / "result.txt").exists()
 
 
 def _journal_mode(db: Path) -> str:

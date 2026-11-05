@@ -1,13 +1,13 @@
 import asyncio
 import io
 import json
-import os
 import pathlib
 import subprocess
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from _helpers import FakeBackend, installed_settings, locked_folder
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -19,7 +19,7 @@ from typantic.web import filesystem as fs_mod
 from typantic.web import launcher as launcher_mod
 from typantic.web import schema as schema_mod
 from typantic.web.api import _client_left, _tail_log, make_api
-from typantic.web.backends.base import Launched, PollResult
+from typantic.web.backends.base import PollResult
 from typantic.web.backends.slurm import SlurmBackend
 from typantic.web.models import Brand, CommandMeta, JobRecord, JobStatus
 from typantic.web.security import host_name
@@ -29,24 +29,6 @@ META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
 AUTH = {"Authorization": "Bearer secret"}
 LOCAL = "http://127.0.0.1:8791"
 BAD_AUTH = {"Authorization": "Bearer wrong"}
-
-
-class FakeBackend:
-    def __init__(self):
-        self.poll_result = PollResult(status=JobStatus.RUNNING)
-
-    def launch(self, argv, *, job_dir, log_path, backend_options):
-        log_path.write_text("hello\n")
-        return Launched(pid=4321, status=JobStatus.RUNNING)
-
-    def poll(self, record):
-        return self.poll_result
-
-    def cancel(self, record):
-        pass
-
-    def preview(self, argv, *, job_dir, log_path, backend_options):
-        return "PREVIEW"
 
 
 def _slurm():
@@ -311,17 +293,10 @@ def test_restart_missing(env):
 # --- settings from another version of the app ---
 
 
-def _installed_settings(monkeypatch, env, *names):
-    """The installed command's form has exactly these settings."""
-    schema = {"type": "object", "properties": {name: {} for name in names}}
-    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: schema)
-    env.launcher.schema_cache.clear()  # as installing that version would
-
-
 def test_job_compat_names_the_settings_the_installed_app_lacks(env, monkeypatch):
-    _installed_settings(monkeypatch, env, "end2end", "iou")
+    installed_settings(monkeypatch, env.launcher, "end2end", "iou")
     record = _launch(env, values={"end2end": None, "iou": 0.7})
-    _installed_settings(monkeypatch, env, "nms", "iou")  # end2end became nms
+    installed_settings(monkeypatch, env.launcher, "nms", "iou")  # end2end became nms
     resp = env.client.get(f"/api/jobs/{record['id']}/compat", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["unknown_settings"] == ["end2end"]
@@ -329,17 +304,17 @@ def test_job_compat_names_the_settings_the_installed_app_lacks(env, monkeypatch)
 
 
 def test_restarting_another_versions_settings_is_409(env, monkeypatch):
-    _installed_settings(monkeypatch, env, "end2end")
+    installed_settings(monkeypatch, env.launcher, "end2end")
     record = _launch(env, values={"end2end": None})
     _make_terminal(env, record)
-    _installed_settings(monkeypatch, env, "nms")
+    installed_settings(monkeypatch, env.launcher, "nms")
     resp = env.client.post(f"/api/jobs/{record['id']}/restart", headers=AUTH)
     assert resp.status_code == 409
     assert "end2end" in resp.json()["detail"]
 
 
 def test_launching_settings_the_installed_app_lacks_is_409(env, monkeypatch):
-    _installed_settings(monkeypatch, env, "nms")
+    installed_settings(monkeypatch, env.launcher, "nms")
     body = {"command_key": "app/run", "backend": "local", "values": {"end2end": 1}}
     resp = env.client.post("/api/launch", json=body, headers=AUTH)
     assert resp.status_code == 409
@@ -860,22 +835,18 @@ def test_cancelling_a_job_on_another_host_is_409(env, monkeypatch):
     assert "login99" in resp.json()["detail"]
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
 def test_a_delete_that_leaves_files_behind_is_409(env):
     record = _launch(env)
     locked = env.store.job_dir(record["id"]) / "out"
     locked.mkdir()
     (locked / "result.txt").write_text("x")
-    locked.chmod(0o500)
-    try:
+    with locked_folder(locked):
         resp = env.client.delete(f"/api/jobs/{record['id']}", headers=AUTH)
         assert resp.status_code == 409
         assert "could not be removed" in resp.json()["detail"]
         project = env.store.create_project("P")
         resp = env.client.delete(f"/api/projects/{project.id}", headers=AUTH)
         assert resp.status_code == 200
-    finally:
-        locked.chmod(0o700)
 
 
 # --- without a token, only this machine's own names are served (DNS rebinding) ---

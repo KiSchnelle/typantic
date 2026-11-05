@@ -3,11 +3,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from _helpers import FakeBackend as SharedFakeBackend
+from _helpers import locked_folder
 
 from typantic.web import _removal
 from typantic.web import launcher as launcher_mod
 from typantic.web._paths import expand
-from typantic.web.backends.base import Launched, PollResult
 from typantic.web.launcher import Launcher
 from typantic.web.models import CommandMeta, JobStatus, LaunchRequest
 from typantic.web.store import (
@@ -19,27 +20,8 @@ from typantic.web.store import (
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
 
 
-class FakeBackend:
+class FakeBackend(SharedFakeBackend):
     output_paths_are_local = True
-
-    def __init__(self):
-        self.cancelled = []
-        self.cancel_error = None
-
-    def launch(self, argv, *, job_dir, log_path, backend_options):
-        log_path.write_text("hello\n")
-        return Launched(pid=4321, status=JobStatus.RUNNING)
-
-    def poll(self, record):
-        return PollResult(status=JobStatus.RUNNING)
-
-    def cancel(self, record):
-        if self.cancel_error is not None:
-            raise self.cancel_error
-        self.cancelled.append(record.id)
-
-    def preview(self, argv, *, job_dir, log_path, backend_options):
-        return "PREVIEW"
 
 
 @pytest.fixture
@@ -679,12 +661,11 @@ def test_a_project_error_names_the_folder(wired, tmp_path):
     project = store.create_project("P")
     output = _output(tmp_path)
     _finish(store, _launch(launcher, output, project_id=project.id))
-    output.chmod(0o500)
-    try:
-        with pytest.raises(FolderNotRemovedError, match=str(output.resolve())):
-            _confirm_project(launcher, project.id)
-    finally:
-        output.chmod(0o700)
+    with (
+        locked_folder(output),
+        pytest.raises(FolderNotRemovedError, match=str(output.resolve())),
+    ):
+        _confirm_project(launcher, project.id)
     assert store.get_project(project.id) is None
 
 
@@ -695,13 +676,10 @@ def test_an_output_that_will_not_go_is_reported(wired, tmp_path):
     launcher, _, store = wired
     output = _output(tmp_path)
     record = _finish(store, _launch(launcher, output))
-    output.chmod(0o500)
-    try:
+    with locked_folder(output):
         with pytest.raises(FolderNotRemovedError, match="output folder"):
             _confirm(launcher, record.id)
         assert store.load(record.id) is None
-    finally:
-        output.chmod(0o700)
 
 
 def test_both_folders_failing_reports_both(wired, tmp_path):
@@ -711,16 +689,11 @@ def test_both_folders_failing_reports_both(wired, tmp_path):
     locked = store.job_dir(record.id) / "out"
     locked.mkdir()
     (locked / "x").write_text("x")
-    locked.chmod(0o500)
-    output.chmod(0o500)
-    try:
+    with locked_folder(locked, output):
         with pytest.raises(FolderNotRemovedError) as caught:
             _confirm(launcher, record.id)
         assert "output folder" in str(caught.value)
         assert "its folder" in str(caught.value)
-    finally:
-        locked.chmod(0o700)
-        output.chmod(0o700)
 
 
 def test_a_job_folder_that_will_not_go_still_removes_the_output(wired, tmp_path):
@@ -730,13 +703,10 @@ def test_a_job_folder_that_will_not_go_still_removes_the_output(wired, tmp_path)
     locked = store.job_dir(record.id) / "out"
     locked.mkdir()
     (locked / "x").write_text("x")
-    locked.chmod(0o500)
-    try:
+    with locked_folder(locked):
         with pytest.raises(FolderNotRemovedError, match="its folder"):
             _confirm(launcher, record.id)
         assert not output.exists()
-    finally:
-        locked.chmod(0o700)
 
 
 def test_remove_output_folder_missing_is_fine(tmp_path):

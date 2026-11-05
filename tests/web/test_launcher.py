@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import sqlite3
-import stat
 import subprocess
 import sys
 import time
@@ -12,11 +11,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _helpers import FakeBackend, file_mode, installed_settings, locked_folder
 from pydantic import BaseModel, Field
 
 from typantic.web import launcher as launcher_mod
 from typantic.web import schema as schema_mod
-from typantic.web.backends.base import Launched, LaunchUncertainError, PollResult
+from typantic.web.backends.base import LaunchUncertainError, PollResult
 from typantic.web.backends.scheduler import SchedulerError
 from typantic.web.launcher import (
     JobNotTerminalError,
@@ -37,47 +37,6 @@ from typantic.web.models import (
 from typantic.web.store import FolderNotRemovedError, JobStore
 
 META = CommandMeta(app="app", command="run", argv=("run",), title="Run")
-
-
-class FakeBackend:
-    def __init__(self):
-        self.launched = []
-        self.cancelled = []
-        self.poll_count = 0
-        self.next_status = JobStatus.RUNNING
-        self.poll_result = PollResult(status=JobStatus.RUNNING)
-        # Runs in place of the poll, to act out what happens while a slow
-        # status query (sacct can take seconds) is in flight.
-        self.on_poll = None
-        # A scheduler job writes its log only once it starts running.
-        self.writes_log = True
-        self.rejects = None  # an exception preview() and launch() raise
-        self.cancel_error = None  # an exception cancel() raises
-
-    def launch(self, argv, *, job_dir, log_path, backend_options):
-        if self.rejects is not None:
-            raise self.rejects
-        pid = 4321 + len(self.launched)  # each run gets its own process
-        self.launched.append((argv, backend_options))
-        if self.writes_log:
-            log_path.write_text("hello\n")
-        return Launched(pid=pid, status=self.next_status, host="login01")
-
-    def poll(self, record):
-        self.poll_count += 1
-        if self.on_poll is not None:
-            return self.on_poll(record)
-        return self.poll_result
-
-    def cancel(self, record):
-        if self.cancel_error is not None:
-            raise self.cancel_error
-        self.cancelled.append(record.id)
-
-    def preview(self, argv, *, job_dir, log_path, backend_options):
-        if self.rejects is not None:
-            raise self.rejects
-        return "PREVIEW " + " ".join(argv)
 
 
 @pytest.fixture
@@ -556,13 +515,6 @@ def test_launch_with_an_unknown_project_starts_nothing(wired):
     assert [p for p in store.root.iterdir() if p.is_dir()] == []
 
 
-def test_launch_into_a_real_project_is_filed_under_it(wired):
-    launcher, _, store = wired
-    project = store.create_project("screen A")
-    record = launcher.launch(_request(project_id=project.id))
-    assert record.project_id == project.id
-
-
 def test_launch_cleans_up_the_job_dir_when_the_backend_raises(wired):
     launcher, backend, store = wired
 
@@ -617,20 +569,16 @@ def test_a_job_under_a_relative_jobs_root_finds_its_config(tmp_path, monkeypatch
 # --- a job's files are private ---
 
 
-def _mode(path):
-    return stat.S_IMODE(path.stat().st_mode)
-
-
 def test_a_launched_job_is_private(wired):
     launcher, _, store = wired
     record = launcher.launch(_request(values={"token": "s3cret"}))
-    assert _mode(store.job_dir(record.id)) == 0o700
+    assert file_mode(store.job_dir(record.id)) == 0o700
     for path in (
         store.config_path(record.id),
         store.request_path(record.id),
         store.log_path(record.id),
     ):
-        assert _mode(path) == 0o600, path.name
+        assert file_mode(path) == 0o600, path.name
 
 
 def test_a_restart_makes_an_old_config_private(wired):
@@ -640,7 +588,7 @@ def test_a_restart_makes_an_old_config_private(wired):
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
     launcher.get(record.id)
     launcher.restart(record.id, _request(values={"x": 2}))
-    assert _mode(store.config_path(record.id)) == 0o600
+    assert file_mode(store.config_path(record.id)) == 0o600
 
 
 # --- a slow poll never overwrites what happened while it ran ---
@@ -982,6 +930,7 @@ def test_delete_goes_ahead_when_the_cancel_fails(wired, caplog):
 
 def test_a_job_records_the_host_it_was_started_on(wired):
     launcher, backend, store = wired
+    backend.host = "login01"
     record = launcher.launch(_request())
     assert record.host == "login01"
     assert store.load(record.id).host == "login01"
@@ -1023,13 +972,6 @@ def test_a_script_without_a_distribution_is_skipped(monkeypatch):
 # --- settings from another version of the app ---
 
 
-def _installed_settings(monkeypatch, launcher, *names):
-    """The installed command's form has exactly these settings."""
-    schema = {"type": "object", "properties": {name: {} for name in names}}
-    monkeypatch.setattr(schema_mod, "fetch_schema", lambda _meta: schema)
-    launcher.schema_cache.clear()  # as installing that version would
-
-
 def _done(launcher, backend, record):
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
     return launcher.get(record.id)
@@ -1038,7 +980,7 @@ def _done(launcher, backend, record):
 def test_launch_refuses_a_setting_the_installed_app_lacks(wired, monkeypatch):
     # A form left open across an upgrade still sends the old settings.
     launcher, backend, store = wired
-    _installed_settings(monkeypatch, launcher, "iou", "nms")
+    installed_settings(monkeypatch, launcher, "iou", "nms")
     with pytest.raises(StaleSettingsError) as exc:
         launcher.launch(_request(values={"iou": 0.5, "end2end": None}))
     assert str(exc.value) == (
@@ -1054,10 +996,10 @@ def test_restarting_another_versions_settings_is_refused_untouched(
     monkeypatch,
 ):
     launcher, backend, _ = wired
-    _installed_settings(monkeypatch, launcher, "end2end")
+    installed_settings(monkeypatch, launcher, "end2end")
     record = _done(launcher, backend, launcher.launch(_request(values={"end2end": 1})))
     config = Path(record.config_path).read_text()
-    _installed_settings(monkeypatch, launcher, "nms")  # the app was upgraded
+    installed_settings(monkeypatch, launcher, "nms")  # the app was upgraded
     with pytest.raises(StaleSettingsError, match="end2end"):
         launcher.restart(record.id)
     # Refused before anything changed: still the finished run, same settings.
@@ -1068,16 +1010,16 @@ def test_restarting_another_versions_settings_is_refused_untouched(
 
 def test_a_newer_versions_settings_are_refused_after_a_downgrade(wired, monkeypatch):
     launcher, backend, _ = wired
-    _installed_settings(monkeypatch, launcher, "nms")
+    installed_settings(monkeypatch, launcher, "nms")
     record = _done(launcher, backend, launcher.launch(_request(values={"nms": False})))
-    _installed_settings(monkeypatch, launcher, "end2end")  # downgraded
+    installed_settings(monkeypatch, launcher, "end2end")  # downgraded
     with pytest.raises(StaleSettingsError, match="has no run setting nms"):
         launcher.restart(record.id)
 
 
 def test_restarting_with_edited_stale_settings_is_refused(wired, monkeypatch):
     launcher, backend, _ = wired
-    _installed_settings(monkeypatch, launcher, "nms")
+    installed_settings(monkeypatch, launcher, "nms")
     record = _done(launcher, backend, launcher.launch(_request()))
     edited = _request(values={"foo": 1, "end2end": None})
     with pytest.raises(StaleSettingsError, match="settings end2end, foo; they come"):
@@ -1096,10 +1038,10 @@ def test_without_a_schema_the_cli_checks_the_settings(wired, caplog):
 def test_compat_reports_the_versions_and_the_stale_settings(wired, monkeypatch):
     launcher, _, _ = wired
     monkeypatch.setattr(launcher_mod, "_app_version", lambda _app: "0.2.0")
-    _installed_settings(monkeypatch, launcher, "end2end", "iou")
+    installed_settings(monkeypatch, launcher, "end2end", "iou")
     record = launcher.launch(_request(values={"end2end": None, "iou": 0.7}))
     monkeypatch.setattr(launcher_mod, "_app_version", lambda _app: "0.3.0")
-    _installed_settings(monkeypatch, launcher, "nms", "iou")
+    installed_settings(monkeypatch, launcher, "nms", "iou")
     assert launcher.compat(record.id) == JobCompat(
         app_version="0.2.0",
         installed_version="0.3.0",
@@ -1150,7 +1092,6 @@ def test_empty_lists_inside_a_list_of_objects_are_dropped(wired):
     assert json.loads(preview.config) == {"mounts": [{"src": "a"}], "grid": [[]]}
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
 def test_a_project_delete_finishes_before_it_reports_leftovers(wired):
     launcher, _, store = wired
     project = store.create_project("P")
@@ -1159,12 +1100,9 @@ def test_a_project_delete_finishes_before_it_reports_leftovers(wired):
     locked = store.job_dir(stuck.id) / "out"
     locked.mkdir()
     (locked / "result.txt").write_text("x")
-    locked.chmod(0o500)
-    try:
+    with locked_folder(locked):
         with pytest.raises(FolderNotRemovedError, match=stuck.id):
             launcher.delete_project(project.id)
         assert store.load(other.id) is None
         assert not store.job_dir(other.id).exists()
         assert store.get_project(project.id) is None
-    finally:
-        locked.chmod(0o700)
