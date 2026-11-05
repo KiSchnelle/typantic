@@ -22,7 +22,7 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
-from typantic.web._files import write_private
+from typantic.web._files import read_json_mapping, write_private
 from typantic.web._paths import is_dir, resolved
 from typantic.web._removal import (
     FolderId,
@@ -103,15 +103,6 @@ def _clean_form_value(value: object) -> object:
     if isinstance(value, list):
         return [_clean_form_value(item) for item in value]
     return value
-
-
-def _read_values(config_path: str) -> dict[str, Any]:
-    """Load a job's submitted values, tolerating a missing/corrupt config file."""
-    try:
-        data = json.loads(Path(config_path).read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _read_or_none(path: Path) -> bytes | None:
@@ -830,7 +821,7 @@ class Launcher:
         """Reload a job's full launch request, reconstructing it if not stored."""
         try:
             return LaunchRequest.model_validate_json(
-                self.store.request_path(record.id).read_text(),
+                self.store.request_path(record.id).read_bytes(),
             )
         except (OSError, ValidationError):
             logger.warning(
@@ -843,7 +834,7 @@ class Launcher:
                 backend=record.backend,
                 name=record.name,
                 project_id=record.project_id,
-                values=_read_values(record.config_path),
+                values=read_json_mapping(Path(record.config_path)) or {},
             )
 
     def restart(

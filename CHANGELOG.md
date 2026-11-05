@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`GET /api/jobs/{id}/removal` and `GET /api/projects/{id}/removal`** say which
   output folders a delete may remove (`JobRemoval`).
 
+### Fixed
+
+- **Job files are read as UTF-8, whatever the locale.** Under a non-UTF-8 locale,
+  Clone and restart got a job's non-ASCII values back mangled.
+- **A corrupt job file no longer fails the request.** A `launch_request.json` with
+  invalid bytes made `GET /api/jobs/{id}/request`, compatibility checks and restart
+  answer 500; they now rebuild the request from the job's config, and a config that
+  cannot be read counts as empty.
+
 ### Removed
 
 - **`JobStore.list_records()`.** Nothing called it. `query_jobs()` returns the

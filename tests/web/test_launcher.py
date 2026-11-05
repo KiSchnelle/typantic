@@ -3,6 +3,8 @@ import logging
 import os
 import sqlite3
 import stat
+import subprocess
+import sys
 import time
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -452,17 +454,57 @@ def test_backends_meta_with_options(tmp_path, monkeypatch):
     assert schema["properties"]["image"]["type"] == "string"
 
 
-def test_read_values_helper(tmp_path):
-    assert launcher_mod._read_values(str(tmp_path / "nope.json")) == {}
-    bad = tmp_path / "bad.json"
-    bad.write_text("{not json")
-    assert launcher_mod._read_values(str(bad)) == {}
-    arr = tmp_path / "arr.json"
-    arr.write_text("[1, 2]")
-    assert launcher_mod._read_values(str(arr)) == {}
-    ok = tmp_path / "ok.json"
-    ok.write_text('{"a": 1}')
-    assert launcher_mod._read_values(str(ok)) == {"a": 1}
+def test_request_file_with_invalid_bytes_falls_back_to_the_config(wired, caplog):
+    launcher, _, store = wired
+    record = launcher.launch(_request(values={"x": 1}))
+    store.request_path(record.id).write_bytes(b"\xff\xfe garbage")
+
+    reloaded = launcher.request_for(record.id)
+
+    assert reloaded.values == {"x": 1}
+    assert "no readable launch request" in caplog.text
+
+
+@pytest.mark.parametrize("config", [b'{"a": "\xff"}', b"[" * 100000])
+def test_rebuilding_a_request_tolerates_a_corrupt_config(wired, config):
+    launcher, _, store = wired
+    record = launcher.launch(_request(values={"x": 1}))
+    store.request_path(record.id).unlink()
+    store.config_path(record.id).write_bytes(config)
+
+    assert launcher.request_for(record.id).values == {}
+
+
+def test_a_request_round_trips_under_a_non_utf8_locale(tmp_path):
+    script = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from typantic.web.launcher import Launcher
+from typantic.web.models import LaunchRequest
+from typantic.web.store import JobStore
+
+name = "Gr\\u00f6\\u00dfe"
+store = JobStore(Path(sys.argv[1]))
+job = "j1"
+store.create_job_dir(job)
+request = LaunchRequest(command_key="app/run", backend="local", name=name)
+store.request_path(job).write_bytes(request.model_dump_json().encode())
+record = SimpleNamespace(id=job)
+sys.exit(Launcher(store, backends={})._request_from_record(record).name != name)
+"""
+    done = subprocess.run(  # noqa: S603 - this interpreter, with a fixed script
+        [sys.executable, "-c", script, str(tmp_path / "jobs")],
+        env={
+            **os.environ,
+            "LC_ALL": "C",
+            "PYTHONUTF8": "0",
+            "PYTHONCOERCECLOCALE": "0",
+        },
+        capture_output=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr.decode()
 
 
 def test_launch_with_an_unknown_project_starts_nothing(wired):

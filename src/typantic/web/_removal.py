@@ -9,13 +9,13 @@ Folders are compared by identity (device and inode), never by spelling, as one
 folder can have many: a case-insensitive filesystem, a firmlink.
 """
 
-import json
 import os
 import socket
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+from typantic.web._files import read_json_mapping
 from typantic.web._paths import expand, is_dir, resolved
 from typantic.web.models import JobRecord, JobRemoval
 
@@ -70,12 +70,8 @@ def overlapping(first: FolderId, second: FolderId) -> bool:
 
 def _configured_value(record: JobRecord) -> str | None:
     """The ``output_folder`` string in a job's submitted config, if it has one."""
-    try:
-        config = json.loads(Path(record.config_path).read_text(encoding="utf-8"))
-    # ValueError covers JSON and decoding errors, RecursionError absurd nesting.
-    except (OSError, ValueError, RecursionError):
-        return None
-    output = config.get("output_folder") if isinstance(config, dict) else None
+    config = read_json_mapping(Path(record.config_path))
+    output = config.get("output_folder") if config is not None else None
     return output if isinstance(output, str) else None
 
 

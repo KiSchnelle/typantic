@@ -264,6 +264,13 @@ def test_delete_job(env):
     assert env.client.delete("/api/jobs/missing", headers=AUTH).status_code == 404
 
 
+def test_job_request_with_invalid_bytes_still_answers(env):
+    record = _launch(env)
+    env.store.request_path(record["id"]).write_bytes(b"\xff\xfe garbage")
+    resp = env.client.get(f"/api/jobs/{record['id']}/request", headers=AUTH)
+    assert resp.status_code == 200
+
+
 def test_job_request(env):
     record = _launch(env, name="orig")
     resp = env.client.get(f"/api/jobs/{record['id']}/request", headers=AUTH)
