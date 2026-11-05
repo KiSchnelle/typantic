@@ -351,6 +351,37 @@ def test_delete_project_skips_cancel_for_terminal_job(wired):
     assert store.load(rec.id) is None
 
 
+def test_a_job_launched_during_a_project_delete_survives_ungrouped(wired, monkeypatch):
+    launcher, backend, store = wired
+    project = store.create_project("P")
+    delete_jobs = launcher._delete_jobs
+    late = []
+
+    def then_launch(*args):
+        problems = delete_jobs(*args)
+        late.append(launcher.launch(_request(project_id=project.id, values={"x": 1})))
+        return problems
+
+    monkeypatch.setattr(launcher, "_delete_jobs", then_launch)
+
+    assert launcher.delete_project(project.id) is True
+
+    survivor = store.load(late[0].id)
+    assert survivor is not None
+    assert survivor.project_id is None
+    assert store.job_dir(survivor.id).exists()
+    assert backend.cancelled == []
+    assert store.get_project(project.id) is None
+
+    # Its stored request still names the deleted project, which must not stop it.
+    assert launcher.request_for(survivor.id).project_id is None
+    backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
+    assert launcher.get(survivor.id).is_terminal
+    restarted = launcher.restart(survivor.id)
+    assert restarted.project_id is None
+    assert json.loads(store.config_path(survivor.id).read_text()) == {"x": 1}
+
+
 def test_delete_project_unknown_backend(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
     store = JobStore(tmp_path / "jobs")
@@ -490,7 +521,7 @@ job = "j1"
 store.create_job_dir(job)
 request = LaunchRequest(command_key="app/run", backend="local", name=name)
 store.request_path(job).write_bytes(request.model_dump_json().encode())
-record = SimpleNamespace(id=job)
+record = SimpleNamespace(id=job, project_id=None)
 sys.exit(Launcher(store, backends={})._request_from_record(record).name != name)
 """
     done = subprocess.run(  # noqa: S603 - this interpreter, with a fixed script

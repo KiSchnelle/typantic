@@ -159,15 +159,14 @@ def test_projects_crud(store):
     assert store.delete_project(proj.id) is False
 
 
-def test_delete_project_deletes_its_jobs(store):
+def test_delete_project_leaves_its_jobs_ungrouped(store):
     proj = store.create_project("P")
     store.create_job_dir("j1")
     store.save(_record("j1", project_id=proj.id))
-    store.save(_record("j2"))  # ungrouped, must survive
     assert store.delete_project(proj.id) is True
-    assert store.load("j1") is None
-    assert not store.job_dir("j1").exists()
-    assert store.load("j2") is not None
+    assert store.get_project(proj.id) is None
+    assert store.load("j1").project_id is None
+    assert store.job_dir("j1").exists()
     assert store.delete_project(proj.id) is False
 
 
@@ -372,22 +371,6 @@ def test_a_delete_that_leaves_files_behind_says_so(store):
             store.delete("j1")
         assert store.load("j1") is None  # the job itself is gone
         assert (locked / "result.txt").exists()
-    finally:
-        locked.chmod(0o700)
-
-
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
-def test_a_project_delete_that_leaves_files_behind_says_so(store):
-    project = store.create_project("P")
-    store.save(_record("j1", project_id=project.id))
-    store.save(_record("j2", project_id=project.id))
-    locked = _locked_output(store, "j1")
-    try:
-        with pytest.raises(FolderNotRemovedError, match="j1"):
-            store.delete_project(project.id)
-        assert store.get_project(project.id) is None
-        assert store.load("j1") is None
-        assert store.load("j2") is None
     finally:
         locked.chmod(0o700)
 

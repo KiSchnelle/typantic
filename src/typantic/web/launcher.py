@@ -635,6 +635,9 @@ class Launcher:
     ) -> bool:
         """Delete a project and all its jobs, cancelling any still active.
 
+        A job launched into the project after its jobs were listed is not one of
+        them: it keeps running, ungrouped.
+
         Args:
             project_id: The project.
             output_folders: The output folders confirmed for deletion, as
@@ -820,9 +823,11 @@ class Launcher:
     def _request_from_record(self, record: JobRecord) -> LaunchRequest:
         """Reload a job's full launch request, reconstructing it if not stored."""
         try:
-            return LaunchRequest.model_validate_json(
+            stored = LaunchRequest.model_validate_json(
                 self.store.request_path(record.id).read_bytes(),
             )
+            # The record's column is the authority: its project may be gone by now.
+            return stored.model_copy(update={"project_id": record.project_id})
         except (OSError, ValidationError):
             logger.warning(
                 "Job %s has no readable launch request; rebuilding it from the "

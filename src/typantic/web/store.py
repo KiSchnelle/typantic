@@ -109,14 +109,6 @@ class FolderNotRemovedError(RuntimeError):
     user cannot delete. Saying nothing would leave it all on disk, unseen.
     """
 
-    @classmethod
-    def for_jobs(cls, job_ids: list[str]) -> "FolderNotRemovedError":
-        """The error for several jobs whose folders were left behind."""
-        return cls(
-            f"The jobs are deleted, but the folders of {', '.join(job_ids)} could "
-            f"not be removed completely. {_ROOT_OWNED_HINT}"
-        )
-
 
 _ROOT_OWNED_HINT = (
     "Files a container wrote as root need removing with root rights (sudo rm -r)."
@@ -413,32 +405,14 @@ class JobStore:
         return Project.model_validate(dict(row)) if row is not None else None
 
     def delete_project(self, project_id: str) -> bool:
-        """Delete a project **and all of its jobs** (their rows and folders).
+        """Delete a project's row, leaving any job still in it ungrouped.
 
-        Returns ``True`` if the project existed. This does not stop a running
-        job's process; the launcher cancels first (see ``Launcher.delete_project``).
-
-        Raises:
-            FolderNotRemovedError: If some job folders could not be removed
-                completely; everything else is deleted by then.
+        Returns ``True`` if the project existed. ``Launcher.delete_project`` is what
+        deletes a project together with its jobs, stopping them first.
         """
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT id FROM jobs WHERE project_id = ?",
-                (project_id,),
-            ).fetchall()
-        left: list[str] = []
-        for row in rows:
-            try:
-                self.delete(row["id"])
-            except FolderNotRemovedError:
-                left.append(row["id"])
-        with self._connect() as conn:
             cursor = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-            existed = cursor.rowcount > 0
-        if left:
-            raise FolderNotRemovedError.for_jobs(left)
-        return existed
+            return cursor.rowcount > 0
 
     def grouped_history(self) -> History:
         """Return job history: jobs grouped by project, plus ungrouped singles."""
