@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import { FolderKanban, FolderPlus, Search, Trash2 } from "lucide-react";
-import { deleteProject, fetchHistory, fetchProjects } from "../api.ts";
+import { deleteProject, fetchHistory } from "../api.ts";
 import { startPolling } from "../poll.ts";
 import { useStore } from "../store.ts";
 import type { History, JobRecord, Project } from "../types.ts";
@@ -35,7 +35,7 @@ function JobRow({ job }: { job: JobRecord }): ReactNode {
 }
 
 export default function Projects(): ReactNode {
-  const setProjects = useStore((s) => s.setProjects);
+  const refreshProjects = useStore((s) => s.refreshProjects);
   const [history, setHistory] = useState<History | null>(null);
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState(false);
@@ -47,11 +47,6 @@ export default function Projects(): ReactNode {
   const reloadHistory = () => {
     void fetchHistory()
       .then(setHistory)
-      .catch(() => undefined);
-  };
-  const refreshProjects = () => {
-    void fetchProjects()
-      .then(setProjects)
       .catch(() => undefined);
   };
 

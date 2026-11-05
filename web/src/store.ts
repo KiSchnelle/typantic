@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { fetchProjects } from "./api.ts";
 import type {
   ApiMeta,
   BackendMeta,
@@ -36,6 +37,8 @@ interface State {
   setBackends: (backends: BackendMeta[]) => void;
   setCommands: (commands: CommandMeta[]) => void;
   setProjects: (projects: Project[]) => void;
+  addProject: (project: Project) => void;
+  refreshProjects: () => void;
   selectCommand: (key: string | null) => void;
   cloneFrom: (request: LaunchRequest) => void;
   editForRestart: (id: string, request: LaunchRequest) => void;
@@ -79,6 +82,18 @@ export const useStore = create<State>((set) => ({
   setBackends: (backends) => set({ backends }),
   setCommands: (commands) => set({ commands }),
   setProjects: (projects) => set({ projects }),
+  // A poll may have brought the new project already.
+  addProject: (project) =>
+    set((state) => ({
+      projects: [...state.projects.filter((p) => p.id !== project.id), project],
+    })),
+  // An eager refresh after a change. A failed one is not reported: App's poll
+  // brings the list soon after.
+  refreshProjects: () => {
+    void fetchProjects()
+      .then((projects) => set({ projects }))
+      .catch(() => undefined);
+  },
   // Picking a command from the catalog starts a fresh form (drop any prefill /
   // restart mode).
   selectCommand: (key) =>

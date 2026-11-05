@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A project created on the launch form is selected at once.** The select read "No
+  project" until the list refetch came back, or until the next poll if that refetch failed,
+  and a failed refetch was an unhandled promise rejection.
 - **The launch form, the new-project box and the folder picker show errors without a
   JavaScript prefix.** They read `Error: 409 ...` where the rest of the dashboard reads
   `409 ...`.

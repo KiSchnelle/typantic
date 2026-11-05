@@ -5,7 +5,6 @@ import type { IChangeEvent } from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
 import { ArrowLeft, Eye, FolderPlus, Rocket, RotateCcw } from "lucide-react";
 import {
-  fetchProjects,
   fetchSchema,
   launchJob,
   previewLaunch,
@@ -114,7 +113,8 @@ export default function Launch(): ReactNode {
     commands,
     backends,
     projects,
-    setProjects,
+    addProject,
+    refreshProjects,
     selectedCommandKey,
     selectCommand,
     openJob,
@@ -301,9 +301,10 @@ export default function Launch(): ReactNode {
               {creatingProject ? (
                 <NewProjectInput
                   onCreated={(p) => {
+                    addProject(p);
                     setProjectId(p.id);
                     setCreatingProject(false);
-                    void fetchProjects().then(setProjects);
+                    refreshProjects();
                   }}
                   onCancel={() => setCreatingProject(false)}
                 />
