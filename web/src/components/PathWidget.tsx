@@ -29,6 +29,13 @@ const LAST_DIR_KEY = "typantic-web:last-dir";
 // it. Shared across every picker on the page.
 const dirCache = new Map<string, FsListing>();
 
+// Drops a directory's listing under every spelling it was asked for.
+function forgetListing(path: string): void {
+  for (const [key, cached] of dirCache) {
+    if (cached.path === path) dirCache.delete(key);
+  }
+}
+
 function readLastDir(): string | undefined {
   try {
     return localStorage.getItem(LAST_DIR_KEY) ?? undefined;
@@ -109,6 +116,8 @@ function DirBrowser({
     if (!name || !listing) return;
     createDir(listing.path, name)
       .then((data) => {
+        forgetListing(listing.path);
+        if (data.parent) forgetListing(data.parent);
         dirCache.set(data.path, data);
         rememberDir(data.path);
         setListing(data);
@@ -253,7 +262,6 @@ function DirBrowser({
                   className="dir-row"
                   style={rowStyle(top)}
                   onClick={() => load(full)}
-                  onDoubleClick={() => onPick(full)}
                 >
                   <Folder size={15} className="text-brand-500" />
                   <span>{entry.name}</span>

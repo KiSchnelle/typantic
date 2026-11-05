@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The folder picker shows a folder it just created.** Going back up showed the cached
+  listing without the new folder until Refresh.
+- **Double-clicking a folder in the picker no longer picks anything.** The first click had
+  already opened the folder, so the second could land on another row and pick the wrong
+  one. "Use this folder" is the way to pick.
 - **Late launch and preview replies stay on the form that asked.** Leaving a form during a
   preview could open that preview on the next command's form, and a launch in flight kept
   the next form's button stuck on "Launching…" or put its failure there, where selecting a
