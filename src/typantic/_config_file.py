@@ -24,6 +24,7 @@ from typantic._introspect import (
     item_model,
     model_hints,
     nested_model,
+    nested_path_keys,
 )
 
 _YAML_SUFFIXES = {".yaml", ".yml"}
@@ -132,14 +133,18 @@ def unknown_config_keys(
     a model that accepts only its alias is reported with the key to use instead.
     Nested models are checked inside a model value, an ``X | None`` value, and
     each item of a list/set/tuple of models (reported as ``mounts[1].dest``). A
-    model that allows extra keys (``extra="allow"``) is not checked at all.
+    model that allows extra keys (``extra="allow"``) is not checked at all, and
+    neither is what lies under a key leading into a multi-step ``AliasPath``, which
+    is that path's structure and Pydantic's to judge.
     """
     if model_cls.model_config.get("extra") == "allow":
         return []
     hints = model_hints(model_cls)
     owner: dict[str, str] = {}
+    path_keys: set[str] = set()
     for name, field in model_cls.model_fields.items():
         owner.update(dict.fromkeys(accepted_keys(model_cls, name, field), name))
+        path_keys.update(nested_path_keys(model_cls, name, field))
     computed = set(model_cls.model_computed_fields)
     unknown: list[str] = []
     for key, value in data.items():
@@ -149,7 +154,8 @@ def unknown_config_keys(
             if key not in computed:
                 unknown.append(dotted + _spelling_hint(model_cls, key))
             continue
-        unknown.extend(_unknown_below(hints[field_name], value, dotted))
+        if key not in path_keys:
+            unknown.extend(_unknown_below(hints[field_name], value, dotted))
     return unknown
 
 

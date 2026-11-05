@@ -26,6 +26,7 @@ from typantic import (
     add_command,
     build_config_template,
     load_config_file,
+    pydantic_to_typer,
     write_config_template,
 )
 from typantic._config_file import canonicalize, unknown_config_keys
@@ -933,3 +934,73 @@ def test_a_config_file_with_a_byte_order_mark_loads(tmp_path: Path):
     path = tmp_path / "c.json"
     path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"name": "café"}).encode())
     assert load_config_file(path) == {"name": "café"}
+
+
+# ---------------------------------------------------------------------------
+# An AliasPath's subtree is Pydantic's to judge
+# ---------------------------------------------------------------------------
+
+
+class _Leaf(BaseModel):
+    v: int = 0
+
+
+def test_a_model_under_a_multi_step_alias_path_is_not_rejected() -> None:
+    class Cfg(BaseModel):
+        x: _Leaf = Field(validation_alias=AliasPath("a", "b"))
+
+    data = {"a": {"b": {"v": 1}}}
+    assert unknown_config_keys(Cfg, data) == []
+    assert Cfg(**data).x.v == 1
+
+
+def test_two_alias_paths_may_share_their_first_key() -> None:
+    class Cfg(BaseModel):
+        x: _Leaf = Field(validation_alias=AliasPath("a", "b"))
+        y: _Leaf = Field(validation_alias=AliasPath("a", "c"))
+
+    data = {"a": {"b": {"v": 1}, "c": {"v": 2}}}
+    assert unknown_config_keys(Cfg, data) == []
+    assert (Cfg(**data).x.v, Cfg(**data).y.v) == (1, 2)
+
+
+def test_a_flat_alias_sharing_a_first_key_with_a_path_is_not_recursed() -> None:
+    class Cfg(BaseModel):
+        x: int = Field(default=0, validation_alias=AliasPath("a", "b"))
+        y: _Leaf = Field(default_factory=_Leaf, validation_alias="a")
+
+    assert unknown_config_keys(Cfg, {"a": {"b": 1}}) == []
+
+
+def test_a_one_step_alias_path_still_reports_a_typo_below_it() -> None:
+    class Cfg(BaseModel):
+        x: _Leaf = Field(validation_alias=AliasPath("a"))
+
+    assert unknown_config_keys(Cfg, {"a": {"typo": 1}}) == ["a.typo"]
+
+
+def test_a_field_name_beside_an_alias_path_still_reports_a_typo_below_it() -> None:
+    class Cfg(BaseModel):
+        model_config = ConfigDict(populate_by_name=True)
+        x: _Leaf = Field(validation_alias=AliasPath("a", "b"))
+
+    assert unknown_config_keys(Cfg, {"x": {"typo": 1}}) == ["x.typo"]
+
+
+def test_a_multi_step_alias_path_loads_through_config(tmp_path: Path) -> None:
+    class Cfg(BaseModel):
+        x: _Leaf = Field(validation_alias=AliasPath("a", "b"))
+
+    seen: list[Cfg] = []
+    app = typer.Typer()
+
+    @app.command()
+    @pydantic_to_typer(Cfg, config_file="only")
+    def go(config: Cfg) -> None:
+        seen.append(config)
+
+    path = tmp_path / "c.yaml"
+    path.write_text("a:\n  b:\n    v: 1\n")
+    result = runner.invoke(app, ["--config", str(path)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].x.v == 1

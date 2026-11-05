@@ -214,6 +214,22 @@ def accepted_keys(model_cls: type[BaseModel], name: str, field: FieldInfo) -> li
     return list(dict.fromkeys(key for key in keys if isinstance(key, str)))
 
 
+def nested_path_keys(
+    model_cls: type[BaseModel],
+    name: str,
+    field: FieldInfo,
+) -> list[str]:
+    """The top-level keys that lead into a multi-step ``AliasPath`` of field ``name``.
+
+    The value under such a key is the path's nested structure, not the field's value.
+    """
+    return [
+        cast("str", path[0])
+        for path in _key_paths(model_cls, name, field)
+        if len(path) > 1
+    ]
+
+
 def flat_keys(model_cls: type[BaseModel], name: str, field: FieldInfo) -> list[str]:
     """The single-key spellings of field ``name`` (no ``AliasPath``), by precedence."""
     return [

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A config file may set a model through a multi-step `AliasPath`.** With
+  `validation_alias=AliasPath("a", "b")` on a nested model, or two fields sharing the
+  key `a`, Pydantic accepted `{a: {b: {v: 1}}}` but `--config` rejected it as unknown
+  keys. What lies under such a key is now left to Pydantic, so a typo there is no
+  longer named as an unknown key.
 - **Job files are read as UTF-8, whatever the locale.** Under a non-UTF-8 locale,
   Clone and restart got a job's non-ASCII values back mangled.
 - **A corrupt job file no longer fails the request.** A `launch_request.json` with
