@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Late launch and preview replies stay on the form that asked.** Leaving a form during a
+  preview could open that preview on the next command's form, and a launch in flight kept
+  the next form's button stuck on "Launching…" or put its failure there, where selecting a
+  command then erased it. A late failure now stays on screen, with the command's name,
+  until dismissed. A late success still opens the job.
 - **A project created on the launch form is selected at once.** The select read "No
   project" until the list refetch came back, or until the next poll if that refetch failed,
   and a failed refetch was an unhandled promise rejection.

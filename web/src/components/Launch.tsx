@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Form from "@rjsf/core";
 import type { IChangeEvent } from "@rjsf/core";
@@ -12,7 +12,7 @@ import {
 } from "../api.ts";
 import { useStore } from "../store.ts";
 import type { CommandMeta, JsonSchema, LaunchPreview } from "../types.ts";
-import { Button, Card, errorText } from "./ui.tsx";
+import { Alert, Button, Card, errorText } from "./ui.tsx";
 import { CheckboxWidget, templates } from "./rjsfTemplates.tsx";
 import { PathWidget } from "./PathWidget.tsx";
 import { NewProjectInput } from "./NewProjectInput.tsx";
@@ -108,6 +108,28 @@ function Catalog(): ReactNode {
   );
 }
 
+// Launches and restarts that failed after their form was left. No form shows
+// them, and a dropped one would read as a job that launched.
+function LateFailures({
+  failures,
+  onDismiss,
+}: {
+  failures: string[];
+  onDismiss: () => void;
+}): ReactNode {
+  if (failures.length === 0) return null;
+  return (
+    <Alert>
+      {failures.map((failure, i) => (
+        <p key={i}>{failure}</p>
+      ))}
+      <button type="button" className="mt-1 underline" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </Alert>
+  );
+}
+
 export default function Launch(): ReactNode {
   const {
     commands,
@@ -135,6 +157,11 @@ export default function Launch(): ReactNode {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<LaunchPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [lateFailures, setLateFailures] = useState<string[]>([]);
+  // Identifies the form on screen. A preview or submit that replies under an
+  // older ticket belongs to a form since left, even if the same command is open
+  // again.
+  const formTicket = useRef(0);
 
   const backendKeys = backends.length ? backends.map((b) => b.key) : [backend];
   const optionsSchema =
@@ -161,6 +188,10 @@ export default function Launch(): ReactNode {
 
   // Key the fetch on the stable command key, NOT the meta object.
   useEffect(() => {
+    formTicket.current += 1;
+    setPreview(null);
+    setBusy(false);
+    setPreviewing(false);
     if (!selectedCommandKey) return;
     const current = useStore
       .getState()
@@ -194,7 +225,18 @@ export default function Launch(): ReactNode {
     clearPrefill();
   }, [prefill, selectedCommandKey, clearPrefill]);
 
-  if (!meta) return <Catalog />;
+  const lateFailureAlert = (
+    <LateFailures failures={lateFailures} onDismiss={() => setLateFailures([])} />
+  );
+
+  if (!meta) {
+    return (
+      <>
+        {lateFailureAlert}
+        <Catalog />
+      </>
+    );
+  }
 
   const buildRequest = (values: Record<string, unknown>) => ({
     command_key: meta.key,
@@ -206,6 +248,7 @@ export default function Launch(): ReactNode {
   });
 
   const submit = async (data: IChangeEvent) => {
+    const ticket = formTicket.current;
     setBusy(true);
     setError(null);
     const request = buildRequest((data.formData ?? {}) as Record<string, unknown>);
@@ -215,29 +258,38 @@ export default function Launch(): ReactNode {
         : await launchJob(request);
       openJob(record.id);
     } catch (e: unknown) {
-      setError(errorText(e));
-      setBusy(false);
+      if (ticket === formTicket.current) {
+        setError(errorText(e));
+        setBusy(false);
+      } else {
+        const action = restartJobId ? "restart" : "launch";
+        setLateFailures((failures) => [
+          ...failures,
+          `${meta.title} did not ${action}: ${errorText(e)}`,
+        ]);
+      }
     }
   };
 
   const doPreview = async () => {
+    const ticket = formTicket.current;
     setPreviewing(true);
     setError(null);
     try {
-      setPreview(
-        await previewLaunch(
-          buildRequest((formData ?? {}) as Record<string, unknown>),
-        ),
+      const result = await previewLaunch(
+        buildRequest((formData ?? {}) as Record<string, unknown>),
       );
+      if (ticket === formTicket.current) setPreview(result);
     } catch (e: unknown) {
-      setError(errorText(e));
+      if (ticket === formTicket.current) setError(errorText(e));
     } finally {
-      setPreviewing(false);
+      if (ticket === formTicket.current) setPreviewing(false);
     }
   };
 
   return (
     <div className="max-w-3xl">
+      {lateFailureAlert}
       <button
         onClick={() => selectCommand(null)}
         className="mb-4 flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
