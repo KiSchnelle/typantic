@@ -135,6 +135,23 @@ def _remove_tree(directory: Path) -> list[str]:
     return left
 
 
+def remove_output_folder(directory: Path) -> None:
+    """Remove a job's output folder, if it is still there.
+
+    Raises:
+        FolderNotRemovedError: If part of the folder could not be removed.
+    """
+    if not is_dir(directory):
+        return
+    left = _remove_tree(directory)
+    if left:
+        msg = (
+            f"The output folder {directory} could not be removed completely: "
+            f"{left[0]}. {_ROOT_OWNED_HINT}"
+        )
+        raise FolderNotRemovedError(msg)
+
+
 def default_jobs_dir() -> Path:
     """The per-user jobs root (``$TYPANTIC_WEB_JOBS_DIR`` or ``~/.typantic/jobs``)."""
     override = os.environ.get(_ENV_JOBS_DIR)

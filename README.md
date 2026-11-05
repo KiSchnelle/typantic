@@ -666,10 +666,24 @@ click **Launch**. The dashboard writes your values to a config file, runs
   with, and a job whose settings the installed version does not have (renamed
   or removed since, or added by a newer version before a downgrade) cannot be
   cloned or restarted: it names those settings, and you launch a new one.
+- **Deleting a job** removes its folder and, if you confirm it, the absolute
+  `output_folder` in its submitted config, with everything under that path. The
+  dialog shows the exact path, so read it: a folder you pointed the job at goes,
+  whatever else was in it. The folder stays, with the reason, if the backend does
+  not say its paths are on this machine (only `local`, `slurm` and `pbs` do; a custom
+  backend opts in with `output_paths_are_local = True`), if the job ran on another
+  host, if the path starts with `~`, contains `..` or is a symbolic link, if it is
+  inside the job store, contains the store or your home folder, is a mount point or
+  macOS system folder, or sits directly under the filesystem root, or if it overlaps
+  the output folder of a job that stays.
+  Deleting a project does the same for all its jobs; a folder too many to show in
+  its dialog stays, and the dialog says how many. Called directly, the API and
+  `Launcher.delete` remove only the output folders named in the call.
 - **Where things live**: each job's folder (config, log, outputs) under
   `~/.typantic/jobs`, or `$TYPANTIC_WEB_JOBS_DIR`, readable by you alone: a
   submitted config can hold a secret typed into the form. Write outputs you
-  share with colleagues to an output folder elsewhere. Gallery thumbnails are
+  share with colleagues to an output folder of their own elsewhere (deleting
+  the job can delete it, above). Gallery thumbnails are
   cached in `~/.cache/typantic/thumbnails` (`$XDG_CACHE_HOME` is honoured, and
   `$TYPANTIC_WEB_CACHE_DIR` overrides both); the server prunes thumbnails nobody
   has opened in 30 days when it starts.

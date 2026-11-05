@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { JobStatus } from "../types.ts";
+import { fetchJobRemoval, fetchProjectRemoval } from "../api.ts";
+import type { JobRemoval, JobStatus, Project } from "../types.ts";
 
 export function cn(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
@@ -104,14 +105,111 @@ export function Alert({ children }: { children: ReactNode }): ReactNode {
   );
 }
 
+// Browsers cut a long confirm() short (Chromium near 2000 characters or 32 rows),
+// and a folder the dialog did not show must not go. So the dialog stays under that,
+// and what does not fit is not confirmed: those folders stay on disk.
+const MAX_GOING_SHOWN = 15;
+const MAX_GOING_CHARS = 1200;
+const MAX_KEPT_SHOWN = 5;
+const MAX_KEPT_CHARS = 400;
+
+function fitting(lines: string[], maxLines: number, maxChars: number): string[] {
+  const shown: string[] = [];
+  let chars = 0;
+  for (const line of lines) {
+    chars += line.length + 1;
+    if (shown.length === maxLines || chars > maxChars) break;
+    shown.push(line);
+  }
+  return shown;
+}
+
+function outputLines(going: string[], left: number, removals: JobRemoval[]): string {
+  const kept = [
+    ...new Set(
+      removals
+        .filter((r) => r.kept_reason)
+        .map((r) => `Keeps output folder ${r.output_folder}: ${r.kept_reason}`),
+    ),
+  ];
+  const shown = fitting(kept, MAX_KEPT_SHOWN, MAX_KEPT_CHARS);
+  if (kept.length > shown.length) shown.push(`…and ${kept.length - shown.length} more kept`);
+  if (left > 0) {
+    shown.push(
+      `${left} more output folder${left === 1 ? "" : "s"} stay on disk: ` +
+        "too many to list here. Delete those by hand.",
+    );
+  }
+  const parts = [
+    going.length > 0
+      ? `Deletes ${going.length === 1 ? "this output folder" : "these output folders"} ` +
+        `and everything in ${going.length === 1 ? "it" : "them"}:\n${going.join("\n")}`
+      : "",
+    shown.join("\n"),
+  ];
+  return parts
+    .filter(Boolean)
+    .map((part) => `${part}\n\n`)
+    .join("");
+}
+
+// The question goes over the network first, so a double click would otherwise ask
+// twice. Per item, so a request that hangs blocks only that item's delete.
+const asking = new Set<string>();
+
+// Ask before deleting, naming the exact output folders that go. The answer is those
+// folders for the delete to send, or null to delete nothing. If the server cannot
+// say what would go, this rejects and nothing is deleted.
+async function confirmRemoval(
+  key: string,
+  load: () => Promise<JobRemoval[]>,
+  message: (removals: JobRemoval[], output: string) => string,
+): Promise<string[] | null> {
+  if (asking.has(key)) return null;
+  asking.add(key);
+  try {
+    const removals = await load();
+    const all = [
+      ...new Set(
+        removals.flatMap((r) =>
+          r.removes_output && r.output_folder !== null ? [r.output_folder] : [],
+        ),
+      ),
+    ];
+    const going = fitting(all, MAX_GOING_SHOWN, MAX_GOING_CHARS);
+    const output = outputLines(going, all.length - going.length, removals);
+    return window.confirm(message(removals, output)) ? going : null;
+  } finally {
+    asking.delete(key);
+  }
+}
+
 // Shared so the jobs-list bin icon and the detail Delete button warn identically.
-// Delete is destructive — it removes the job and its output folder — so the
-// prompt spells that out and asks for an explicit confirmation.
-export function confirmDeleteJob(): boolean {
-  return window.confirm(
-    "Really delete this job?\n\n" +
-      "This permanently removes the job (its log and config) AND its output " +
-      "folder — every file it produced.\n\n" +
+export function confirmDeleteJob(id: string): Promise<string[] | null> {
+  return confirmRemoval(
+    `job:${id}`,
+    () => fetchJobRemoval(id).then((removal) => [removal]),
+    (_, output) =>
+      "Really delete this job?\n\n" +
+      "This permanently removes the job and everything in its folder (log, " +
+      "config, any files it wrote there), and cancels it if it is running.\n\n" +
+      output +
+      "This cannot be undone.",
+  );
+}
+
+export function confirmDeleteProject(project: Project): Promise<string[] | null> {
+  return confirmRemoval(
+    `project:${project.id}`,
+    () => fetchProjectRemoval(project.id),
+    (removals, output) =>
+      `Delete project "${project.name}"?\n\n` +
+      (removals.length > 0
+        ? `This permanently deletes the project AND its ${removals.length} ` +
+          `job${removals.length === 1 ? "" : "s"}, with everything in their folders, ` +
+          "cancelling any still running.\n\n"
+        : "") +
+      output +
       "This cannot be undone.",
   );
 }

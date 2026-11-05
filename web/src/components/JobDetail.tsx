@@ -417,9 +417,11 @@ export default function JobDetail({ id }: { id: string }): ReactNode {
             )}
             <Button
               onClick={() => {
-                if (confirmDeleteJob()) {
-                  run(deleteJob(id).then(closeJob));
-                }
+                run(
+                  confirmDeleteJob(id).then((folders) =>
+                    folders ? deleteJob(id, folders).then(closeJob) : undefined,
+                  ),
+                );
               }}
             >
               Delete

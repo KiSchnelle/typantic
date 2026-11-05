@@ -5,6 +5,7 @@ knows a job while it is queued or running, and for a few minutes after it ends.
 """
 
 from pathlib import Path
+from typing import ClassVar
 
 from typantic.web.backends.base import PollResult
 from typantic.web.backends.scheduler import (
@@ -39,6 +40,9 @@ _FAILED_STATES = frozenset(
 
 class SlurmBackend(SchedulerBackend):
     """Submit and track jobs on a Slurm cluster."""
+
+    # A cluster's nodes share the filesystem the job's folder is on.
+    output_paths_are_local: ClassVar[bool] = True
 
     def _control_args(self, *, job_dir: Path, log_path: Path) -> list[str]:
         return [

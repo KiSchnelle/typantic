@@ -69,11 +69,14 @@ export default function Jobs(): ReactNode {
 
   const removeJob = (e: MouseEvent, id: string) => {
     e.stopPropagation();
-    if (confirmDeleteJob()) {
-      setDeleteError(null);
-      setJobs((prev) => prev.filter((j) => j.id !== id));
-      void deleteJob(id).catch((err: unknown) => setDeleteError(errorText(err)));
-    }
+    void confirmDeleteJob(id)
+      .then((folders) => {
+        if (!folders) return undefined;
+        setDeleteError(null);
+        setJobs((prev) => prev.filter((j) => j.id !== id));
+        return deleteJob(id, folders);
+      })
+      .catch((err: unknown) => setDeleteError(errorText(err)));
   };
 
   if (selectedJobId) return <JobDetail id={selectedJobId} />;

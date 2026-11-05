@@ -6,7 +6,13 @@ import { startPolling } from "../poll.ts";
 import { useStore } from "../store.ts";
 import type { History, JobRecord, Project } from "../types.ts";
 import { NewProjectInput } from "./NewProjectInput.tsx";
-import { Alert, StatusChip, errorText, relativeTime } from "./ui.tsx";
+import {
+  Alert,
+  StatusChip,
+  confirmDeleteProject,
+  errorText,
+  relativeTime,
+} from "./ui.tsx";
 
 function JobRow({ job }: { job: JobRecord }): ReactNode {
   const openJob = useStore((s) => s.openJob);
@@ -53,24 +59,19 @@ export default function Projects(): ReactNode {
   // never start the next load before the last has answered.
   useEffect(() => startPolling(() => fetchHistory().then(setHistory), 3000), []);
 
-  const removeProject = (e: MouseEvent, project: Project, jobCount: number) => {
+  const removeProject = (e: MouseEvent, project: Project) => {
     e.stopPropagation();
-    const detail =
-      jobCount > 0
-        ? `This permanently deletes the project AND its ${jobCount} ` +
-          `job${jobCount === 1 ? "" : "s"} (their logs, configs, and output). ` +
-          `This cannot be undone.`
-        : "This cannot be undone.";
-    if (window.confirm(`Delete project "${project.name}"?\n\n${detail}`)) {
-      setDeleteError(null);
-      void deleteProject(project.id)
-        .catch((err: unknown) => setDeleteError(errorText(err)))
-        .finally(() => {
+    void confirmDeleteProject(project)
+      .then((folders) => {
+        if (!folders) return undefined;
+        setDeleteError(null);
+        return deleteProject(project.id, folders).finally(() => {
           // A partly failed delete still removed what it could.
           reloadHistory();
           refreshProjects();
         });
-    }
+      })
+      .catch((err: unknown) => setDeleteError(errorText(err)));
   };
 
   const needle = filter.trim().toLowerCase();
@@ -137,7 +138,7 @@ export default function Projects(): ReactNode {
               type="button"
               aria-label="Delete project"
               title="Delete project (also deletes its jobs)"
-              onClick={(e) => removeProject(e, project, jobs.length)}
+              onClick={(e) => removeProject(e, project)}
               className="text-slate-600 hover:text-red-400"
             >
               <Trash2 size={15} />

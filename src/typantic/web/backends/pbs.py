@@ -8,6 +8,7 @@ script mirrors the Slurm backend's, translated to ``#PBS`` directives.
 import shlex
 import subprocess
 from pathlib import Path
+from typing import ClassVar
 
 from typantic.web.backends.base import PollResult
 from typantic.web.backends.scheduler import (
@@ -26,6 +27,9 @@ _FINISHED_STATES = frozenset({"C", "F"})
 
 class PbsBackend(SchedulerBackend):
     """Submit and track jobs on a PBS cluster."""
+
+    # A cluster's nodes share the filesystem the job's folder is on.
+    output_paths_are_local: ClassVar[bool] = True
 
     def _control_args(self, *, job_dir: Path, log_path: Path) -> list[str]:
         return [

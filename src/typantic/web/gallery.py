@@ -15,7 +15,6 @@ the server prunes thumbnails nobody has asked for in 30 days when it starts.
 import contextlib
 import hashlib
 import io
-import json
 import os
 import tempfile
 import time
@@ -25,6 +24,7 @@ from typing import NamedTuple
 from urllib.parse import quote
 
 from typantic.web._paths import expand, is_dir, is_file, resolved, utf8
+from typantic.web._removal import configured_output
 from typantic.web.models import JobImage, JobImages, JobRecord
 
 _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
@@ -50,19 +50,13 @@ def artifact_roots(record: JobRecord) -> list[Path]:
     """
     job_dir = resolved(Path(record.job_dir))
     roots = [job_dir] if job_dir is not None else []
-    try:
-        config = json.loads(Path(record.config_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):  # ValueError covers JSON and decoding errors
-        return roots
-    output = config.get("output_folder") if isinstance(config, dict) else None
-    if isinstance(output, str):
-        # A config's output_folder is user input: a typo ("~results") or a NUL
-        # must cost only that folder, not the job's whole gallery.
-        candidate = expand(output)
-        extra = resolved(candidate) if candidate and candidate.is_absolute() else None
-        # Skip it if it is the job dir or nested inside it (already scanned).
-        if extra is not None and not any(extra.is_relative_to(r) for r in roots):
-            roots.append(extra)
+    # A config's output_folder is user input: a typo ("~results") or a NUL must
+    # cost only that folder, not the job's whole gallery.
+    candidate = configured_output(record)
+    extra = resolved(candidate) if candidate is not None else None
+    # Skip it if it is the job dir or nested inside it (already scanned).
+    if extra is not None and not any(extra.is_relative_to(r) for r in roots):
+        roots.append(extra)
     return roots
 
 

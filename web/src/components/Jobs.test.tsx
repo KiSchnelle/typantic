@@ -10,6 +10,7 @@ vi.mock("../api.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api.ts")>()),
   fetchJobs: vi.fn(),
   deleteJob: vi.fn(),
+  fetchJobRemoval: vi.fn(),
 }));
 
 function page(count: number, total: number, offset = 0): JobPage {
@@ -19,8 +20,19 @@ function page(count: number, total: number, offset = 0): JobPage {
   };
 }
 
+const NO_OUTPUT = {
+  job_id: "j0",
+  output_folder: null,
+  removes_output: false,
+  kept_reason: null,
+};
+
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.mocked(api.fetchJobRemoval).mockReset();
+  vi.mocked(api.deleteJob).mockReset();
+  vi.mocked(api.fetchJobRemoval).mockResolvedValue(NO_OUTPUT);
+  vi.mocked(api.deleteJob).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -82,4 +94,101 @@ test("each job shows the app version it ran with, when known", async () => {
   render(<Jobs />);
   await settle();
   expect(screen.getAllByText(/^v\d/).map((el) => el.textContent)).toEqual(["v1.4.2"]);
+});
+
+test("the delete dialog shows the output folder, and the delete confirms that path", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(api.fetchJobs).mockResolvedValue(page(1, 1));
+  vi.mocked(api.fetchJobRemoval).mockResolvedValue({
+    ...NO_OUTPUT,
+    output_folder: "/scratch/me/out",
+    removes_output: true,
+  });
+  render(<Jobs />);
+  await settle();
+  fireEvent.click(screen.getByLabelText("Delete job"));
+  await settle();
+  expect(confirm.mock.calls[0]?.[0]).toContain(
+    "Deletes this output folder and everything in it:\n/scratch/me/out",
+  );
+  expect(api.deleteJob).toHaveBeenCalledWith("j0", ["/scratch/me/out"]);
+});
+
+test("declining the dialog deletes nothing", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  vi.mocked(api.fetchJobs).mockResolvedValue(page(1, 1));
+  render(<Jobs />);
+  await settle();
+  fireEvent.click(screen.getByLabelText("Delete job"));
+  await settle();
+  expect(api.deleteJob).not.toHaveBeenCalled();
+});
+
+test("a job with no output folder outside its own confirms none", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(api.fetchJobs).mockResolvedValue(page(1, 1));
+  render(<Jobs />);
+  await settle();
+  fireEvent.click(screen.getByLabelText("Delete job"));
+  await settle();
+  expect(confirm.mock.calls[0]?.[0]).not.toContain("output folder");
+  expect(api.deleteJob).toHaveBeenCalledWith("j0", []);
+});
+
+test("the delete dialog says when a folder stays, and why, and confirms nothing", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(api.fetchJobs).mockResolvedValue(page(1, 1));
+  vi.mocked(api.fetchJobRemoval).mockResolvedValue({
+    ...NO_OUTPUT,
+    output_folder: "/data",
+    kept_reason: "it is a top-level folder",
+  });
+  render(<Jobs />);
+  await settle();
+  fireEvent.click(screen.getByLabelText("Delete job"));
+  await settle();
+  expect(confirm.mock.calls[0]?.[0]).toContain(
+    "Keeps output folder /data: it is a top-level folder",
+  );
+  expect(api.deleteJob).toHaveBeenCalledWith("j0", []);
+});
+
+test("nothing is deleted if it cannot say what would go", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(api.fetchJobs).mockResolvedValue(page(1, 1));
+  vi.mocked(api.fetchJobRemoval).mockRejectedValue(new Error("500 nope"));
+  render(<Jobs />);
+  await settle();
+  fireEvent.click(screen.getByLabelText("Delete job"));
+  await settle();
+  expect(confirm).not.toHaveBeenCalled();
+  expect(api.deleteJob).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert").textContent).toContain("500 nope");
+});
+
+test("a double click asks once", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(api.fetchJobs).mockResolvedValue(page(1, 1));
+  render(<Jobs />);
+  await settle();
+  fireEvent.click(screen.getByLabelText("Delete job"));
+  fireEvent.click(screen.getByLabelText("Delete job"));
+  await settle();
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(api.deleteJob).toHaveBeenCalledOnce();
+});
+
+test("a request that hangs does not stop another job being deleted", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(api.fetchJobs).mockResolvedValue(page(2, 2));
+  vi.mocked(api.fetchJobRemoval)
+    .mockReturnValueOnce(new Promise(() => undefined))
+    .mockResolvedValue(NO_OUTPUT);
+  render(<Jobs />);
+  await settle();
+  const [first, second] = screen.getAllByLabelText("Delete job");
+  fireEvent.click(first as HTMLElement);
+  fireEvent.click(second as HTMLElement);
+  await settle();
+  expect(api.deleteJob).toHaveBeenCalledOnce();
 });

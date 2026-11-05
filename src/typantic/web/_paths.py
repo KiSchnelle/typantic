@@ -25,10 +25,10 @@ def is_dir(path: Path) -> bool:
 
 
 def expand(path: str) -> Path | None:
-    """``path`` with ``~`` expanded, or ``None`` for an unknown user."""
+    """``path`` with ``~`` expanded, or ``None`` where it cannot be."""
     try:
         return Path(path).expanduser()
-    except RuntimeError:
+    except (RuntimeError, ValueError):
         return None
 
 

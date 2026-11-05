@@ -50,12 +50,14 @@ from typantic.web.models import (
     ApiMeta,
     Brand,
     CommandMeta,
+    DeleteRequest,
     FsListing,
     History,
     JobCompat,
     JobImages,
     JobPage,
     JobRecord,
+    JobRemoval,
     JobStatus,
     LaunchPreview,
     LaunchRequest,
@@ -254,12 +256,23 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
         return record
 
     @app.delete("/api/jobs/{job_id}", dependencies=guard)
-    def delete_job(job_id: str) -> dict[str, str]:
+    def delete_job(
+        job_id: str,
+        request: DeleteRequest | None = None,
+    ) -> dict[str, str]:
+        confirmed = request.output_folders if request is not None else []
         with _domain_errors():
-            deleted = launcher.delete(job_id)
+            deleted = launcher.delete(job_id, output_folders=confirmed)
         if not deleted:
             raise HTTPException(status_code=404, detail="No such job.")
         return {"deleted": job_id}
+
+    @app.get("/api/jobs/{job_id}/removal", dependencies=guard)
+    def job_removal(job_id: str) -> JobRemoval:
+        removal = launcher.removal_for(job_id)
+        if removal is None:
+            raise HTTPException(status_code=404, detail="No such job.")
+        return removal
 
     @app.get("/api/jobs/{job_id}/request", dependencies=guard)
     def job_request(job_id: str) -> LaunchRequest:
@@ -330,11 +343,22 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
     def create_project(request: ProjectCreate) -> Project:
         return launcher.store.create_project(request.name, request.description)
 
+    @app.get("/api/projects/{project_id}/removal", dependencies=guard)
+    def project_removal(project_id: str) -> list[JobRemoval]:
+        removals = launcher.project_removal(project_id)
+        if removals is None:
+            raise HTTPException(status_code=404, detail="No such project.")
+        return removals
+
     @app.delete("/api/projects/{project_id}", dependencies=guard)
-    def delete_project(project_id: str) -> dict[str, str]:
+    def delete_project(
+        project_id: str,
+        request: DeleteRequest | None = None,
+    ) -> dict[str, str]:
         # Deletes the project AND all its jobs (cancelling any still running).
+        confirmed = request.output_folders if request is not None else []
         with _domain_errors():
-            deleted = launcher.delete_project(project_id)
+            deleted = launcher.delete_project(project_id, output_folders=confirmed)
         if not deleted:
             raise HTTPException(status_code=404, detail="No such project.")
         return {"deleted": project_id}

@@ -14,6 +14,7 @@ import shutil
 import threading
 import time
 import uuid
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -22,6 +23,14 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from typantic.web._files import write_private
+from typantic.web._paths import is_dir, resolved
+from typantic.web._removal import (
+    FolderId,
+    configured_output,
+    folder_id,
+    overlapping,
+    plan_removal,
+)
 from typantic.web.backends import (
     LaunchBackend,
     LaunchUncertainError,
@@ -36,13 +45,14 @@ from typantic.web.models import (
     History,
     JobCompat,
     JobRecord,
+    JobRemoval,
     JobStatus,
     LaunchPreview,
     LaunchRequest,
     ProjectGroup,
 )
 from typantic.web.schema import SchemaCache, SchemaError, normalize_for_form
-from typantic.web.store import FolderNotRemovedError, JobStore
+from typantic.web.store import FolderNotRemovedError, JobStore, remove_output_folder
 
 logger = logging.getLogger("typantic.web")
 
@@ -555,23 +565,99 @@ class Launcher:
             ungrouped=[self.refresh(job) for job in history.ungrouped],
         )
 
-    def delete_project(self, project_id: str) -> bool:
+    @staticmethod
+    def _output_id(record: JobRecord) -> FolderId | None:
+        candidate = configured_output(record)
+        target = resolved(candidate) if candidate is not None else None
+        return folder_id(target) if target is not None else None
+
+    def _output_folders(
+        self, *, excluding: Collection[str] = ()
+    ) -> dict[str, FolderId]:
+        """The output folder of every job not in ``excluding``, by job id."""
+        records, _ = self.store.query_jobs()
+        folders: dict[str, FolderId] = {}
+        for record in records:
+            if record.id not in excluding:
+                identity = self._output_id(record)
+                if identity is not None:
+                    folders[record.id] = identity
+        return folders
+
+    def _plan_removal(
+        self,
+        record: JobRecord,
+        others: Mapping[str, FolderId],
+    ) -> JobRemoval:
+        backend = self._backends.get(record.backend)
+        return plan_removal(
+            record,
+            job_dir=self.store.job_dir(record.id),
+            jobs_root=self.store.root,
+            local_paths=getattr(backend, "output_paths_are_local", False),
+            others=others,
+        )
+
+    def removal_for(self, job_id: str) -> JobRemoval | None:
+        """What deleting a job may do to its output folder; ``None`` if no such job."""
+        record = self.store.load(job_id)
+        if record is None:
+            return None
+        return self._plan_removal(record, self._output_folders(excluding={job_id}))
+
+    def project_removal(self, project_id: str) -> list[JobRemoval] | None:
+        """What deleting a project may do to its jobs' output folders.
+
+        ``None`` if no such project. Its jobs all go, so a folder only they share
+        may go too.
+        """
+        if self.store.get_project(project_id) is None:
+            return None
+        jobs, _ = self.store.query_jobs(project_id=project_id)
+        users = self._output_folders(excluding={job.id for job in jobs})
+        while True:
+            removals = [
+                self._plan_removal(
+                    job,
+                    {k: v for k, v in users.items() if k != job.id},
+                )
+                for job in jobs
+            ]
+            # A job whose folder stays keeps using it, so what overlaps it stays too.
+            # This only grows, so it ends.
+            staying = {
+                job.id: identity
+                for job, removal in zip(jobs, removals, strict=True)
+                if removal.kept_reason
+                and job.id not in users
+                and (identity := self._output_id(job)) is not None
+            }
+            if not staying:
+                return removals
+            users |= staying
+
+    def delete_project(
+        self,
+        project_id: str,
+        *,
+        output_folders: Collection[str] = (),
+    ) -> bool:
         """Delete a project and all its jobs, cancelling any still active.
 
+        Args:
+            project_id: The project.
+            output_folders: The output folders confirmed for deletion, as
+                :meth:`project_removal` named them. Any other stays.
+
         Raises:
-            FolderNotRemovedError: If some job folders could not be removed
-                completely; everything else is deleted by then.
+            FolderNotRemovedError: If some folders could not be removed completely,
+                or a confirmed one had to stay; everything else is deleted by then.
         """
         jobs, _ = self.store.query_jobs(project_id=project_id)
-        left: list[str] = []
-        for record in jobs:
-            try:
-                self.delete(record.id)
-            except FolderNotRemovedError:
-                left.append(record.id)
+        problems = self._delete_jobs([job.id for job in jobs], output_folders)
         existed = self.store.delete_project(project_id)
-        if left:
-            raise FolderNotRemovedError.for_jobs(left)
+        if problems:
+            raise FolderNotRemovedError(" ".join(problems))
         return existed
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -617,36 +703,111 @@ class Launcher:
             self.store.save(record)
             return record
 
-    def delete(self, job_id: str) -> bool:
-        """Remove a job entirely, cancelling it first if it is still active."""
-        with self._job_lock(job_id):
-            record = self.store.load(job_id)
-            if record is None:
-                return False
-            if not record.is_terminal:
-                # Asked afresh: a job that has finished since the row was stored
-                # must not be signalled, as its pid may name another process.
+    def delete(self, job_id: str, *, output_folders: Collection[str] = ()) -> bool:
+        """Remove a job entirely, cancelling it first if it is still active.
+
+        Args:
+            job_id: The job.
+            output_folders: The output folders confirmed for deletion, as
+                :meth:`removal_for` named them. Any other stays.
+
+        Raises:
+            FolderNotRemovedError: If part of a folder could not be removed, or a
+                confirmed one had to stay. The job's row is deleted by then.
+        """
+        if self.store.load(job_id) is None:
+            return False
+        problems = self._delete_jobs([job_id], output_folders)
+        if problems:
+            raise FolderNotRemovedError(" ".join(problems))
+        return True
+
+    def _delete_jobs(
+        self,
+        job_ids: list[str],
+        confirmed: Collection[str],
+    ) -> list[str]:
+        """Delete jobs, then the confirmed output folders; what went wrong.
+
+        The folders go last, so jobs deleted together can share one, and a job
+        launched meanwhile into one of them is seen in time to keep it.
+        """
+        others = self._output_folders(excluding=set(job_ids))
+        planned: set[str] = set()
+        staying: list[FolderId] = []
+        problems: list[str] = []
+        for job_id in job_ids:
+            with self._job_lock(job_id):
+                record = self.store.load(job_id)
+                if record is None:
+                    continue
+                if not record.is_terminal:
+                    # Asked afresh: a job that has finished since the row was stored
+                    # must not be signalled, as its pid may name another process.
+                    self._forget_poll(job_id)
+                    record = self.refresh(record)
+                stopped = record.is_terminal or self._cancel_before_delete(record)
+                removal = self._plan_removal(record, others) if stopped else None
+                if (
+                    removal is not None
+                    and removal.output_folder
+                    and removal.removes_output
+                ):
+                    planned.add(removal.output_folder)
+                elif removal is None or removal.kept_reason:
+                    # A job not stopped may still be writing there, and a folder
+                    # that stays must not go with a sibling's that holds it.
+                    identity = self._output_id(record)
+                    if identity is not None:
+                        staying.append(identity)
                 self._forget_poll(job_id)
-                record = self.refresh(record)
-            if not record.is_terminal:
-                self._cancel_before_delete(record)
-            self._forget_poll(job_id)
-            deleted = self.store.delete(job_id)
-        with self._lock:
-            # A refresh still waiting on the old lock finds the row gone and
-            # stores nothing, so dropping it here is safe.
-            self._job_locks.pop(job_id, None)
-        return deleted
+                try:
+                    self.store.delete(job_id)
+                except FolderNotRemovedError as exc:
+                    problems.append(str(exc))
+            with self._lock:
+                # A refresh still waiting on the old lock finds the row gone and
+                # stores nothing, so dropping it here is safe.
+                self._job_locks.pop(job_id, None)
+        return [*problems, *self._remove_confirmed(confirmed, planned, staying)]
 
-    def _cancel_before_delete(self, record: JobRecord) -> None:
-        """Cancel a job about to be deleted; a failure is logged, not raised.
+    def _remove_confirmed(
+        self,
+        confirmed: Collection[str],
+        planned: set[str],
+        staying: list[FolderId],
+    ) -> list[str]:
+        """Remove each folder both confirmed and planned; what went wrong.
 
-        The job's row and folder are deleted either way, but a job the backend
-        could not stop may run on, so that is logged.
+        A confirmed folder that has to stay is reported, as the dialog said it goes.
+        """
+        users = [*self._output_folders().values(), *staying]
+        problems: list[str] = []
+        for folder in sorted(set(confirmed)):
+            path = Path(folder)
+            identity = folder_id(path)
+            if folder in planned and not any(overlapping(identity, u) for u in users):
+                try:
+                    remove_output_folder(path)
+                except FolderNotRemovedError as exc:
+                    problems.append(str(exc))
+            elif is_dir(path):
+                problems.append(
+                    f"The output folder {folder} was kept: a job may be using it, "
+                    "or it is no longer safe to remove. Delete it by hand if you "
+                    "are sure.",
+                )
+        return problems
+
+    def _cancel_before_delete(self, record: JobRecord) -> bool:
+        """Cancel a job about to be deleted; whether that stopped it.
+
+        A failure is logged, not raised: the job's row and folder are deleted either
+        way, but a job the backend could not stop may run on.
         """
         backend = self._backends.get(record.backend)
         if backend is None:
-            return
+            return False
         try:
             backend.cancel(record)
         except Exception:
@@ -655,6 +816,8 @@ class Launcher:
                 record.id,
                 exc_info=True,
             )
+            return False
+        return True
 
     def request_for(self, job_id: str) -> LaunchRequest | None:
         """The launch request behind a job, for cloning or restarting it."""

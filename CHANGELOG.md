@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`GET /api/jobs/{id}/removal` and `GET /api/projects/{id}/removal`** say which
+  output folders a delete may remove (`JobRemoval`).
+
 ### Removed
 
 - **`JobStore.list_records()`.** Nothing called it. `query_jobs()` returns the
@@ -14,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Deleting a job or project can now delete its output folder too.** The dialog
+  shows the exact path of each absolute `output_folder` that goes, and everything
+  under that path goes with it. Before, a folder outside the job's own stayed on
+  disk despite what the dialog said. `DELETE /api/jobs/{id}` and
+  `DELETE /api/projects/{id}` take an optional `DeleteRequest` naming the confirmed
+  paths, and `Launcher.delete` and `delete_project` an `output_folders` argument:
+  without them, as before, output folders stay. A folder also stays, with the reason
+  shown, if the job's backend does not say its paths are on this machine (only
+  `local`, `slurm` and `pbs` do; ssh, docker, podman and apptainer do not, and a
+  custom backend opts in with `output_paths_are_local = True`), if the job ran on
+  another host, if the path starts with `~`, contains `..` or is a symbolic link, if
+  it is inside the job store, contains the store or your home folder, is a mount
+  point or macOS system folder, or sits directly under the filesystem root, or if
+  it overlaps the output folder of a job that stays.
+  If a confirmed folder has to stay after all, because a job could not be stopped or
+  a new one uses it, the job is deleted and the 409 says so. A project with more
+  output folders than a dialog can show keeps the rest, and the dialog says how many.
 - **Docstrings and README match the code.** The `default_factory` mapping
   rule, `config_file`'s `"only"` mode (it adds `--schema` too) and the README's
   `typantic web serve` startup banner were out of date. The "No commands

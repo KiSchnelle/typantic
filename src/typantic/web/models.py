@@ -209,6 +209,37 @@ class JobCompat(BaseModel):
     )
 
 
+class JobRemoval(BaseModel):
+    """What deleting a job may do to its output folder."""
+
+    job_id: str = Field(description="The job this describes.")
+    output_folder: str | None = Field(
+        default=None,
+        description="The folder outside the job's own that may go, or stays; "
+        "None when there is none, as nothing else but the job's folder goes.",
+    )
+    removes_output: bool = Field(
+        default=False,
+        description="Whether output_folder goes, if the delete confirms that path.",
+    )
+    kept_reason: str | None = Field(
+        default=None,
+        description="Why output_folder stays, when it does.",
+    )
+
+
+class DeleteRequest(BaseModel):
+    """What a person confirmed deleting, along with a job or project."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    output_folders: list[str] = Field(
+        default_factory=list,
+        description="The output folders confirmed, exactly as JobRemoval named "
+        "them. A folder not listed here stays.",
+    )
+
+
 class JobPage(BaseModel):
     """A page of jobs plus the total number matching the query."""
 

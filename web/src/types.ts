@@ -96,6 +96,17 @@ export interface JobCompat {
   unknown_settings: string[];
 }
 
+export interface JobRemoval {
+  job_id: string;
+  output_folder: string | null;
+  removes_output: boolean;
+  kept_reason: string | null;
+}
+
+export interface DeleteRequest {
+  output_folders: string[];
+}
+
 export interface JobPage {
   jobs: JobRecord[];
   total: number;

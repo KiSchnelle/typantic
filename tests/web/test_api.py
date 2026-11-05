@@ -1124,3 +1124,90 @@ def test_a_spa_without_its_page_answers_404(tmp_path, monkeypatch):
     launcher = _bare_launcher(tmp_path, monkeypatch)
     client = TestClient(make_api(launcher, token=None), base_url=LOCAL)
     assert client.get("/").status_code == 404
+
+
+# --- deleting output folders ---
+
+
+def _with_output(env, tmp_path):
+    env.backend.output_paths_are_local = True
+    output = tmp_path / "results" / "out"
+    output.mkdir(parents=True)
+    (output / "model.pt").write_text("weights")
+    return output, _launch(env, values={"output_folder": str(output)})
+
+
+def test_job_removal_names_the_folder(env, tmp_path):
+    output, record = _with_output(env, tmp_path)
+    resp = env.client.get(f"/api/jobs/{record['id']}/removal", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["removes_output"] is True
+    assert resp.json()["output_folder"] == str(output.resolve())
+
+
+def test_job_removal_needs_the_token_and_a_job(env):
+    assert env.client.get("/api/jobs/nope/removal").status_code == 401
+    assert env.client.get("/api/jobs/nope/removal", headers=AUTH).status_code == 404
+
+
+def test_project_removal_lists_its_jobs(env, tmp_path):
+    project = env.store.create_project("P")
+    env.backend.output_paths_are_local = True
+    record = _launch(env, project_id=project.id)
+    resp = env.client.get(f"/api/projects/{project.id}/removal", headers=AUTH)
+    assert [removal["job_id"] for removal in resp.json()] == [record["id"]]
+    url = "/api/projects/nope/removal"
+    assert env.client.get(url).status_code == 401
+    assert env.client.get(url, headers=AUTH).status_code == 404
+
+
+def test_delete_route_removes_only_the_confirmed_folder(env, tmp_path):
+    output, record = _with_output(env, tmp_path)
+    bystander = tmp_path / "results" / "bystander"
+    bystander.mkdir()
+    url = f"/api/jobs/{record['id']}"
+    body = {"output_folders": [str(output.resolve())]}
+    resp = env.client.request("DELETE", url, json=body, headers=AUTH)
+    assert resp.status_code == 200
+    assert not output.exists()
+    assert bystander.exists()
+
+
+def test_delete_route_without_a_body_keeps_the_folder(env, tmp_path):
+    output, record = _with_output(env, tmp_path)
+    resp = env.client.delete(f"/api/jobs/{record['id']}", headers=AUTH)
+    assert resp.status_code == 200
+    assert output.exists()
+
+
+def test_delete_route_says_when_a_confirmed_folder_stayed(env, tmp_path):
+    output, record = _with_output(env, tmp_path)
+    url = f"/api/jobs/{record['id']}"
+    _launch(env, values={"output_folder": str(output)})
+    body = {"output_folders": [str(output.resolve())]}
+    resp = env.client.request("DELETE", url, json=body, headers=AUTH)
+    assert resp.status_code == 409
+    assert "was kept" in resp.json()["detail"]
+    assert output.exists()
+
+
+def test_delete_route_refuses_a_misspelt_body(env, tmp_path):
+    output, record = _with_output(env, tmp_path)
+    url = f"/api/jobs/{record['id']}"
+    body = {"output_folder": str(output.resolve())}
+    resp = env.client.request("DELETE", url, json=body, headers=AUTH)
+    assert resp.status_code == 422
+    assert env.store.load(record["id"]) is not None
+
+
+def test_project_delete_route_removes_the_confirmed_folder(env, tmp_path):
+    project = env.store.create_project("P")
+    env.backend.output_paths_are_local = True
+    output = tmp_path / "results" / "out"
+    output.mkdir(parents=True)
+    _launch(env, project_id=project.id, values={"output_folder": str(output)})
+    url = f"/api/projects/{project.id}"
+    body = {"output_folders": [str(output.resolve())]}
+    resp = env.client.request("DELETE", url, json=body, headers=AUTH)
+    assert resp.status_code == 200
+    assert not output.exists()

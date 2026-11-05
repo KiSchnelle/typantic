@@ -11,6 +11,7 @@ import type {
   JobPage,
   JobQuery,
   JobRecord,
+  JobRemoval,
   JsonSchema,
   LaunchPreview,
   LaunchRequest,
@@ -90,12 +91,18 @@ export function createProject(name: string, description = ""): Promise<Project> 
   return postJson("/api/projects", { name, description });
 }
 
-export async function deleteProject(id: string): Promise<void> {
-  const resp = await fetch(`/api/projects/${id}`, {
+// Delete something, along with the output folders somebody has just confirmed.
+async function deleteWith(path: string, outputFolders: string[]): Promise<void> {
+  const resp = await fetch(path, {
     method: "DELETE",
-    headers: headers(),
+    headers: headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ output_folders: outputFolders }),
   });
   if (!resp.ok) throw await failure(resp);
+}
+
+export function deleteProject(id: string, outputFolders: string[] = []): Promise<void> {
+  return deleteWith(`/api/projects/${id}`, outputFolders);
 }
 
 export function fetchDir(path?: string): Promise<FsListing> {
@@ -151,13 +158,20 @@ export function fetchJobCompat(id: string): Promise<JobCompat> {
   return getJson(`/api/jobs/${id}/compat`);
 }
 
+// What deleting a job may do to its output folder, for the confirmation to name.
+export function fetchJobRemoval(id: string): Promise<JobRemoval> {
+  return getJson(`/api/jobs/${id}/removal`);
+}
+
+// The same for every job of a project.
+export function fetchProjectRemoval(id: string): Promise<JobRemoval[]> {
+  return getJson(`/api/projects/${id}/removal`);
+}
+
 // Remove a job from history (cancels it first if still active, then deletes it).
-export async function deleteJob(id: string): Promise<void> {
-  const resp = await fetch(`/api/jobs/${id}`, {
-    method: "DELETE",
-    headers: headers(),
-  });
-  if (!resp.ok) throw await failure(resp);
+// An output folder goes only if it is listed here.
+export function deleteJob(id: string, outputFolders: string[] = []): Promise<void> {
+  return deleteWith(`/api/jobs/${id}`, outputFolders);
 }
 
 // Re-run a terminal job in place. Without `request` it resubmits the same
