@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule, `config_file`'s `"only"` mode (it adds `--schema` too) and the README's
   `typantic web serve` startup banner were out of date. The "No commands
   discovered." warning is reworded.
+- **Minimum dependency versions raised.** `pydantic>=2.14.2`, `typer>=0.27.3`,
+  and for `[web]` `fastapi>=0.162.0`, `uvicorn>=0.54.0`, `websockets>=17.4` and
+  `pillow>=13.0.0`, a new major version. The Pillow floor leaves behind the
+  security advisories open against 12.3.0, and the pydantic floor includes
+  2.14.2's security fixes. An app that pins `pillow<13` or `pydantic<2.14.2`
+  now has to lift that pin to install this version.
 
 ### Fixed
 

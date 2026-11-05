@@ -1,6 +1,6 @@
 """Tests for config-file support: templates, loading, and the CLI behaviour."""
 
-import datetime
+import datetime as dt
 import json
 import re
 from enum import StrEnum
@@ -62,7 +62,7 @@ class Cfg(BaseModel):
     color: Color = Color.RED
     ratio: tuple[int, int] = (2, 2)
     tags: set[str] = {"a"}
-    when: datetime.datetime = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+    when: dt.datetime = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
     mode: int = 0o755
     cpus: int = Field(default_factory=lambda data: len(data) + 4)  # validated-data
     note: str | None = None

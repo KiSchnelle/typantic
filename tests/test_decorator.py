@@ -1,7 +1,7 @@
 """Tests for the pydantic_to_typer decorator."""
 
 import collections
-import datetime
+import datetime as dt
 import decimal
 import inspect
 import ipaddress
@@ -1637,8 +1637,8 @@ class TestNumericBoundPrecision:
         # A Ge on a non-numeric (e.g. a date) has no Click min/max equivalent.
         class Cfg(BaseModel):
             when: Annotated[
-                datetime.date,
-                Field(default=datetime.date(2026, 1, 1), ge=datetime.date(2020, 1, 1)),
+                dt.date,
+                Field(default=dt.date(2026, 1, 1), ge=dt.date(2020, 1, 1)),
             ]
 
         assert _numeric_bounds(Cfg.model_fields["when"]) == (None, None)
@@ -1952,15 +1952,13 @@ class _Where(StrEnum):
 
 _PARSED_FROM_TEXT = [
     (decimal.Decimal, "1.50", decimal.Decimal("1.50")),
-    (datetime.date, "2026-09-23", datetime.date(2026, 9, 23)),
-    (datetime.time, "10:30:00", datetime.time(10, 30)),
-    (datetime.timedelta, "PT1H", datetime.timedelta(hours=1)),
+    (dt.date, "2026-09-23", dt.date(2026, 9, 23)),
+    (dt.time, "10:30:00", dt.time(10, 30)),
+    (dt.timedelta, "PT1H", dt.timedelta(hours=1)),
     (
-        datetime.datetime,
+        dt.datetime,
         "2026-09-23T10:00:00+02:00",
-        datetime.datetime(
-            2026, 9, 23, 10, tzinfo=datetime.timezone(datetime.timedelta(hours=2))
-        ),
+        dt.datetime(2026, 9, 23, 10, tzinfo=dt.timezone(dt.timedelta(hours=2))),
     ),
     (ipaddress.IPv4Address, "10.0.0.1", ipaddress.IPv4Address("10.0.0.1")),
     (ByteSize, "1KiB", 1024),
