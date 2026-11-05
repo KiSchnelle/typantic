@@ -112,6 +112,14 @@ def test_scan_images_newest_first_recursive(tmp_path):
     assert not scan.capped
 
 
+def test_scan_images_does_not_follow_symlinks(tmp_path):
+    _png(tmp_path / "a.png")
+    (tmp_path / "loop").symlink_to(tmp_path, target_is_directory=True)
+    (tmp_path / "link.png").symlink_to(tmp_path / "a.png")
+    scan = gallery.scan_images(tmp_path)
+    assert [path.name for _, path in scan.images] == ["a.png"]
+
+
 def test_scan_images_missing_root(tmp_path):
     assert gallery.scan_images(tmp_path / "nope").images == []
 
@@ -130,7 +138,7 @@ def test_scan_images_scan_cap(tmp_path, monkeypatch):
     _png(tmp_path / "b.png")
     _png(tmp_path / "c.png")
     scan = gallery.scan_images(tmp_path)
-    assert len(scan.images) <= 1
+    assert len(scan.images) == 1
     assert scan.capped
 
 
@@ -152,7 +160,9 @@ def test_scan_images_entry_error_is_skipped(tmp_path, monkeypatch):
 def test_list_images(tmp_path):
     _png(tmp_path / "a.png", mtime=100)
     record = _record(tmp_path)
-    images = gallery.list_images(record, "job1").images
+    listing = gallery.list_images(record, "job1")
+    assert not listing.truncated
+    images = listing.images
     assert images[0].name == "a.png"
     assert images[0].root == 0
     assert "job1/image?root=0&path=a.png" in images[0].url
@@ -177,6 +187,15 @@ def test_list_images_limit(tmp_path, monkeypatch):
     assert listing.truncated
 
 
+def test_list_images_exactly_at_the_limit_is_not_truncated(tmp_path, monkeypatch):
+    monkeypatch.setattr(gallery, "_IMAGE_LIMIT", 2)
+    _png(tmp_path / "a.png", mtime=100)
+    _png(tmp_path / "b.png", mtime=200)
+    listing = gallery.list_images(_record(tmp_path), "j")
+    assert len(listing.images) == 2
+    assert not listing.truncated
+
+
 # --- resolve_artifact ---
 
 
@@ -187,7 +206,11 @@ def test_resolve_artifact_valid(tmp_path):
 
 
 def test_resolve_artifact_root_out_of_range(tmp_path):
-    assert gallery.resolve_artifact(_record(tmp_path), 5, "a.png") is None
+    _png(tmp_path / "a.png")
+    record = _record(tmp_path)
+    past_the_end = len(gallery.artifact_roots(record))
+    assert gallery.resolve_artifact(record, past_the_end, "a.png") is None
+    assert gallery.resolve_artifact(record, -1, "a.png") is None
 
 
 def test_resolve_artifact_traversal(tmp_path):
@@ -219,6 +242,14 @@ def test_thumbnail_creates_and_caches(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gallery, "_render", no_render)
     assert gallery.thumbnail(source, 32) == first  # served from the cache
+
+
+def test_a_second_thumbnail_joins_the_first_in_the_cache(tmp_path):
+    _png(tmp_path / "a.png")
+    _png(tmp_path / "b.png")
+    assert gallery.thumbnail(tmp_path / "a.png", 32) is not None
+    assert gallery.thumbnail(tmp_path / "b.png", 32) is not None
+    assert len(list(gallery._cache_dir().iterdir())) == 2
 
 
 def test_thumbnail_corrupt_image(tmp_path):

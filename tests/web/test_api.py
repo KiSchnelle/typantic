@@ -426,6 +426,19 @@ def test_browse(env, tmp_path):
     assert data["path"] == str(tmp_path.resolve())
 
 
+def test_browse_lists_folders_first_ignoring_case(env, tmp_path):
+    listed = tmp_path / "listed"  # tmp_path also holds the env's own files
+    listed.mkdir()
+    for folder in ("Zeta", "alpha"):
+        (listed / folder).mkdir()
+    for file in ("a.txt", "B.txt"):
+        (listed / file).write_text("x")
+    data = env.client.get(f"/api/fs?path={listed}", headers=AUTH).json()
+    assert [e["name"] for e in data["entries"]] == ["alpha", "Zeta", "a.txt", "B.txt"]
+    assert data["total"] == 4
+    assert data["truncated"] is False
+
+
 def test_browse_no_path_uses_home(env):
     data = env.client.get("/api/fs", headers=AUTH).json()
     assert data["path"]
@@ -476,6 +489,15 @@ def test_mkdir(env, tmp_path):
     resp = env.client.post("/api/fs/mkdir", json=body, headers=AUTH)
     assert resp.status_code == 200
     assert (tmp_path / "new").is_dir()
+
+
+def test_mkdir_on_an_existing_folder_opens_it(env, tmp_path):
+    (tmp_path / "there").mkdir()
+    (tmp_path / "there" / "kept.txt").write_text("x")
+    body = {"path": str(tmp_path), "name": "there"}
+    resp = env.client.post("/api/fs/mkdir", json=body, headers=AUTH)
+    assert resp.status_code == 200
+    assert [e["name"] for e in resp.json()["entries"]] == ["kept.txt"]
 
 
 def test_mkdir_reserved_name(env, tmp_path):
@@ -764,11 +786,13 @@ def test_non_ascii_token_is_rejected_not_a_server_error(env):
     assert resp.status_code == 401
 
 
-def test_browse_stops_reading_a_huge_directory(env, tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry_cap", [3, 5])
+def test_browse_stops_reading_a_huge_directory(env, tmp_path, monkeypatch, entry_cap):
     # A folder with millions of entries must not be read into memory whole to
-    # show the first page; the total then counts what was read.
+    # show the first page; the total then counts what was read. At a cap of 5
+    # every entry read fits the page, so only the unread rest marks it truncated.
     monkeypatch.setattr(fs_mod, "_BROWSE_READ_CAP", 5)
-    monkeypatch.setattr(fs_mod, "_BROWSE_ENTRY_CAP", 3)
+    monkeypatch.setattr(fs_mod, "_BROWSE_ENTRY_CAP", entry_cap)
 
     class Entry:
         def __init__(self, index):
@@ -793,7 +817,7 @@ def test_browse_stops_reading_a_huge_directory(env, tmp_path, monkeypatch):
     data = env.client.get(f"/api/fs?path={tmp_path}", headers=AUTH).json()
     assert data["total"] == 5
     assert data["truncated"]
-    assert len(data["entries"]) == 3
+    assert len(data["entries"]) == entry_cap
 
 
 def test_a_submission_that_may_have_queued_is_504(env, monkeypatch):
@@ -949,6 +973,9 @@ def test_a_request_without_a_host_header_is_refused(tmp_path, monkeypatch):
         ("[::1", None),
         ("::1", None),  # an IPv6 literal must be bracketed
         ("localhost:http", None),
+        ("[::1]:abc", None),
+        ("[::1]:", None),
+        ("[::1]x5", None),
     ],
 )
 def test_host_name_is_parsed_strictly(header, name):

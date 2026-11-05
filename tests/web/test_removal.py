@@ -1,5 +1,6 @@
 import socket
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -376,6 +377,13 @@ def test_a_top_level_folder_stays(wired):
     launcher, _, store = wired
     record = _finish(store, _launch(launcher, "/usr"))
     assert "top-level" in launcher.removal_for(record.id).kept_reason
+
+
+def test_a_two_level_folder_is_not_top_level(tmp_path):
+    # A real tmp_path resolves deeper than this, so the folder is named directly.
+    target = Path("/scratch/results")
+    target_id = _removal.FolderId((-1, -1), frozenset({(-1, -1)}))
+    assert _removal._location_reason(target, target, target_id, tmp_path, {}) is None
 
 
 def test_a_symlink_is_not_followed(wired, tmp_path):

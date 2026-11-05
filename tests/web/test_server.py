@@ -160,12 +160,30 @@ def test_serve_runs_uvicorn(tmp_path, monkeypatch):
         captured["app"] = app
         captured.update(kwargs)
 
+    built = {}
+    real_make_api = server.make_api
+
+    def spy_make_api(launcher, **kwargs):
+        built.update(kwargs)
+        return real_make_api(launcher, **kwargs)
+
+    monkeypatch.setattr(server, "make_api", spy_make_api)
     monkeypatch.setattr(uvicorn, "run", fake_run)
     launcher = Launcher(JobStore(tmp_path / "jobs"))
-    server.serve(launcher, host="127.0.0.1", port=9000, token=None, title="X")
+    server.serve(
+        launcher,
+        host="127.0.0.1",
+        port=9000,
+        token=None,
+        title="X",
+        log_level="debug",
+    )
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 9000
+    assert captured["log_level"] == "debug"
     assert captured["app"] is not None
+    assert built["host"] == "127.0.0.1"
+    assert built["title"] == "X"
 
 
 def test_serve_prunes_the_thumbnail_cache_first(tmp_path, monkeypatch):
