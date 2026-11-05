@@ -155,8 +155,13 @@ def model_hints(model_cls: type[BaseModel]) -> dict[str, object]:
 def _by_name(model_cls: type[BaseModel]) -> bool:
     """Whether the model accepts a field under its own name despite an alias."""
     config = model_cls.model_config
-    # validate_by_name is the 2.11+ spelling; populate_by_name still works.
-    return bool(config.get("populate_by_name") or config.get("validate_by_name"))
+    # validate_by_name is the 2.11+ spelling; populate_by_name still works. With
+    # aliases off the name is all that is left: Pydantic refuses to have neither.
+    return bool(
+        config.get("populate_by_name")
+        or config.get("validate_by_name")
+        or not config.get("validate_by_alias", True),
+    )
 
 
 def _alias_paths(field: FieldInfo) -> list[tuple[str | int, ...]]:
@@ -186,8 +191,8 @@ def _key_paths(
 
     An alias is honoured unless the model turned ``validate_by_alias`` off; the
     field's own name is accepted when there is no alias, or when the model opts
-    into ``populate_by_name`` / ``validate_by_name``. Pydantic tries the aliases
-    first, so they come first.
+    into ``populate_by_name`` / ``validate_by_name`` or turned aliases off. Pydantic
+    tries the aliases first, so they come first.
     """
     aliases = _alias_paths(field)
     paths: list[tuple[str | int, ...]] = []

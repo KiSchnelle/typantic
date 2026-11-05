@@ -757,6 +757,36 @@ def test_a_nested_default_holding_a_secret_is_left_to_its_default(tmp_path: Path
     assert seen[0].db.password.get_secret_value() == "parent-pass"
 
 
+class _NameOnly(BaseModel):
+    model_config = ConfigDict(validate_by_alias=False)
+
+    value: int = Field(default=1, alias="spelled")
+
+
+class _NameOnlyPath(BaseModel):
+    model_config = ConfigDict(validate_by_alias=False)
+
+    value: int = Field(default=1, validation_alias=AliasPath("items", 0))
+
+
+@pytest.mark.parametrize("model", [_NameOnly, _NameOnlyPath])
+def test_a_model_with_aliases_off_takes_its_field_names(tmp_path, model):
+    assert unknown_config_keys(model, {"value": 2}) == []
+    assert build_config_template(model) == {"value": 1}
+    path = tmp_path / "c.yaml"
+    path.write_text("value: 2\n")
+    result, seen = _run(model, ["--config", str(path)])
+    assert result.exit_code == 0, result.output
+    assert seen[0].value == 2
+    result, seen = _run(model, ["--value", "3"])
+    assert result.exit_code == 0, result.output
+    assert seen[0].value == 3
+
+
+def test_a_model_with_aliases_off_rejects_the_alias():
+    assert unknown_config_keys(_NameOnly, {"spelled": 2}) == ["spelled"]
+
+
 class _Tokens(BaseModel):
     tokens: list[SecretStr] = [SecretStr("real")]
 

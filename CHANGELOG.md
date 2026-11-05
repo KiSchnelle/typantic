@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `type L[T] = list[T]`, a field `L[int]` got a plain text flag that then failed
   ("Input should be a valid list"); it is now a repeated flag. Arguments bind to the
   alias's own parameters, so `type P[A, B] = tuple[B, A]` reads correctly.
+- **A model with `validate_by_alias=False` alone takes its field names.** Pydantic
+  accepts them, but its config files rejected them as unknown, and an `AliasPath`
+  through a list failed at decoration with a misleading error.
 - **`collections.abc.Set` and `MutableSet` fields work in a strict model.** The CLI
   handed Pydantic a list, which a strict model refuses, so such a field could never
   be set from the command line.
