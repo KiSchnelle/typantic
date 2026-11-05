@@ -505,8 +505,8 @@ sys.exit(Launcher(store, backends={})._request_from_record(record).name != name)
 
 
 def test_launch_with_an_unknown_project_starts_nothing(wired):
-    # project_id is a foreign key, so an unknown one would fail at save(), after
-    # the process was already spawned, leaving it running and untracked.
+    # project_id is a foreign key: refused only at save(), an unknown one would
+    # leave the spawned process running and untracked.
     launcher, backend, store = wired
     with pytest.raises(UnknownProjectError):
         launcher.launch(_request(project_id="does-not-exist"))
@@ -531,8 +531,7 @@ def test_launch_cleans_up_the_job_dir_when_the_backend_raises(wired):
 
 
 def test_cancel_keeps_the_real_outcome_of_a_just_finished_job(wired):
-    # cancel() read the stale stored row, so a job that had already finished was
-    # recorded CANCELLED forever.
+    # The stored row can be stale: this job has finished, whatever it says.
     launcher, backend, _ = wired
     record = launcher.launch(_request())
     backend.poll_result = PollResult(status=JobStatus.DONE, exit_code=0)
@@ -599,8 +598,8 @@ def _finish(store, record):
 
 
 def test_a_slow_poll_does_not_undo_a_restart(wired):
-    # The poll answered about the old run; storing it over the restarted row
-    # lost the new run's handle, leaving it running untracked.
+    # The poll answers about the old run; stored over the restarted row, it would
+    # lose the new run's handle and leave that run untracked.
     launcher, backend, store = wired
     record = launcher.launch(_request())
 
@@ -646,8 +645,8 @@ def test_a_slow_poll_does_not_resurrect_a_deleted_job(wired):
 
 
 def test_a_poll_of_the_old_run_is_not_reused_for_the_new_one(wired):
-    # The cached answer about the old run outlived the restart, and the next
-    # refresh within the TTL applied it to the new run.
+    # A cached answer about the old run must not outlive the restart, or the next
+    # refresh within the TTL applies it to the new run.
     launcher, backend, store = wired
     record = launcher.launch(_request())
 
@@ -664,8 +663,8 @@ def test_a_poll_of_the_old_run_is_not_reused_for_the_new_one(wired):
 
 
 def test_cancel_does_not_trust_a_cached_running_status(wired):
-    # A 2 s old poll said RUNNING for a job that had finished since, so cancel
-    # signalled it and recorded CANCELLED over its real outcome.
+    # A cached poll can say RUNNING for a job that has finished since; cancel must
+    # not record CANCELLED over its real outcome.
     launcher, backend, _ = wired
     record = launcher.launch(_request())
     launcher.refresh(record)  # caches RUNNING
@@ -732,8 +731,8 @@ def _files(store, job_id):
 
 
 def test_a_restart_the_backend_rejects_leaves_the_job_as_it_was(wired):
-    # The new settings were written before the backend looked at its options,
-    # so a rejected restart destroyed the job's stored settings.
+    # The backend looks at its options before the new settings are written, so a
+    # rejected restart keeps the job's stored settings.
     launcher, backend, store = wired
     done = _finished(launcher, backend, values={"x": 1})
     before = _files(store, done.id)
@@ -762,8 +761,8 @@ def test_a_restart_that_fails_to_start_puts_the_files_back(wired, monkeypatch):
 
 
 def test_a_restarted_job_starts_with_an_empty_log(wired):
-    # A queued scheduler job writes nothing until it runs, so the dashboard
-    # showed the previous run's log as if it were the new one's.
+    # A queued scheduler job writes nothing until it runs, and the dashboard must
+    # not show the previous run's log as if it were the new one's.
     launcher, backend, store = wired
     done = _finished(launcher, backend)
     backend.writes_log = False
@@ -777,8 +776,8 @@ def test_a_restarted_job_starts_with_an_empty_log(wired):
 
 
 def test_a_restart_runs_from_the_stores_paths(wired):
-    # restart wrote the new config to the store's path but launched with the
-    # path in the record, which a pre-0.8.0 relative jobs root left relative.
+    # The new config goes to the store's path, so that is the path launched, even
+    # where the record holds a relative one.
     launcher, backend, store = wired
     done = _finished(launcher, backend)
     stale = done.model_copy(
@@ -1069,8 +1068,8 @@ def test_refresh_keeps_the_time_the_backend_says_the_job_finished(wired):
 
 
 def test_the_history_shows_the_live_status(wired):
-    # /api/history listed stored rows as they were, so a job that had finished
-    # showed as running there until the jobs list happened to refresh it.
+    # A job that has finished shows so in /api/history, whether or not the jobs
+    # list has refreshed it.
     launcher, backend, store = wired
     project = store.create_project("P")
     grouped = launcher.launch(_request(project_id=project.id))
@@ -1084,8 +1083,8 @@ def test_the_history_shows_the_live_status(wired):
 
 
 def test_empty_lists_inside_a_list_of_objects_are_dropped(wired):
-    # An untouched array one level down submits [] too; inside a list of objects
-    # it was kept, pinning the field to [] instead of its default.
+    # An untouched array one level down submits [] too; kept, it would pin the
+    # field to [] instead of its default.
     launcher, _, _ = wired
     values = {"mounts": [{"src": "a", "opts": []}], "tags": [], "grid": [[]]}
     preview = launcher.preview(_request(values=values))

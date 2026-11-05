@@ -416,8 +416,8 @@ def test_an_image_url_changes_when_the_file_is_rewritten(tmp_path):
 
 
 def test_a_16_bit_grayscale_thumbnail_is_not_washed_out(tmp_path):
-    # A browser shows a 0..65535 ramp black to white; clipping it to 8 bits made
-    # the thumbnail almost pure white.
+    # A browser shows a 0..65535 ramp black to white; clipped to 8 bits the
+    # thumbnail would be almost pure white.
     src = tmp_path / "ramp.png"
     ramp = Image.new("I;16", (256, 16))
     ramp.putdata([x * 257 for _ in range(16) for x in range(256)])
@@ -666,8 +666,8 @@ def test_a_scan_stops_reading_at_its_cap(tmp_path, monkeypatch):
 
 
 def test_a_capped_scan_still_sees_every_shallow_folder(tmp_path, monkeypatch):
-    # Depth first, the first deep subtree used the whole budget and a sibling
-    # folder's images were never reached.
+    # Depth first, the first deep subtree would use the whole budget and a sibling
+    # folder's images would never be reached.
     monkeypatch.setattr(gallery, "_IMAGE_SCAN_CAP", 12)
     for side in ("x", "y"):
         _png(tmp_path / side / f"{side}.png")

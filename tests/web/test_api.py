@@ -738,8 +738,8 @@ def test_browse_nonexistent_path_uses_home(env):
 
 
 def test_fs_browse_falls_back_to_home_for_an_unknown_user(env):
-    # Path.expanduser raises RuntimeError for ~nobody; unguarded that was a 500
-    # from an endpoint documented to fall back to home.
+    # Path.expanduser raises RuntimeError for ~nobody, and this endpoint is
+    # documented to fall back to home.
     resp = env.client.get("/api/fs", params={"path": "~nosuchuser12345"}, headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["path"] == str(pathlib.Path.home())
@@ -755,8 +755,8 @@ def test_fs_mkdir_rejects_an_unknown_user_path(env):
 
 
 def test_non_ascii_token_is_rejected_not_a_server_error(env):
-    # secrets.compare_digest raises TypeError on non-ASCII str, turning an
-    # ordinary 401 into an unhandled 500.
+    # secrets.compare_digest raises TypeError on non-ASCII str, which must stay an
+    # ordinary 401.
     resp = env.client.get("/api/commands", params={"token": "pässwörd"})
     assert resp.status_code == 401
 
@@ -982,8 +982,8 @@ def test_the_log_sockets_first_lookup_runs_off_the_event_loop(env, monkeypatch):
 
 
 def test_the_tail_stops_when_its_client_leaves(tmp_path):
-    # A quiet job sends nothing, and a closed socket was only noticed on a send:
-    # the tail kept asking for the job's status for as long as it ran.
+    # A quiet job sends nothing, so a closed socket has to be noticed without a
+    # send, or the tail keeps asking for the job's status for as long as it runs.
     log = tmp_path / "job.log"
     log.write_text("")
     calls = []
@@ -1017,8 +1017,8 @@ class _ChattyWS(FakeWS):
 
 
 def test_client_frames_do_not_shorten_the_poll(tmp_path):
-    # Each frame ended the wait early, turning a 1 s poll into a loop of
-    # scheduler queries for as long as the client kept sending.
+    # A frame must not end the wait early, or a client that keeps sending turns
+    # the 1 s poll into a loop of scheduler queries.
     log = tmp_path / "job.log"
     log.write_text("")
     calls = []
@@ -1038,8 +1038,8 @@ def test_a_client_that_keeps_sending_still_lets_the_wait_end():
 
 
 def test_a_replaced_log_is_streamed_from_its_start(tmp_path):
-    # A restart in place gives the job a fresh log; the tail kept its offset in
-    # the old file and so skipped the new run's first bytes, or all of them.
+    # A restart in place gives the job a fresh log; an offset kept from the old
+    # file would skip the new run's first bytes, or all of them.
     log = tmp_path / "job.log"
     log.write_text("old run\n")
     calls = {"n": 0}
@@ -1110,7 +1110,7 @@ def test_meta_without_a_brand_is_typantics(tmp_path, monkeypatch):
 
 
 def test_a_title_argument_still_names_the_dashboard(env):
-    # make_api(title=...) predates the brand and keeps working.
+    # make_api(title=...) names the dashboard without a brand.
     assert env.client.get("/api/meta", headers=AUTH).json()["wordmark_lead"] == "Test"
 
 
@@ -1132,7 +1132,7 @@ def _page_client(tmp_path, monkeypatch, brand=None):
 
 def test_the_page_loads_with_the_brand_in_its_tab(tmp_path, monkeypatch):
     # Not only once /api/meta answers: Safari keeps the tab icon a page loaded
-    # with, so the SPA's own swap never reached its tab.
+    # with, so the SPA's own swap does not reach its tab.
     brand = Brand(title="catchEM", icon="<svg/>")
     client = _page_client(tmp_path, monkeypatch, brand)
     icon = client.get("/api/meta").json()["icon"]

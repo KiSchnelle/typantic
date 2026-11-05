@@ -176,8 +176,8 @@ def test_slurm_poll_states(tmp_path, sacct, status, exit_code):
 
 
 def test_slurm_poll_keeps_last_known_status_when_the_query_fails(tmp_path):
-    # A failed query says nothing about the job. Reading its empty stdout as
-    # "not in the queue" reported a dead cluster as QUEUED forever.
+    # A failed query says nothing about the job; its empty stdout does not mean
+    # "not in the queue".
     runner = FakeRunner()
     runner.set("sacct", stdout="", returncode=127, stderr="sacct: not found")
     record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
@@ -384,8 +384,7 @@ def test_a_submission_that_timed_out_may_have_queued(tmp_path):
 
 @pytest.mark.parametrize("backend", [SlurmBackend, PbsBackend])
 def test_a_refused_cancel_is_reported(tmp_path, backend):
-    # A failed scancel/qdel was ignored, and the job recorded CANCELLED while it
-    # kept running.
+    # After a failed scancel/qdel the job keeps running, so it is not CANCELLED.
     runner = FakeRunner()
     runner.set("scancel", returncode=1, stderr="Invalid job id specified")
     runner.set("qdel", returncode=35, stderr="qdel: Unknown Job Id")
@@ -398,8 +397,8 @@ def test_a_refused_cancel_is_reported(tmp_path, backend):
 
 @pytest.mark.parametrize("backend", [SlurmBackend, PbsBackend])
 def test_a_jobs_path_with_a_space_stays_one_argument(tmp_path, backend):
-    # The job's log and folder were written unquoted into #SBATCH / #PBS lines;
-    # as submit arguments they need no quoting at all.
+    # The job's log and folder go in as submit arguments, not unquoted #SBATCH /
+    # #PBS lines, so they need no quoting at all.
     job_dir = tmp_path / "my jobs" / "j1"
     job_dir.mkdir(parents=True)
     runner = FakeRunner()
@@ -457,8 +456,8 @@ def test_the_preview_shows_the_submit_command(tmp_path, backend, tool):
     assert script.startswith("#!/bin/bash")
 
 
-def test_a_scheduler_subclass_without_control_args_submits_as_before(tmp_path):
-    # A third-party scheduler written against the old hooks keeps its own
+def test_a_scheduler_subclass_without_control_args_keeps_its_own_submit(tmp_path):
+    # A third-party scheduler that does not define _control_args keeps its own
     # submit command and directives untouched.
     class Lsf(SchedulerBackend):
         def _directives(self, params, *, job_dir, log_path):
@@ -528,7 +527,7 @@ def test_the_batch_script_leaves_its_exit_code(tmp_path, backend):
 
 
 def test_a_finished_job_is_read_from_its_marker_first(tmp_path):
-    # Without accounting (sacct refuses) a finished job was never seen to finish.
+    # Without accounting (sacct refuses), the marker is what says a job finished.
     runner = FakeRunner()
     runner.set("sacct", returncode=1, stderr="accounting storage is disabled")
     (tmp_path / ".typantic-exit").write_text("3\n")
@@ -601,8 +600,8 @@ def _empty_squeue():
 def test_a_job_the_scheduler_forgot_fails_after_a_grace_period(
     tmp_path, clock, backend, runner
 ):
-    # It stayed RUNNING forever. The grace period is for the exit marker, which
-    # a shared filesystem can show the login node a little late.
+    # The grace period is for the exit marker, which a shared filesystem can show
+    # the login node a little late.
     scheduler = backend(runner())
     record = _record(tmp_path, scheduler_id="1", status=JobStatus.RUNNING)
     assert scheduler.poll(record).status is JobStatus.RUNNING

@@ -388,9 +388,9 @@ def test_concurrent_first_loads_fetch_once(monkeypatch):
 
 # --- None-able form fields ---
 #
-# Collapsing `X | None` to X made RJSF fill in a non-null starting value for an
-# optional model, tuple or single Literal (so an untouched form submitted it),
-# or refuse to submit an enum whose kept null default it would not accept.
+# Collapsing `X | None` to X would make RJSF fill in a non-null starting value for
+# an optional model, tuple or single Literal (so an untouched form submits it), or
+# refuse to submit an enum whose kept null default it does not accept.
 
 
 class _Color(StrEnum):

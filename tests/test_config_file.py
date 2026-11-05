@@ -513,7 +513,7 @@ def test_template_uses_input_keys_so_it_reloads(tmp_path: Path) -> None:
 
 
 def test_template_of_a_self_referential_model_terminates() -> None:
-    # Without a cycle guard this recursed until the stack ran out.
+    # Without a cycle guard this would recurse until the stack ran out.
     class Node(BaseModel):
         name: str
         children: list["Node"]
@@ -542,11 +542,10 @@ def test_template_of_a_mutually_recursive_model_terminates() -> None:
 # ---------------------------------------------------------------------------
 # Which keys a field accepts
 #
-# The config check used a key set of its own (the field's one input key plus
-# every field name) instead of the keys Pydantic actually accepts: an aliased
-# populate_by_name model rejected the very keys --schema advertises (so every
-# web launch of it exited 2), and a file keyed by the field name of a plainly
-# aliased field was accepted and then dropped by Pydantic in silence.
+# The config check takes the keys Pydantic actually accepts: an aliased
+# populate_by_name model takes the keys --schema advertises, and a file keyed by
+# the field name of a plainly aliased field is refused, since Pydantic would drop
+# that value in silence.
 # ---------------------------------------------------------------------------
 def _run(model_cls, argv, *, config_file=True):
     seen: list[BaseModel] = []
@@ -709,9 +708,9 @@ def test_model_lookup_through_unions_and_collections():
 # ---------------------------------------------------------------------------
 # Templates that reload
 #
-# A secret default was written as its mask and read back as the value; a
-# nested default instance was dumped by serialization alias and failed its own
-# reload; an unedited template ran with '<REQUIRED: ...>' as real values.
+# A secret default is not written as a mask to read back as the value; a nested
+# default instance is dumped so that it passes its own reload; an unedited template
+# does not run with '<REQUIRED: ...>' as real values.
 # ---------------------------------------------------------------------------
 class _Vault(BaseModel):
     token: SecretStr = SecretStr("swordfish")

@@ -153,8 +153,8 @@ def test_poll_dead_pid_without_marker_is_failed(tmp_path, monkeypatch):
 
 
 def test_a_job_that_finishes_between_the_checks_is_not_failed(tmp_path, monkeypatch):
-    # The marker was read, then liveness checked: a job that wrote its marker and
-    # exited in between was recorded FAILED forever.
+    # The marker is read, then liveness checked: a job that writes its marker and
+    # exits in between has finished, not failed.
     def finishes_now(*_args):
         (tmp_path / ".typantic-exit").write_text("0\n")
         return False
@@ -273,7 +273,7 @@ def test_cancel_signals_our_jobs_process_group(tmp_path, monkeypatch):
 
 def test_cancel_leaves_a_pid_that_no_longer_leads_its_group(tmp_path, monkeypatch):
     # After a server restart, a stale row's pid can name an unrelated process
-    # of the same user; the old cancel SIGTERMed that process's whole group.
+    # of the same user, whose whole group must not get the SIGTERM.
     sent = _signals(monkeypatch)
     monkeypatch.setattr(proc, "_process_running", lambda *_a: True)
     monkeypatch.setattr(proc.os, "getpgid", lambda _pid: 1)
@@ -575,8 +575,8 @@ def test_a_job_on_this_host_is_probed_as_usual(tmp_path, monkeypatch):
 
 
 def test_a_finished_job_reports_when_it_finished(tmp_path):
-    # A job that ended overnight, with no server running, was stamped with the
-    # time a server first saw it finished.
+    # A job that ends overnight, with no server running, carries the marker's
+    # time, not the time a server first saw it finished.
     marker = tmp_path / ".typantic-exit"
     marker.write_text("0\n")
     ended = datetime(2026, 9, 20, 3, 14, 15, tzinfo=UTC)

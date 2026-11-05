@@ -1872,8 +1872,7 @@ def test_one_arg_callable_with_a_default_is_not_data_taking() -> None:
 
 class TestValidatedDataFactory:
     # Pydantic 2.10+ lets a default_factory take the validated data. Click calls
-    # a default with no arguments, so handing it such a factory raised TypeError
-    # on every invocation.
+    # a default with no arguments, so it must never be handed such a factory.
 
     @staticmethod
     def _model() -> type[BaseModel]:

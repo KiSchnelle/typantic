@@ -143,8 +143,7 @@ def test_serve_default_token_and_port(monkeypatch, tmp_path):
 
 
 def test_an_unknown_log_level_is_a_usage_error(monkeypatch, tmp_path):
-    # It was accepted, the banner printed, and uvicorn then failed with a
-    # KeyError traceback.
+    # Left to uvicorn, it would fail with a KeyError traceback after the banner.
     monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])
     started = []
     monkeypatch.setattr(cli_mod, "serve", lambda launcher, **k: started.append(k))
