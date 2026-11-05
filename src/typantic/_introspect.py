@@ -10,8 +10,10 @@ import collections.abc
 import types
 from typing import (
     Annotated,
+    Any,
     TypeAliasType,
     TypeGuard,
+    TypeVar,
     Union,
     cast,
     get_args,
@@ -88,10 +90,39 @@ def unwrap(annotation: object) -> object:
             annotation = get_args(annotation)[0]
         elif isinstance(annotation, TypeAliasType):
             annotation = annotation.__value__
+        elif (arguments := _alias_arguments(annotation)) is not None:
+            annotation = _substitute(get_origin(annotation).__value__, arguments)  # type: ignore[union-attr]
         elif getattr(annotation, "__supertype__", None) is not None:
             annotation = annotation.__supertype__  # type: ignore[attr-defined]
         else:
             return annotation
+
+
+def _alias_arguments(annotation: object) -> dict[TypeVar, object] | None:
+    """The arguments of a parametrised PEP 695 alias, by type parameter.
+
+    ``None`` for anything else, and for an alias whose arguments do not pair off
+    with its parameters one to one (a ``TypeVarTuple``, an omitted default).
+    """
+    alias = get_origin(annotation)
+    if not isinstance(alias, TypeAliasType):
+        return None
+    params, args = alias.__type_params__, get_args(annotation)
+    if len(params) != len(args) or not all(isinstance(p, TypeVar) for p in params):
+        return None
+    return dict(zip(cast("tuple[TypeVar, ...]", params), args, strict=True))
+
+
+def _substitute(value: Any, arguments: dict[TypeVar, object]) -> object:  # noqa: ANN401
+    """``value`` with each type parameter replaced by its argument.
+
+    Bound by name, as a value's ``__parameters__`` are in order of first use, not
+    of declaration: ``type P[A, B] = tuple[B, A]``.
+    """
+    if isinstance(value, TypeVar):
+        return arguments[value]
+    parameters = getattr(value, "__parameters__", ())
+    return value[tuple(arguments[p] for p in parameters)] if parameters else value
 
 
 def _is_variadic_tuple(args: tuple[object, ...]) -> bool:

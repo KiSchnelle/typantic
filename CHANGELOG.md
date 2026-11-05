@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own short flag in `run -h localhost`), ran the command without the run context or
   the timing log. Now `-h` counts only as the last token, and a bare `help` never
   does. `--target -h` as the last tokens still reads as a help request.
+- **A parametrised `type` alias gets the flag of what it stands for.** With
+  `type L[T] = list[T]`, a field `L[int]` got a plain text flag that then failed
+  ("Input should be a valid list"); it is now a repeated flag. Arguments bind to the
+  alias's own parameters, so `type P[A, B] = tuple[B, A]` reads correctly.
+- **`collections.abc.Set` and `MutableSet` fields work in a strict model.** The CLI
+  handed Pydantic a list, which a strict model refuses, so such a field could never
+  be set from the command line.
 
 ### Removed
 

@@ -1,6 +1,7 @@
 """Tests for the pydantic_to_typer decorator."""
 
 import collections
+import collections.abc
 import datetime as dt
 import decimal
 import inspect
@@ -41,7 +42,7 @@ from typantic._decorator import (
     _numeric_bounds,
     _panel_for_field,
 )
-from typantic._introspect import extract_base_type
+from typantic._introspect import extract_base_type, unwrap
 
 runner = CliRunner()
 
@@ -2217,6 +2218,92 @@ class TestOptionalNestedModels:
         result = runner.invoke(app, [])
         assert result.exit_code == 0, result.output
         assert seen[0].outer is None
+
+
+type _ListOf[T] = list[T]
+type _Swapped[A, B] = tuple[B, A]
+type _Optional[T] = T | None
+type _Same[T] = T
+type _Outer[T] = _ListOf[T]
+type _Noted[T] = Annotated[T, "note"]
+type _Constant[T] = int
+type _Variadic[*Ts] = tuple[*Ts]
+
+
+class TestGenericAliases:
+    def test_a_list_alias_is_a_repeated_flag(self) -> None:
+        class Cfg(BaseModel):
+            items: _ListOf[int] = []
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--items", "1", "--items", "2"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].items == [1, 2]
+
+    def test_arguments_bind_to_the_alias_parameters_not_their_use_order(self) -> None:
+        class Cfg(BaseModel):
+            pair: _Swapped[int, str] = ("a", 1)
+
+        app, seen = _make_app(Cfg)
+        result = runner.invoke(app, ["--pair", "x", "5"])
+        assert result.exit_code == 0, result.output
+        assert seen[0].pair == ("x", 5)
+
+    def test_an_optional_alias(self) -> None:
+        class Cfg(BaseModel):
+            size: _Optional[int] = None
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["--size", "3"]).exit_code == 0
+        assert seen[0].size == 3
+        assert runner.invoke(app, ["--size", "x"]).exit_code == 2
+
+    def test_an_alias_of_its_parameter(self) -> None:
+        class Cfg(BaseModel):
+            size: _Same[int] = 0
+
+        app, seen = _make_app(Cfg)
+        assert runner.invoke(app, ["--size", "3"]).exit_code == 0
+        assert seen[0].size == 3
+        assert runner.invoke(app, ["--size", "x"]).exit_code == 2
+
+    @pytest.mark.parametrize(
+        ("alias", "expected"),
+        [
+            (_Optional[int], int | None),
+            (_Same[int], int),
+            (_Outer[int], list[int]),
+            (_Noted[int], int),
+            (_Constant[str], int),
+        ],
+    )
+    def test_unwrap_reaches_what_the_alias_stands_for(self, alias, expected) -> None:
+        assert unwrap(alias) == expected
+
+    def test_an_alias_without_one_to_one_arguments_stays_as_declared(self) -> None:
+        alias = _Variadic[int, str]
+        assert unwrap(alias) is alias
+
+
+def test_a_strict_model_gets_its_abstract_sets() -> None:
+    class Cfg(BaseModel):
+        model_config = ConfigDict(strict=True)
+
+        frozen: Annotated[
+            collections.abc.Set[int],
+            Field(default=frozenset(), kw_only=True),
+        ]
+        changing: Annotated[
+            collections.abc.MutableSet[int],
+            Field(default_factory=set, kw_only=True),
+        ]
+
+    app, seen = _make_app(Cfg)
+    result = runner.invoke(app, ["--frozen", "1", "--changing", "2"])
+    assert result.exit_code == 0, result.output
+    assert seen[0].frozen == frozenset({1})
+    assert isinstance(seen[0].frozen, frozenset)
+    assert isinstance(seen[0].changing, set)
 
 
 def test_a_strict_model_gets_its_declared_containers() -> None:

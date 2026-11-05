@@ -739,6 +739,16 @@ def _sequence_cli_type(tp: object) -> tuple[object, str | None] | None:
     return tuple[tuple(item for item, _ in parsed)], None  # type: ignore[misc]
 
 
+# The collection a strict model accepts for each declared collection type.
+_CONCRETE_COLLECTIONS: dict[object, Callable[[Iterable[Any]], object]] = {
+    set: set,
+    frozenset: frozenset,
+    collections.deque: collections.deque,
+    collections.abc.Set: frozenset,
+    collections.abc.MutableSet: set,
+}
+
+
 def _declared_container(annotation: object) -> Callable[[Iterable[Any]], object] | None:
     """The collection a field declares where the CLI would hand it a list."""
     tp = _unwrap(annotation)
@@ -748,8 +758,8 @@ def _declared_container(annotation: object) -> Callable[[Iterable[Any]], object]
             return None
         tp = _unwrap(members[0])
     origin = get_origin(tp)
-    if origin in (set, frozenset, collections.deque):
-        return cast("Callable[[Iterable[Any]], object]", origin)
+    if origin in _CONCRETE_COLLECTIONS:
+        return _CONCRETE_COLLECTIONS[origin]
     if origin is tuple and get_args(tp)[-1:] == (Ellipsis,):
         return tuple
     return None
