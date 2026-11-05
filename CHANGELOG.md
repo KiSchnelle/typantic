@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   With `--db-port 5`, the model's other fields kept the values from the factory call
   made when the command was decorated, so a timestamp or counter stayed at its import
   time value. That call still happens, to seed the flags and help.
+- **Only a real help request skips `make_main`'s run context.** A `help` or `-h`
+  anywhere on the command line, even as a value (`--mode help`, or `-h` as an app's
+  own short flag in `run -h localhost`), ran the command without the run context or
+  the timing log. Now `-h` counts only as the last token, and a bare `help` never
+  does. `--target -h` as the last tokens still reads as a help request.
 
 ### Removed
 

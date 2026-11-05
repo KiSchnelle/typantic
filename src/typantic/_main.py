@@ -19,12 +19,12 @@ from pathlib import Path
 import typer
 
 _VERSION_TOKENS = {"--version", "-V", "version"}
-_HELP_FLAGS = {"--help", "-h", "help"}
 # Meta operations (introspection or a template, not a real run) exit 0 without
 # doing work. They skip the run context and the timing log, so machine-readable
 # stdout (e.g. the JSON Schema from --schema, which a web front-end parses)
 # stays clean.
-_META_FLAGS = _HELP_FLAGS | {"--schema", "--generate-config"}
+_META_FLAGS = {"--help", "--schema", "--generate-config"}
+_SHORT_HELP = "-h"
 
 
 def _wants_version(args: list[str]) -> bool:
@@ -41,6 +41,15 @@ def _wants_version(args: list[str]) -> bool:
 def _is_meta(arg: str) -> bool:
     """Whether ``arg`` is a meta flag, as ``--flag value`` or ``--flag=value``."""
     return arg.split("=", 1)[0] in _META_FLAGS
+
+
+def _invokes_meta(args: list[str]) -> bool:
+    """Whether the command line asks for a meta operation, not a real run.
+
+    ``-h`` counts only as the last token, as an app can make it the short flag of
+    an option of its own (``run -h localhost``). A bare ``help`` is an ordinary value.
+    """
+    return args[-1:] == [_SHORT_HELP] or any(_is_meta(arg) for arg in args)
 
 
 def _is_autocompleting() -> bool:
@@ -99,7 +108,7 @@ def make_main(
             load_app()()
             return
 
-        invoked_meta = any(_is_meta(arg) for arg in args)
+        invoked_meta = _invokes_meta(args)
         module_logger = logging.getLogger(package_name)
         start_time = time.monotonic()
 

@@ -7,7 +7,7 @@ import sys
 
 import pytest
 import typer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import typantic
 from typantic import add_command, make_main
@@ -306,6 +306,57 @@ def test_meta_flags_skip_the_run_context_and_the_timing(
             run_context=_spy_context(events),
         )()
     capsys.readouterr()
+    assert not events
+    assert "Execution took" not in caplog.text
+
+
+class _HostSettings(BaseModel):
+    host: str = Field(default="x", json_schema_extra={"cli_short": "-h"})
+    mode: str = "a"
+
+
+def _host_app(seen):
+    app = typer.Typer()
+    add_command(app, _HostSettings, seen.append, name="go")
+    return app
+
+
+def _short_help_app(seen):
+    app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]})
+    add_command(app, _Settings, seen.append, name="go", config_file=True)
+    return app
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["-h", "localhost"], ["--mode", "help"], ["--mode", "-h", "--host", "y"]],
+)
+def test_a_value_that_looks_like_help_is_a_real_run(monkeypatch, caplog, argv):
+    events = []
+    seen = []
+    monkeypatch.setattr(sys, "argv", ["prog", *argv])
+    with caplog.at_level(logging.INFO, logger=_PKG):
+        make_main(
+            lambda: _host_app(seen),
+            package_name=_PKG,
+            run_context=_spy_context(events),
+        )()
+    assert len(seen) == 1
+    assert events == ["enter", "exit"]
+    assert "Execution took" in caplog.text
+
+
+@pytest.mark.parametrize("argv", [["-h"], ["--help"], ["--version", "2", "-h"]])
+def test_a_real_help_request_skips_the_run_context(monkeypatch, caplog, capsys, argv):
+    events = []
+    monkeypatch.setattr(sys, "argv", ["prog", *argv])
+    with caplog.at_level(logging.INFO, logger=_PKG):
+        make_main(
+            lambda: _short_help_app([]),
+            package_name=_PKG,
+            run_context=_spy_context(events),
+        )()
+    assert "Usage" in capsys.readouterr().out
     assert not events
     assert "Execution took" not in caplog.text
 

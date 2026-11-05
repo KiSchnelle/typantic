@@ -447,8 +447,9 @@ myapp = "myapp.cli:main"
   context below.
 - **A real run is timed**, logging `Execution took N minutes.` to a logger named
   after `package_name`. Introspection flags (`--help`, `--schema`,
-  `--generate-config`, in either `--flag value` or `--flag=value` form) exit
-  without a run, so they are not timed and their stdout stays machine-readable.
+  `--generate-config`, in either `--flag value` or `--flag=value` form, and `-h`
+  as the last token) exit without a run, so they are not timed and their stdout
+  stays machine-readable.
 - **A crash becomes exit 1 with the traceback logged**, rather than a raw
   traceback; a non-zero `Exit` code propagates unchanged. Ctrl-C while the
   command modules import exits 130.
