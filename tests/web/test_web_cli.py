@@ -60,6 +60,17 @@ def test_serve_refuses_no_token_on_a_routable_host(monkeypatch, tmp_path, host):
     assert not started  # never reached the server
 
 
+def test_a_refused_serve_creates_no_job_store(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher_mod, "discover_commands", list)
+    jobs = tmp_path / "jobs"
+    result = runner.invoke(
+        app,
+        ["serve", "--no-token", "--host", "example.com", "--jobs-dir", str(jobs)],
+    )
+    assert result.exit_code == 2
+    assert not jobs.exists()
+
+
 @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
 def test_serve_allows_no_token_on_loopback(monkeypatch, tmp_path, host):
     monkeypatch.setattr(launcher_mod, "discover_commands", lambda: [META])

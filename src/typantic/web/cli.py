@@ -84,12 +84,6 @@ def serve_command(
 ) -> None:
     """Start the dashboard, printing the tokenized localhost URL to open."""
     brand = _brand(title, icon, accent)
-    launcher = Launcher(JobStore(jobs_dir))
-    if not launcher.commands:
-        logger.warning(
-            "No commands discovered. Install apps that register under the "
-            "'typantic.web_commands' entry-point group so their commands appear.",
-        )
     resolved_token = resolve_token(token, disable=no_token)
     # Keyed on the resolved token, not the flag, so `--token ""` cannot slip past.
     if resolved_token is None and not is_loopback_host(host):
@@ -100,6 +94,12 @@ def serve_command(
             f"and reach it over an SSH tunnel."
         )
         raise typer.BadParameter(msg)
+    launcher = Launcher(JobStore(jobs_dir))
+    if not launcher.commands:
+        logger.warning(
+            "No commands discovered. Install apps that register under the "
+            "'typantic.web_commands' entry-point group so their commands appear.",
+        )
     resolved_port = port or find_free_port(host)
 
     for line in startup_banner(

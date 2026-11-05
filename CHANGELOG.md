@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refused `serve` creates nothing.** `--no-token` on a routable host left a new job
+  store behind, and logged the "No commands discovered" warning, before refusing.
 - **PBS jobs get the submit environment.** `qsub` now runs with `-V`, as Slurm's
   `sbatch` exports by default. Without it, a job started with the compute node's login
   environment, so an app on the PATH of the server's virtualenv was not found and the
