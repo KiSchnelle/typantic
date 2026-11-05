@@ -10,7 +10,6 @@ folder can have many: a case-insensitive filesystem, a firmlink.
 """
 
 import os
-import socket
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
@@ -149,7 +148,7 @@ def _spelling_reason(
         return "its path contains .."
     if not local_paths:
         return f"the {record.backend} backend's paths may not be on this machine"
-    if record.host is not None and record.host != socket.gethostname():
+    if record.runs_elsewhere:
         return f"the job ran on {record.host}, not on this machine"
     return None
 

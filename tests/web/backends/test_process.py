@@ -466,6 +466,36 @@ def test_a_job_on_another_host_is_read_from_its_marker(tmp_path):
     assert (result.status, result.exit_code) == (JobStatus.DONE, 0)
 
 
+def _reaped(monkeypatch):
+    pids: list[int] = []
+    monkeypatch.setattr(proc, "_reap", pids.append)
+    return pids
+
+
+def test_a_job_on_another_host_never_reaps_its_pid(tmp_path, monkeypatch):
+    # The number names a process elsewhere; waiting on it here could steal the
+    # exit status of an unrelated child of this server.
+    pids = _reaped(monkeypatch)
+    (tmp_path / ".typantic-exit").write_text("0\n")
+    LocalBackend().poll(_elsewhere(_record(tmp_path, pid=4242)))
+    assert pids == []
+
+
+def test_a_local_job_with_a_marker_is_reaped(tmp_path, monkeypatch):
+    pids = _reaped(monkeypatch)
+    (tmp_path / ".typantic-exit").write_text("0\n")
+    LocalBackend().poll(_record(tmp_path, pid=4242))
+    assert pids == [4242]
+
+
+def test_runs_elsewhere_compares_the_recorded_host(tmp_path):
+    record = _record(tmp_path)
+    assert not record.runs_elsewhere
+    here = record.model_copy(update={"host": socket.gethostname()})
+    assert not here.runs_elsewhere
+    assert _elsewhere(record).runs_elsewhere
+
+
 def test_cancel_refuses_a_job_on_another_host(tmp_path, monkeypatch):
     sent = _signals(monkeypatch)
     monkeypatch.setattr(proc, "_process_running", lambda *_a: True)

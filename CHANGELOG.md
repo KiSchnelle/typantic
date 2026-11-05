@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A job from another host no longer has its pid reaped here.** Polling a finished
+  job of another login node waited on the same pid number on this machine, which
+  could take the exit status of an unrelated child of the server.
 - **A config template can always be loaded back.** `--generate-config` and
   `write_config_template` took any suffix and wrote YAML, to a file `--config` then
   refused. They now refuse anything but `.yaml`, `.yml` and `.json` and write nothing,

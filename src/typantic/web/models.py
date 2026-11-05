@@ -5,6 +5,7 @@ CLI, the launch backends, and the web API all share one typed surface.
 """
 
 import re
+import socket
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Self
@@ -189,6 +190,11 @@ class JobRecord(BaseModel):
     def is_terminal(self) -> bool:
         """Whether the job has reached a final state (no more polling needed)."""
         return self.status in TERMINAL_STATUSES
+
+    @property
+    def runs_elsewhere(self) -> bool:
+        """Whether the job's process runs on another host than this one."""
+        return self.host is not None and self.host != socket.gethostname()
 
 
 class JobCompat(BaseModel):

@@ -107,11 +107,6 @@ def _process_running(pid: int, pid_start: int | None = None) -> bool:
     return True
 
 
-def _elsewhere(record: JobRecord) -> bool:
-    """Whether the job's process runs on another host than this one."""
-    return record.host is not None and record.host != socket.gethostname()
-
-
 class ProcessBackend:
     """Spawn and track jobs as detached local subprocesses."""
 
@@ -162,7 +157,7 @@ class ProcessBackend:
         """Resolve status from the exit-code marker, else the pid's liveness."""
         job_dir = Path(record.job_dir)
         ended = finished(job_dir)
-        if ended is None and _elsewhere(record):
+        if ended is None and record.runs_elsewhere:
             # This host's process table knows nothing of the pid; the exit
             # marker, on the shared filesystem, will tell how the job ended.
             return PollResult(status=record.status, exit_code=record.exit_code)
@@ -178,7 +173,7 @@ class ProcessBackend:
             if ended is None:
                 # Gone without recording an exit code: crashed or was killed.
                 return PollResult(status=JobStatus.FAILED)
-        if record.pid is not None:
+        if record.pid is not None and not record.runs_elsewhere:
             _reap(record.pid)  # the wrapper is done; don't leave a zombie
         return ended
 
@@ -200,7 +195,7 @@ class ProcessBackend:
             ForeignHostError: If the job runs on another host: its pid names
                 nothing, or something else, here.
         """
-        if _elsewhere(record):
+        if record.runs_elsewhere:
             msg = (
                 f"Job {record.id} runs on {record.host}; cancel it from a "
                 f"dashboard on that host."
