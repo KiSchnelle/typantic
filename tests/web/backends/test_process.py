@@ -81,6 +81,22 @@ def test_local_launch_runs_to_completion(tmp_path):
     assert log.read_text() == "hello"
 
 
+def test_local_job_in_a_folder_with_a_space_leaves_its_marker(tmp_path):
+    job_dir = tmp_path / "my jobs"
+    job_dir.mkdir()
+    backend = LocalBackend()
+    launched = backend.launch(
+        ["sh", "-c", "exit 3"],
+        job_dir=job_dir,
+        log_path=job_dir / "job.log",
+        backend_options={},
+    )
+    _wait_for_marker(job_dir)
+    result = backend.poll(_record(job_dir, pid=launched.pid))
+    assert result.status is JobStatus.FAILED
+    assert result.exit_code == 3
+
+
 def test_local_launch_failure_maps_to_failed(tmp_path):
     backend = LocalBackend()
     launched = backend.launch(
@@ -269,10 +285,51 @@ def test_cancel_leaves_a_recycled_pid(tmp_path, monkeypatch):
     sent = _signals(monkeypatch)
     monkeypatch.setattr(proc.os, "waitpid", lambda *_a: (0, 0))
     monkeypatch.setattr(proc, "_pid_start_time", lambda _pid: 999)  # not ours
+    monkeypatch.setattr(proc.os, "kill", lambda *_a, **_k: None)
     monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid)
     record = _record(tmp_path, pid=4242).model_copy(update={"pid_start": 555})
     LocalBackend().cancel(record)
     assert sent == []
+
+
+def _raise(error):
+    def fail(*_args):
+        raise error
+
+    return fail
+
+
+def test_signal_says_the_group_was_there(tmp_path, monkeypatch):
+    sent = _signals(monkeypatch)
+    monkeypatch.setattr(proc, "_process_running", lambda *_a: True)
+    monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid)
+    assert LocalBackend()._signal(_record(tmp_path, pid=4242)) is True
+    assert sent == [(4242, signal.SIGTERM)]
+
+
+def test_signal_without_a_pid_says_nothing_was_there(tmp_path):
+    assert LocalBackend()._signal(_record(tmp_path)) is False
+
+
+def test_signal_says_an_exited_process_was_not_there(tmp_path, monkeypatch):
+    monkeypatch.setattr(proc, "_process_running", lambda *_a: False)
+    assert LocalBackend()._signal(_record(tmp_path, pid=4242)) is False
+
+
+def test_signal_says_a_pid_leading_no_group_was_not_there(tmp_path, monkeypatch):
+    sent = _signals(monkeypatch)
+    monkeypatch.setattr(proc, "_process_running", lambda *_a: True)
+    monkeypatch.setattr(proc.os, "getpgid", lambda _pid: 1)
+    assert LocalBackend()._signal(_record(tmp_path, pid=4242)) is False
+    assert sent == []
+
+
+@pytest.mark.parametrize("error", [ProcessLookupError(), PermissionError()])
+def test_signal_says_a_refused_signal_did_not_arrive(tmp_path, monkeypatch, error):
+    monkeypatch.setattr(proc, "_process_running", lambda *_a: True)
+    monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(proc.os, "killpg", _raise(error))
+    assert LocalBackend()._signal(_record(tmp_path, pid=4242)) is False
 
 
 def test_cancel_leaves_a_process_that_has_exited(tmp_path, monkeypatch):
@@ -396,7 +453,7 @@ def test_process_running_not_our_child_alive(monkeypatch):
 def test_pid_start_time_reads_starttime(monkeypatch, tmp_path):
     (tmp_path / "123").mkdir()
     # comm (field 2) has spaces and a ')'; starttime (field 22) is 987654.
-    stat = "123 (sh proc) S " + " ".join(["0"] * 18) + " 987654 0 0 0"
+    stat = "123 (sh) proc) S " + " ".join(["0"] * 18) + " 987654 0 0 0"
     (tmp_path / "123" / "stat").write_text(stat)
     monkeypatch.setattr(proc, "_PROC", tmp_path)
     assert proc._pid_start_time(123) == 987654
@@ -424,6 +481,7 @@ def test_process_running_start_matches_is_alive(monkeypatch):
 def test_process_running_pid_recycled_is_gone(monkeypatch):
     monkeypatch.setattr(proc.os, "waitpid", lambda *_a, **_k: (0, 0))
     monkeypatch.setattr(proc, "_pid_start_time", lambda _pid: 999)  # differs
+    monkeypatch.setattr(proc.os, "kill", lambda *_a, **_k: None)
     assert _process_running(4242, 555) is False
 
 

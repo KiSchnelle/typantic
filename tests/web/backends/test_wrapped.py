@@ -1,3 +1,4 @@
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -44,6 +45,16 @@ def test_ssh_wrap_minimal():
         "node1",
         "app run --config /jobs/j/submit_config.json",
     ]
+
+
+def test_ssh_remote_command_keeps_each_argument_whole():
+    argv = ["app", "run", "--config", "/my jobs/a;b/submit_config.json"]
+    wrapped = SshBackend()._wrap(
+        argv,
+        job_dir=JOB_DIR,
+        backend_options={"host": "node1"},
+    )
+    assert shlex.split(wrapped[-1]) == argv
 
 
 def test_ssh_wrap_full():

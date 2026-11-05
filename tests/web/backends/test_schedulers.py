@@ -1,4 +1,5 @@
 import os
+import shlex
 import stat
 import subprocess
 from datetime import UTC, datetime
@@ -412,6 +413,8 @@ def test_a_jobs_path_with_a_space_stays_one_argument(tmp_path, backend):
     script = (job_dir / "submit.sh").read_text()
     assert "--output" not in script
     assert "#PBS -o" not in script
+    # The marker redirect is the second-last line, ahead of `exit "$rc"`.
+    assert shlex.split(script.splitlines()[-2])[-1] == str(job_dir / ".typantic-exit")
 
 
 @pytest.mark.parametrize(
