@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now has to lift that pin to install this version.
 - **The bundled dashboard is built from updated frontend packages,** including
   the patched `fast-uri` that its form validation pulls in.
+- **The job index no longer uses SQLite's WAL mode,** which does not work across
+  hosts, while servers on several login nodes can share a store. An existing store
+  converts when a server opens it, so **stop every server using a store before
+  upgrading**. While another server still has it open, the conversion fails: the
+  new server logs a warning saying to stop the others, and keeps running in WAL
+  mode until it is restarted.
 
 ### Fixed
 

@@ -650,10 +650,11 @@ click **Launch**. The dashboard writes your values to a config file, runs
 - **Keep the token generated.** The printed URL carries a fresh random token;
   `--token X` works too, but a command line is visible in `ps` to every user
   of the machine. `--no-token` is for a loopback-only development run.
-- **One server per job store.** Servers on several login nodes can share a
-  store on a common filesystem. Each job records the host its process runs
-  on, and only that host's server probes or cancels it, but the servers do not
-  coordinate otherwise.
+- **Servers can share a job store.** Servers on several login nodes can use one
+  store on a common filesystem, which has to support file locks (NFS needs
+  working locks). Each job records the host its process runs on, and only that
+  host's server probes or cancels it, but the servers do not coordinate
+  otherwise.
 - **Jobs outlive the server**, so restarting it never kills a local job. Two
   exceptions: a server run as a `systemd --user` service takes its jobs down
   when the service stops (set `KillMode=process`), and one started inside a

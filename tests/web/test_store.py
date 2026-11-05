@@ -1,6 +1,8 @@
+import logging
 import os
 import sqlite3
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -388,3 +390,67 @@ def test_a_project_delete_that_leaves_files_behind_says_so(store):
         assert store.load("j2") is None
     finally:
         locked.chmod(0o700)
+
+
+def _journal_mode(db: Path) -> str:
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _wal_store(root: Path) -> Path:
+    """A store folder whose index was left in WAL mode, as older versions did."""
+    root.mkdir()
+    db = root / "index.sqlite3"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE seen (id TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+    return db
+
+
+def test_new_store_uses_a_rollback_journal(store):
+    assert _journal_mode(store.root / "index.sqlite3") == "delete"
+
+
+def test_store_left_in_wal_mode_converts_on_open(tmp_path):
+    db = _wal_store(tmp_path / "jobs")
+    assert _journal_mode(db) == "wal"
+
+    JobStore(tmp_path / "jobs").save(_record())
+
+    assert _journal_mode(db) == "delete"
+    assert not db.with_name("index.sqlite3-wal").exists()
+    assert not db.with_name("index.sqlite3-shm").exists()
+    assert JobStore(tmp_path / "jobs").load("j1") is not None
+
+
+def test_conversion_blocked_by_another_server_warns_and_keeps_serving(tmp_path, caplog):
+    db = _wal_store(tmp_path / "jobs")
+    other_server = sqlite3.connect(db)
+    try:
+        other_server.execute("SELECT * FROM seen").fetchall()
+        with caplog.at_level(logging.WARNING, logger="typantic.web"):
+            store = JobStore(tmp_path / "jobs")
+        store.save(_record())
+        assert store.load("j1") is not None
+        assert _journal_mode(db) == "wal"
+    finally:
+        other_server.close()
+    assert "Stop the other servers" in caplog.text
+
+    JobStore(tmp_path / "jobs")
+    assert _journal_mode(db) == "delete"
+
+
+def test_concurrent_writers_all_land(store):
+    ids = [f"j{i}" for i in range(40)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda job_id: store.save(_record(job_id)), ids))
+
+    assert {store.load(job_id).id for job_id in ids} == set(ids)

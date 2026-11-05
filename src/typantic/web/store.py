@@ -183,9 +183,19 @@ class JobStore:
                 self.root,
             )
         self._db_path = self.root / _DB_FILE
-        touch_private(self._db_path)  # SQLite gives its -wal/-shm files this mode
+        touch_private(self._db_path)  # SQLite gives its journal file this mode
         with self._connect() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
+            try:
+                # The mode is stored in the file, and WAL needs every server on
+                # one host, while a store can be shared across login nodes.
+                conn.execute("PRAGMA journal_mode=DELETE")
+            except sqlite3.OperationalError as exc:
+                logger.warning(
+                    "Could not take the job store index %s out of WAL mode (%s). "
+                    "Stop the other servers using this store, then restart this one.",
+                    self._db_path,
+                    exc,
+                )
             conn.executescript(_SCHEMA)
 
     @contextlib.contextmanager
