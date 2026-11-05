@@ -440,6 +440,14 @@ class Launcher:
         with self._lock:
             return self._job_locks.setdefault(job_id, threading.RLock())
 
+    def _forget_job_lock(self, job_id: str) -> None:
+        """Drop ``job_id``'s lock once it has no row left to guard.
+
+        A caller still waiting on the old lock finds no row and stores nothing.
+        """
+        with self._lock:
+            self._job_locks.pop(job_id, None)
+
     def _poll(self, record: JobRecord) -> PollResult:
         """Poll the backend, reusing a recent result for the same run.
 
@@ -672,6 +680,7 @@ class Launcher:
             self._forget_poll(job_id)
             record = self.get(job_id)
             if record is None:
+                self._forget_job_lock(job_id)
                 return None
             if record.is_terminal:
                 return record
@@ -759,10 +768,7 @@ class Launcher:
                     self.store.delete(job_id)
                 except FolderNotRemovedError as exc:
                     problems.append(str(exc))
-            with self._lock:
-                # A refresh still waiting on the old lock finds the row gone and
-                # stores nothing, so dropping it here is safe.
-                self._job_locks.pop(job_id, None)
+            self._forget_job_lock(job_id)
         return [*problems, *self._remove_confirmed(confirmed, planned, staying)]
 
     def _remove_confirmed(
@@ -862,6 +868,7 @@ class Launcher:
         with self._job_lock(job_id):
             record = self.get(job_id)
             if record is None:
+                self._forget_job_lock(job_id)
                 return None
             if not record.is_terminal:
                 msg = (

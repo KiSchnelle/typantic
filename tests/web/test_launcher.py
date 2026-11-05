@@ -277,6 +277,13 @@ def test_cancel_missing(wired):
     assert launcher.cancel("missing") is None
 
 
+def test_an_unknown_job_id_leaves_no_lock_behind(wired):
+    launcher, *_ = wired
+    assert launcher.cancel("nope-1") is None
+    assert launcher.restart("nope-2") is None
+    assert launcher._job_locks == {}
+
+
 def test_cancel_unknown_backend_still_marks_cancelled(wired):
     launcher, _, _ = wired
     record = launcher.launch(_request())

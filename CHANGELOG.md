@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cancelling or restarting an unknown job id leaves nothing behind.** Each such
+  request kept a lock in memory for the life of the server.
 - **A log client's messages no longer speed up the log poll.** Any frame a connected
   client sent, such as a keep-alive ping, ended the one-second wait, so the server
   queried the job's status (for a scheduler job, `sacct` or `squeue`) once per frame.
