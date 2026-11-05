@@ -1,3 +1,6 @@
+import functools
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -91,3 +94,53 @@ def test_route_names_follow_the_name_argument():
     names = {r.name for r in app.routes}
     assert "predict" in names
     assert "predict_schema" in names
+
+
+class _Body(BaseModel):
+    x: int
+
+
+class _AsyncHandler:
+    async def __call__(self, config):
+        return {"seen": config.model_dump()}
+
+
+class _SyncHandler:
+    def __call__(self, config):
+        return {"seen": config.model_dump()}
+
+
+@pytest.mark.parametrize("handler", [_AsyncHandler(), _SyncHandler()])
+def test_a_callable_object_is_awaited_where_it_is_async(handler):
+    app = FastAPI()
+    add_endpoint(app, _Body, handler, name="call")
+    response = TestClient(app).post("/call", json={"x": 2})
+    assert response.status_code == 200
+    assert response.json() == {"seen": {"x": 2}}
+
+
+def test_a_handler_without_a_name_asks_for_one():
+    def run(config, extra):
+        return {"sum": config.x + extra}
+
+    with pytest.raises(ValueError, match="name="):
+        add_endpoint(FastAPI(), _Body, functools.partial(run, extra=1))
+
+
+def test_a_partial_handler_registers_under_a_given_name():
+    def run(config, extra):
+        return {"sum": config.x + extra}
+
+    app = FastAPI()
+    add_endpoint(app, _Body, functools.partial(run, extra=1), name="add")
+    response = TestClient(app).post("/add", json={"x": 2})
+    assert response.json() == {"sum": 3}
+
+
+def test_an_async_partial_is_awaited():
+    async def run(config, extra):
+        return {"sum": config.x + extra}
+
+    app = FastAPI()
+    add_endpoint(app, _Body, functools.partial(run, extra=1), name="add")
+    assert TestClient(app).post("/add", json={"x": 2}).json() == {"sum": 3}

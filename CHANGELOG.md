@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`add_endpoint` handles callable objects.** An object with an `async def __call__`
+  was not awaited, so every request answered 500. A handler with no `__name__`, such as
+  a `functools.partial`, failed with an `AttributeError`; it now gets a `ValueError`
+  asking for `name=`, and registers fine with one.
 - **A hostname that is not valid UTF-8 no longer stops `serve`.** The lookup for the
   SSH tunnel line crashed the startup with a `UnicodeDecodeError`.
 - **A refused `serve` creates nothing.** `--no-token` on a routable host left a new job

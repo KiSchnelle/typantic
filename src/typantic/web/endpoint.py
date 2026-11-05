@@ -35,12 +35,21 @@ def add_endpoint[ModelT: BaseModel](
             response body. An ``async def`` handler is awaited.
         name: Route name (defaults to the handler's ``__name__``).
         path: Route path (defaults to ``/{name}``).
+
+    Raises:
+        ValueError: If no ``name`` is given and the handler has no ``__name__``,
+            as with a ``functools.partial`` or a callable object.
     """
-    route_name = name or handler.__name__
+    route_name = name or getattr(handler, "__name__", None)
+    if not route_name:
+        msg = f"{handler!r} has no __name__; pass add_endpoint(name=...)."
+        raise ValueError(msg)
     route = path or f"/{route_name}"
 
     run: Callable[..., Any]
-    if inspect.iscoroutinefunction(handler):
+    if inspect.iscoroutinefunction(handler) or inspect.iscoroutinefunction(
+        type(handler).__call__,
+    ):
         # Calling an async handler from a sync route would return the coroutine
         # itself, which FastAPI cannot serialise (a 500 instead of a result).
         async def run(payload: Any) -> Any:  # noqa: ANN401 - set on __annotations__
