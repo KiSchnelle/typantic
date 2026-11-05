@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   security advisories open against 12.3.0, and the pydantic floor includes
   2.14.2's security fixes. An app that pins `pillow<13` or `pydantic<2.14.2`
   now has to lift that pin to install this version.
+- **The bundled dashboard is built from updated frontend packages,** including
+  the patched `fast-uri` that its form validation pulls in.
 
 ### Fixed
 
