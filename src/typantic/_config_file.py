@@ -41,6 +41,15 @@ _DEFAULT_SENTINEL = "<DEFAULT: computed at runtime>"
 _REQUIRED_PREFIX = "<REQUIRED:"
 
 
+def _config_suffix(path: Path) -> str:
+    """The lowercased suffix of a config file, refusing one typantic cannot read."""
+    suffix = path.suffix.lower()
+    if suffix not in _SUFFIXES:
+        msg = f"Unsupported config file type '{suffix}'; use .yaml or .json."
+        raise ValueError(msg)
+    return suffix
+
+
 def load_config_file(path: Path) -> dict[str, Any]:
     """Read a settings mapping from a ``.yaml`` / ``.yml`` / ``.json`` file.
 
@@ -51,20 +60,17 @@ def load_config_file(path: Path) -> dict[str, Any]:
         The parsed top-level mapping of settings.
 
     Raises:
-        ValueError: For an unsupported suffix, a document that cannot be parsed,
-            or a document whose top level is not a mapping.
+        ValueError: For an unsupported suffix, a document that cannot be decoded
+            or parsed, or a top level that is not a mapping with string keys.
 
     """
-    suffix = path.suffix.lower()
-    if suffix not in _SUFFIXES:
-        msg = f"Unsupported config file type '{suffix}'; use .yaml or .json."
-        raise ValueError(msg)
+    suffix = _config_suffix(path)
 
-    # UTF-8 on every platform (not the locale's encoding), tolerating a BOM.
-    text = path.read_text(encoding="utf-8-sig")
     try:
+        # UTF-8 on every platform (not the locale's encoding), tolerating a BOM.
+        text = path.read_text(encoding="utf-8-sig")
         data = yaml.safe_load(text) if suffix in _YAML_SUFFIXES else json.loads(text)
-    except (yaml.YAMLError, json.JSONDecodeError) as exc:
+    except (yaml.YAMLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         msg = f"Config file {path} could not be parsed: {exc}"
         raise ValueError(msg) from exc
 
@@ -72,6 +78,11 @@ def load_config_file(path: Path) -> dict[str, Any]:
         # ValueError (not TypeError) keeps one exception type for any bad config.
         msg = f"Config file {path} must contain a mapping of settings."
         raise ValueError(msg)  # noqa: TRY004
+    # Keys further down may be anything: dict[int, ...] is a legal field type.
+    other_keys = [repr(key) for key in data if not isinstance(key, str)]
+    if other_keys:
+        msg = f"Config file {path} has setting names that are not text: "
+        raise ValueError(msg + ", ".join(other_keys))
     unfilled = _placeholders(data)
     if unfilled:
         # An unedited template would otherwise run with the placeholder text as
@@ -369,15 +380,20 @@ def _put(template: dict[str, object], path: tuple[str, ...], value: object) -> N
 def write_config_template(model_cls: type[BaseModel], path: Path) -> None:
     """Write an editable default config template for a settings model.
 
-    The format follows the path suffix: ``.json`` is written as JSON, anything
-    else as YAML. See :func:`build_config_template` for the templating rules.
+    The format follows the path suffix: ``.json`` is written as JSON, ``.yaml``
+    and ``.yml`` as YAML. See :func:`build_config_template` for the templating
+    rules.
 
     Args:
         model_cls: The settings model to template.
-        path: Destination file (``.json`` for JSON, otherwise YAML).
+        path: Destination file.
+
+    Raises:
+        ValueError: For a suffix :func:`load_config_file` could not read back.
     """
+    suffix = _config_suffix(path)
     template = build_config_template(model_cls)
-    if path.suffix.lower() == ".json":
+    if suffix == ".json":
         # Strict JSON: a non-finite float is written as the string Pydantic reads
         # back as that float, not as the Infinity/NaN tokens JSON does not have.
         text = json.dumps(_json_safe(template), indent=2, allow_nan=False)

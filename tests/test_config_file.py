@@ -1004,3 +1004,93 @@ def test_a_multi_step_alias_path_loads_through_config(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--config", str(path)])
     assert result.exit_code == 0, result.output
     assert seen[0].x.v == 1
+
+
+# ---------------------------------------------------------------------------
+# A bad config file fails with an error naming the file
+# ---------------------------------------------------------------------------
+
+
+def _unwrapped(text: str) -> str:
+    """The output without Rich's box and line wrapping, nor any other whitespace."""
+    return re.sub(r"[\s│]", "", _plain(text))
+
+
+@pytest.mark.parametrize("name", ["t.conf", "t.toml", "t"])
+def test_generate_config_refuses_a_suffix_config_cannot_read(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    app, _ = _build_app()
+    path = tmp_path / name
+    result = runner.invoke(app, ["go", "--generate-config", str(path)])
+    assert result.exit_code == 2
+    assert "Unsupportedconfigfiletype" in _unwrapped(result.output)
+    assert not path.exists()
+
+
+def test_write_config_template_refuses_an_unreadable_suffix(tmp_path: Path) -> None:
+    path = tmp_path / "t.conf"
+    with pytest.raises(ValueError, match="Unsupported config file type"):
+        write_config_template(Simple, path)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("name", ["c.yaml", "c.json"])
+def test_a_file_that_is_not_utf8_is_named_in_the_error(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(ValueError, match=re.escape(str(path))):
+        load_config_file(path)
+
+
+def test_config_flag_names_a_file_that_is_not_utf8(tmp_path: Path) -> None:
+    app, _ = _build_app()
+    path = tmp_path / "c.yaml"
+    path.write_bytes(b"\xff\xfe\x00")
+    result = runner.invoke(app, ["go", "--config", str(path)])
+    assert result.exit_code == 2
+    assert "c.yaml" in _unwrapped(result.output)
+
+
+def test_a_non_string_top_level_key_is_refused_naming_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "c.yaml"
+    path.write_text("1: x\nname: y\n")
+    with pytest.raises(ValueError, match=r"c\.yaml.*1"):
+        load_config_file(path)
+
+
+def test_a_non_string_key_on_an_extra_allow_model_is_a_parameter_error(
+    tmp_path: Path,
+) -> None:
+    class Open(BaseModel):
+        model_config = ConfigDict(extra="allow")
+        name: str = "n"
+
+    app = typer.Typer()
+
+    @app.command()
+    @pydantic_to_typer(Open, config_file=True)
+    def go(config: Open) -> None:
+        typer.echo(config.name)
+
+    path = tmp_path / "c.yaml"
+    path.write_text("1: x\n")
+    result = runner.invoke(app, ["--config", str(path)])
+    assert result.exit_code == 2, result.output
+    assert "c.yaml" in _unwrapped(result.output)
+
+
+def test_a_non_string_key_below_the_top_level_is_left_to_the_model(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "c.yaml"
+    path.write_text("counts:\n  1: 2\n")
+
+    class Counts(BaseModel):
+        counts: dict[int, int]
+
+    assert Counts(**load_config_file(path)).counts == {1: 2}

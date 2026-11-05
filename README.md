@@ -401,9 +401,10 @@ template = build_config_template(Config)            # the same mapping, unwritte
 settings = Config(**load_config_file(Path("config.yaml")))
 ```
 
-`write_config_template` picks JSON for a `.json` suffix and YAML otherwise.
-`load_config_file` accepts `.yaml`, `.yml` and `.json`, and raises `ValueError`
-for an unsupported suffix, unparseable content, or a non-mapping top level.
+Both accept `.yaml`, `.yml` and `.json`, and pick the format from the suffix; any
+other suffix raises `ValueError`, and `--generate-config` refuses it too.
+`load_config_file` also raises `ValueError` for content that cannot be decoded or
+parsed, or a top level that is not a mapping with string keys, naming the file.
 
 ### File-only commands
 

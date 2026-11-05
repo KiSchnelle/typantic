@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A config template can always be loaded back.** `--generate-config` and
+  `write_config_template` took any suffix and wrote YAML, to a file `--config` then
+  refused. They now refuse anything but `.yaml`, `.yml` and `.json` and write nothing,
+  so a suffix-less template path or a direct call with one now fails.
+- **A bad config file fails with an error naming the file.** A file that is not valid
+  UTF-8 gave only the codec's message, and a non-string top-level key such as `1: x`
+  on an `extra="allow"` model crashed with a raw `TypeError`.
 - **A config file may set a model through a multi-step `AliasPath`.** With
   `validation_alias=AliasPath("a", "b")` on a nested model, or two fields sharing the
   key `a`, Pydantic accepted `{a: {b: {v: 1}}}` but `--config` rejected it as unknown
