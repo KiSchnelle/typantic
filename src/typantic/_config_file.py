@@ -307,12 +307,19 @@ def build_config_template(
 
 
 def _holds_secret(value: object) -> bool:
-    """Whether ``value`` is a secret, or a model holding one at any depth."""
+    """Whether ``value`` is a secret, or a model or container holding one."""
     if isinstance(value, SecretStr | SecretBytes):
         return True
     if isinstance(value, BaseModel):
         return any(
             _holds_secret(getattr(value, name)) for name in type(value).model_fields
+        )
+    if isinstance(value, list | tuple | set | frozenset):
+        return any(_holds_secret(item) for item in cast("list[object]", value))
+    if isinstance(value, dict):
+        return any(
+            _holds_secret(key) or _holds_secret(item)
+            for key, item in cast("dict[object, object]", value).items()
         )
     return False
 

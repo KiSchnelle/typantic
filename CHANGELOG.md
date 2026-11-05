@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invalid bytes made `GET /api/jobs/{id}/request`, compatibility checks and restart
   answer 500; they now rebuild the request from the job's config, and a config that
   cannot be read counts as empty.
+- **A secret inside a container default stays out of the config template.** A
+  `list[SecretStr]` or `dict[str, SecretStr]` default was written as its mask, and
+  loading the template replaced the real default with the literal `**********`.
+  Such a field now gets the same "use the default" marker as a plain secret.
 
 ### Removed
 

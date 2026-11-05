@@ -757,6 +757,69 @@ def test_a_nested_default_holding_a_secret_is_left_to_its_default(tmp_path: Path
     assert seen[0].db.password.get_secret_value() == "parent-pass"
 
 
+class _Tokens(BaseModel):
+    tokens: list[SecretStr] = [SecretStr("real")]
+
+
+class _TupleTokens(BaseModel):
+    tokens: tuple[SecretStr, ...] = (SecretStr("real"),)
+
+
+class _SetTokens(BaseModel):
+    tokens: set[SecretStr] = {SecretStr("real")}
+
+
+class _FrozenTokens(BaseModel):
+    tokens: frozenset[SecretStr] = frozenset({SecretStr("real")})
+
+
+class _DictTokens(BaseModel):
+    tokens: dict[str, SecretStr] = {"key": SecretStr("real")}
+
+
+class _KeyTokens(BaseModel):
+    tokens: dict[SecretStr, int] = {SecretStr("real"): 1}
+
+
+class _DeepTokens(BaseModel):
+    tokens: dict[str, list[SecretStr]] = {"key": [SecretStr("real")]}
+
+
+class _ModelTokens(BaseModel):
+    held: _Tokens = _Tokens()
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        _Tokens,
+        _TupleTokens,
+        _SetTokens,
+        _FrozenTokens,
+        _DictTokens,
+        _KeyTokens,
+        _DeepTokens,
+        _ModelTokens,
+    ],
+)
+def test_a_secret_inside_a_container_default_is_left_to_its_default(tmp_path, model):
+    tmpl = tmp_path / "t.yaml"
+    result, _ = _run(model, ["--generate-config", str(tmpl)], config_file="only")
+    assert result.exit_code == 0, result.output
+    assert "*****" not in tmpl.read_text()
+    result, seen = _run(model, ["--config", str(tmpl)], config_file="only")
+    assert result.exit_code == 0, result.output
+    assert seen == [model()]
+
+
+def test_a_container_default_without_a_secret_is_still_written_out():
+    class Plain(BaseModel):
+        names: list[str] = ["a"]
+        sizes: dict[str, int] = {"b": 1}
+
+    assert build_config_template(Plain) == {"names": ["a"], "sizes": {"b": 1}}
+
+
 class _Todo(BaseModel):
     name: str = Field(description="App name.")
     inputs: list[str]
