@@ -8,7 +8,7 @@ from starlette.datastructures import Headers
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-_WS_POLICY_VIOLATION = 1008
+WS_POLICY_VIOLATION = 1008
 
 
 def token_ok(configured: str | None, supplied: str | None) -> bool:
@@ -51,7 +51,7 @@ class LocalHostOnly:
         elif scope["type"] == "websocket":
             await receive()  # the handshake's websocket.connect
             # Closing before accepting rejects the handshake (HTTP 403).
-            await send({"type": "websocket.close", "code": _WS_POLICY_VIOLATION})
+            await send({"type": "websocket.close", "code": WS_POLICY_VIOLATION})
         else:
             refusal = PlainTextResponse("Invalid Host header.", status_code=400)
             await refusal(scope, receive, send)

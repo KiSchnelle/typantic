@@ -35,6 +35,11 @@ def _is_ipv6(host: str) -> bool:
         return False  # a hostname, not a literal
 
 
+def _host_literal(host: str) -> str:
+    """``host`` as it goes before a ``:port``: an IPv6 literal is bracketed."""
+    return f"[{host}]" if _is_ipv6(host) else host
+
+
 def is_loopback_host(host: str) -> bool:
     """Whether ``host`` is a loopback address the OS will not expose off-machine.
 
@@ -65,8 +70,7 @@ def dashboard_url(host: str, port: int, token: str | None) -> str:
     ``#``, which would otherwise silently truncate or corrupt the query), and an
     IPv6 literal host is bracketed so the port stays readable as a port.
     """
-    netloc = f"[{host}]" if _is_ipv6(host) else host
-    base = f"http://{netloc}:{port}/"
+    base = f"http://{_host_literal(host)}:{port}/"
     return f"{base}?token={quote(token, safe='')}" if token else base
 
 
@@ -110,8 +114,7 @@ def ssh_forward_command(host: str, port: int, *, user: str, server: str) -> str:
     line is copy-paste ready; edit them if you reach the host under a different
     name. An IPv6 bind is bracketed, as ``-L`` needs it.
     """
-    target = f"[{host}]" if _is_ipv6(host) else host
-    return f"ssh -N -L {port}:{target}:{port} {user}@{server}"
+    return f"ssh -N -L {port}:{_host_literal(host)}:{port} {user}@{server}"
 
 
 def startup_banner(

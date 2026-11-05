@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
+from typantic.web._files import PRIVATE_DIR
 from typantic.web._paths import expand, is_dir, is_file, resolved, utf8
 from typantic.web._removal import configured_output
 from typantic.web.models import JobImage, JobImages, JobRecord
@@ -218,7 +219,7 @@ def _write_cached(path: Path, data: bytes) -> None:
     try:
         # Thumbnails show a job's outputs, so the cache is as private as the
         # job store: the folder is 0700, and mkstemp creates each file 0600.
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.mkdir(mode=PRIVATE_DIR, parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     except OSError:
         return

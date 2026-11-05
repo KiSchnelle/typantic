@@ -66,11 +66,10 @@ from typantic.web.models import (
     ProjectCreate,
 )
 from typantic.web.schema import SchemaError
-from typantic.web.security import LocalHostOnly, token_ok
+from typantic.web.security import WS_POLICY_VIOLATION, LocalHostOnly, token_ok
 from typantic.web.store import FolderNotRemovedError
 
 _SPA_DIR = Path(__file__).parent / "web_dist"
-_WS_POLICY_VIOLATION = 1008
 
 # What the SPA's index.html shows in the browser tab: typantic's name and icons,
 # which _branded_page replaces with the dashboard's brand.
@@ -379,12 +378,12 @@ def make_api(  # noqa: C901, PLR0913, PLR0915 - a route-registering factory; eac
     @app.websocket("/ws/jobs/{job_id}/log")
     async def stream_log(websocket: WebSocket, job_id: str) -> None:
         if not token_ok(token, websocket.query_params.get("token")):
-            await websocket.close(code=_WS_POLICY_VIOLATION)
+            await websocket.close(code=WS_POLICY_VIOLATION)
             return
         # Off the event loop: a scheduler job's status is a sacct call away.
         record = await asyncio.to_thread(launcher.get, job_id)
         if record is None:
-            await websocket.close(code=_WS_POLICY_VIOLATION)
+            await websocket.close(code=WS_POLICY_VIOLATION)
             return
         await websocket.accept()
         await _tail_log(websocket, launcher, job_id, Path(record.log_path))
