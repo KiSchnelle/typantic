@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The launch form, the new-project box and the folder picker show errors without a
+  JavaScript prefix.** They read `Error: 409 ...` where the rest of the dashboard reads
+  `409 ...`.
 - **`add_endpoint` handles callable objects.** An object with an `async def __call__`
   was not awaited, so every request answered 500. A handler with no `__name__`, such as
   a `functools.partial`, failed with an `AttributeError`; it now gets a `ValueError`

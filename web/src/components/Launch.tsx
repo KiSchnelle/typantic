@@ -13,7 +13,7 @@ import {
 } from "../api.ts";
 import { useStore } from "../store.ts";
 import type { CommandMeta, JsonSchema, LaunchPreview } from "../types.ts";
-import { Button, Card } from "./ui.tsx";
+import { Button, Card, errorText } from "./ui.tsx";
 import { CheckboxWidget, templates } from "./rjsfTemplates.tsx";
 import { PathWidget } from "./PathWidget.tsx";
 import { NewProjectInput } from "./NewProjectInput.tsx";
@@ -177,7 +177,7 @@ export default function Launch(): ReactNode {
     let active = true;
     fetchSchema(selectedCommandKey)
       .then((s) => active && setSchema(s))
-      .catch((e: unknown) => active && setError(String(e)));
+      .catch((e: unknown) => active && setError(errorText(e)));
     return () => {
       active = false;
     };
@@ -215,7 +215,7 @@ export default function Launch(): ReactNode {
         : await launchJob(request);
       openJob(record.id);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(errorText(e));
       setBusy(false);
     }
   };
@@ -230,7 +230,7 @@ export default function Launch(): ReactNode {
         ),
       );
     } catch (e: unknown) {
-      setError(String(e));
+      setError(errorText(e));
     } finally {
       setPreviewing(false);
     }

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { createDir, fetchDir } from "../api.ts";
 import type { FsEntry, FsListing } from "../types.ts";
+import { errorText } from "./ui.tsx";
 
 type PickerMode = "file" | "dir" | "any";
 
@@ -100,7 +101,7 @@ function DirBrowser({
         setListing(data);
         setLoadError(null);
       })
-      .catch((e: unknown) => ticket === request.current && setLoadError(String(e)));
+      .catch((e: unknown) => ticket === request.current && setLoadError(errorText(e)));
   };
 
   const submitNewFolder = () => {
@@ -114,7 +115,7 @@ function DirBrowser({
         setLoadError(null);
         setNewName(null);
       })
-      .catch((e: unknown) => setLoadError(String(e)));
+      .catch((e: unknown) => setLoadError(errorText(e)));
   };
 
   useEffect(() => {

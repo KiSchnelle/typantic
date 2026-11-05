@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { X } from "lucide-react";
 import { createProject } from "../api.ts";
 import type { Project } from "../types.ts";
-import { cn } from "./ui.tsx";
+import { cn, errorText } from "./ui.tsx";
 
 // The inline "type a name → Create" widget, shared by the Launch form and the
 // Projects tab. It owns its own name + error state so a failed create is always
@@ -28,7 +28,7 @@ export function NewProjectInput({
     setError(null);
     void createProject(trimmed)
       .then(onCreated)
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => setError(errorText(e)));
   };
 
   return (
