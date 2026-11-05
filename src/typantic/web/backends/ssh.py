@@ -51,12 +51,16 @@ class SshOptions(BaseModel):
 def _remote_cd(directory: str) -> str:
     """``cd`` into ``directory``, leaving a leading ``~`` for the remote shell.
 
-    Quoted whole, ``~/work`` would name a folder literally called ``~``.
+    Quoted whole, ``~/work`` would name a folder literally called ``~``. A leading
+    ``-`` gets a ``./``: ``cd`` would read it as an option, and a bare ``-`` as
+    ``$OLDPWD`` even after ``--``.
     """
     if directory == "~":
         return "cd ~"
     if directory.startswith("~/"):
         return f"cd ~/{shlex.quote(directory[2:])}"
+    if directory.startswith("-"):
+        directory = f"./{directory}"
     return f"cd {shlex.quote(directory)}"
 
 

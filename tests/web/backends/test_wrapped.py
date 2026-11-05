@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from typantic.web.backends.container import (
     docker_backend,
     podman_backend,
 )
-from typantic.web.backends.ssh import SshBackend, SshOptions
+from typantic.web.backends.ssh import SshBackend, SshOptions, _remote_cd
 
 ARGV = ["app", "run", "--config", "/jobs/j/submit_config.json"]
 JOB_DIR = Path("/jobs/j")
@@ -21,6 +22,20 @@ def _wrap(backend, options):
 
 
 # --- SSH ---
+
+
+@pytest.mark.parametrize("name", ["-work", "-", "--", "-L"])
+def test_ssh_directory_starting_with_a_dash_is_a_folder_for_cd(tmp_path, name) -> None:
+    (tmp_path / name).mkdir()
+    done = subprocess.run(  # noqa: S603 - a fixed shell on a directory made here
+        ["/bin/sh", "-c", f"{_remote_cd(name)} && pwd -P"],
+        cwd=tmp_path,
+        env={"OLDPWD": "/"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert Path(done.stdout.strip()) == (tmp_path / name).resolve()
 
 
 def test_ssh_wrap_minimal():
