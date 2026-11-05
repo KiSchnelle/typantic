@@ -96,7 +96,7 @@ def test_template_required_list_of_scalars_is_example_list():
     assert isinstance(files, list)
     assert files[0].startswith("<REQUIRED")
     # The shown shape must reload as a valid list, not a bare scalar string.
-    Paths(files=[Path("a.txt")])
+    assert Paths(files=files).files == [Path(files[0])]
 
 
 def test_template_serialises_enum_tuple_set_datetime():
@@ -155,6 +155,16 @@ def test_write_template_yaml_then_round_trips(tmp_path: Path):
     path = tmp_path / "c.yaml"
     write_config_template(Cfg, path)
     assert yaml.safe_load(path.read_text()) == build_config_template(Cfg)
+
+
+def test_write_template_yaml_keeps_field_order_and_unicode(tmp_path: Path):
+    class Ordered(BaseModel):
+        zeta: str = "Größe"
+        alpha: int = 1
+
+    path = tmp_path / "c.yaml"
+    write_config_template(Ordered, path)
+    assert path.read_text(encoding="utf-8") == "zeta: Größe\nalpha: 1\n"
 
 
 def test_write_template_json_by_suffix(tmp_path: Path):
@@ -515,9 +525,8 @@ def test_template_of_a_self_referential_model_terminates() -> None:
     assert template["children"] == ["<REQUIRED: children>"]
 
 
-def test_template_of_a_directly_self_referential_model_terminates() -> None:
+def test_template_of_a_mutually_recursive_model_terminates() -> None:
     class Loop(BaseModel):
-        nested: "Loop | None" = None
         via_required: "Inner"
 
     class Inner(BaseModel):
@@ -786,6 +795,31 @@ def test_a_model_with_aliases_off_takes_its_field_names(tmp_path, model):
 
 def test_a_model_with_aliases_off_rejects_the_alias():
     assert unknown_config_keys(_NameOnly, {"spelled": 2}) == ["spelled"]
+
+
+class _NameOnlyExplicit(BaseModel):
+    model_config = ConfigDict(validate_by_alias=False, validate_by_name=True)
+
+    value: int = Field(default=1, alias="spelled")
+
+
+class _NameAndAlias(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
+    value: int = Field(default=1, alias="spelled")
+
+
+def test_aliases_off_with_names_on_takes_only_the_field_name():
+    assert unknown_config_keys(_NameOnlyExplicit, {"value": 2}) == []
+    assert unknown_config_keys(_NameOnlyExplicit, {"spelled": 2}) == ["spelled"]
+    assert _NameOnlyExplicit.model_validate({"value": 2}).value == 2
+
+
+def test_names_on_with_aliases_on_takes_both_spellings():
+    assert unknown_config_keys(_NameAndAlias, {"value": 2}) == []
+    assert unknown_config_keys(_NameAndAlias, {"spelled": 2}) == []
+    assert _NameAndAlias.model_validate({"value": 2}).value == 2
+    assert _NameAndAlias.model_validate({"spelled": 2}).value == 2
 
 
 class _Tokens(BaseModel):

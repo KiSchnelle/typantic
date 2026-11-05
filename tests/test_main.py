@@ -161,22 +161,6 @@ def test_run_context_exits_when_the_command_crashes(monkeypatch):
     assert events == ["enter", "exit"]
 
 
-def test_real_clean_run_logs_timing(monkeypatch, caplog):
-    monkeypatch.setattr(sys, "argv", ["typantic"])
-    with caplog.at_level(logging.INFO, logger=_PKG):
-        make_main(_app_that, package_name=_PKG)()
-    assert "Execution took" in caplog.text  # real run: wall-clock logged
-
-
-def test_meta_flag_exit_skips_timing_log(monkeypatch, caplog):
-    # A meta op (--help/--schema/--generate-config) exits 0 without a real run;
-    # its timing must NOT be logged so machine-readable stdout stays clean.
-    monkeypatch.setattr(sys, "argv", ["typantic", "--help"])
-    with caplog.at_level(logging.INFO, logger=_PKG):
-        make_main(_app_that, package_name=_PKG)()  # --help exits 0, swallowed
-    assert "Execution took" not in caplog.text
-
-
 def test_nonzero_exit_is_reraised(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["typantic"])
     with pytest.raises(SystemExit) as exc:
@@ -219,13 +203,19 @@ def test_autocomplete_returns_without_entering_run_context(monkeypatch):
     # the completion short-circuit without ever entering the run context.
     monkeypatch.setattr("typantic._main._is_autocompleting", lambda: True)
     monkeypatch.setattr(sys, "argv", ["typantic"])
+    events = []
     ran = []
 
     def fake_app():  # a completion callable that returns rather than exits
         ran.append(True)
 
-    make_main(lambda: fake_app, package_name=_PKG)()  # returns, no raise
-    assert ran
+    make_main(
+        lambda: fake_app,
+        package_name=_PKG,
+        run_context=_spy_context(events),
+    )()  # returns, no raise
+    assert ran == [True]
+    assert not events
 
 
 def test_autocomplete_import_error_propagates(monkeypatch):

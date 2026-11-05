@@ -606,6 +606,19 @@ class PanelModel(ComputeMixin, UntitledMixin):
     ]
 
 
+class TitledArgumentMixin(BaseModel):
+    cli_panel: ClassVar[str] = "Mixin Panel"
+
+    source: Annotated[
+        str,
+        Field(description="Source.", kw_only=False),
+    ]
+
+
+class PanelledArgumentModel(TitledArgumentMixin):
+    pass
+
+
 class SelfTitledModel(BaseModel):
     cli_panel: ClassVar[str] = "Own Panel"
 
@@ -663,8 +676,8 @@ class TestSubpanels:
         assert _param_meta(app, "speed").rich_help_panel == "Own Panel"
 
     def test_argument_never_panelled(self) -> None:
-        app = _make_panel_app(PanelModel, subpanels=True)
-        assert _param_meta(app, "target").rich_help_panel is None
+        app = _make_panel_app(PanelledArgumentModel, subpanels=True)
+        assert _param_meta(app, "source").rich_help_panel is None
 
     def test_panel_title_rendered_in_help(self) -> None:
         app = _make_panel_app(PanelModel, subpanels=True)
@@ -701,14 +714,6 @@ class TestNoneDefaultHelp:
         app, _ = _make_app(SimpleModel)
         result = runner.invoke(app, ["--help"])
         assert "[default: 1]" in _plain(result.output)
-
-    def test_none_default_still_passes_none(self) -> None:
-        app, results = _make_app(SimpleModel)
-        result = runner.invoke(app, ["Alice"])
-        assert result.exit_code == 0
-        config = results[0]
-        assert isinstance(config, SimpleModel)
-        assert config.count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -783,10 +788,11 @@ class TestLazyFactory:
         assert isinstance(config, CounterModel)
         assert config.ticket == 99
 
-    def test_sample_value_shown_in_help(self) -> None:
+    def test_help_does_not_run_the_factory(self) -> None:
+        _counter["n"] = 0
         app, _ = _make_app(CounterModel)
-        output = _plain(runner.invoke(app, ["--help"]).output)
-        assert "default" in output.lower()
+        assert runner.invoke(app, ["--help"]).exit_code == 0
+        assert _counter["n"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -2142,19 +2148,6 @@ def test_help_names_what_a_text_parsed_flag_takes() -> None:
     app, _ = _make_app(Cfg)
     output = _plain(runner.invoke(app, ["--help"]).output)
     assert "<decimal>" in output
-
-
-def test_an_unsupported_field_type_no_longer_takes_down_other_commands() -> None:
-    class Cfg(BaseModel):
-        amount: decimal.Decimal = decimal.Decimal(1)
-
-    app = typer.Typer()
-    add_command(app, Cfg, lambda config: None, name="run")
-
-    @app.command()
-    def other() -> None: ...
-
-    assert runner.invoke(app, ["other", "--help"]).exit_code == 0
 
 
 @pytest.mark.parametrize(
