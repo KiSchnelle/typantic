@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-05
+
 ### Added
 
 - **`GET /api/jobs/{id}/removal` and `GET /api/projects/{id}/removal`** say which
@@ -14,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A long line in a job's log pushed the job's buttons off-screen.** The
+  page's main column grew to fit its widest content, and a job log does not
+  wrap, so one long line (a download progress bar can be ~900 characters)
+  widened the whole page. Clone, Restart, Cancel and Delete, and the log's own
+  wrap, copy and download buttons, ended up far to the right, out of sight. The
+  column now keeps to the window, and the log, the Config panel and the jobs
+  table scroll sideways in their own boxes.
 - **An edited command reaches an open dashboard.** The catalog was updated only when the
   list of command keys changed, so a server upgrade that kept the keys left the old title,
   description and default backend on screen until a reload.
@@ -149,7 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output folders than a dialog can show keeps the rest, and the dialog says how many.
 - **Docstrings and README match the code.** The `default_factory` mapping
   rule, `config_file`'s `"only"` mode (it adds `--schema` too) and the README's
-  `typantic web serve` startup banner were out of date. The "No commands
+  `typantic web serve` startup banner were out of date. The Apptainer backend's `binds` description, shown in the form, now says only a few host paths are bound by default. The "No commands
   discovered." warning is reworded.
 - **Minimum dependency versions raised.** `pydantic>=2.14.2`, `typer>=0.27.3`,
   and for `[web]` `fastapi>=0.162.0`, `uvicorn>=0.54.0`, `websockets>=17.4` and
@@ -169,16 +178,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upgrading**. While another server still has it open, the conversion fails: the
   new server logs a warning saying to stop the others, and keeps running in WAL
   mode until it is restarted.
-
-### Fixed
-
-- **A long line in a job's log pushed the job's buttons off-screen.** The
-  page's main column grew to fit its widest content, and a job log does not
-  wrap, so one long line (a download progress bar can be ~900 characters)
-  widened the whole page. Clone, Restart, Cancel and Delete, and the log's own
-  wrap, copy and download buttons, ended up far to the right, out of sight. The
-  column now keeps to the window, and the log, the Config panel and the jobs
-  table scroll sideways in their own boxes.
 
 ## [0.8.1] - 2026-09-24
 
