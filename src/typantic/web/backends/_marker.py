@@ -13,9 +13,6 @@ from typantic.web.backends.base import PollResult
 from typantic.web.models import JobStatus
 
 EXIT_MARKER = ".typantic-exit"
-# The marker's name before 0.8.0, which an app could collide with; a job launched
-# by an older typantic and still running across the upgrade writes it.
-_LEGACY_EXIT_MARKER = "exit_code"
 
 
 def _read_exit_code(path: Path) -> int | None:
@@ -36,13 +33,12 @@ def finished(job_dir: Path) -> PollResult | None:
     The marker's mtime is when the job finished, which a server that was not
     running at the time would otherwise only know as the moment it noticed.
     """
-    for name in (EXIT_MARKER, _LEGACY_EXIT_MARKER):
-        path = job_dir / name
-        code = _read_exit_code(path)
-        if code is not None:
-            status = JobStatus.DONE if code == 0 else JobStatus.FAILED
-            return PollResult(status=status, exit_code=code, finished_at=_mtime(path))
-    return None
+    path = job_dir / EXIT_MARKER
+    code = _read_exit_code(path)
+    if code is None:
+        return None
+    status = JobStatus.DONE if code == 0 else JobStatus.FAILED
+    return PollResult(status=status, exit_code=code, finished_at=_mtime(path))
 
 
 def _mtime(path: Path) -> datetime | None:
@@ -53,6 +49,5 @@ def _mtime(path: Path) -> datetime | None:
 
 
 def clear_exit_code(job_dir: Path) -> None:
-    """Remove a previous run's markers, so a restart in place starts unfinished."""
-    for name in (EXIT_MARKER, _LEGACY_EXIT_MARKER):
-        (job_dir / name).unlink(missing_ok=True)
+    """Remove a previous run's marker, so a restart in place starts unfinished."""
+    (job_dir / EXIT_MARKER).unlink(missing_ok=True)

@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `list[SecretStr]` or `dict[str, SecretStr]` default was written as its mask, and
   loading the template replaced the real default with the literal `**********`.
   Such a field now gets the same "use the default" marker as a plain secret.
+- **Only typantic's own `.typantic-exit` marker ends a job.** A file named
+  `exit_code` that an app wrote into its working directory was read as the job's exit
+  code while the job was still running, and a restart in place deleted it. **A job
+  started before 0.8.0 that is still running across this upgrade** writes the old
+  `exit_code` marker, which is no longer read: it ends as FAILED, or takes the status
+  its scheduler reports.
 
 ### Removed
 

@@ -112,9 +112,7 @@ def test_local_running_then_done(tmp_path):
 
 
 def test_local_clears_stale_markers_on_relaunch(tmp_path):
-    # A previous run's markers, current and pre-0.8.0 spelling.
     (tmp_path / ".typantic-exit").write_text("0\n")
-    (tmp_path / "exit_code").write_text("0\n")
     gate = _gate(tmp_path)
     backend = LocalBackend()
     launched = backend.launch(
@@ -123,7 +121,7 @@ def test_local_clears_stale_markers_on_relaunch(tmp_path):
         log_path=tmp_path / "job.log",
         backend_options={},
     )
-    # The stale markers were cleared, so the fresh run reads as running, not done.
+    # The stale marker was cleared, so the fresh run reads as running, not done.
     try:
         assert backend.poll(_record(tmp_path, pid=launched.pid)).status is (
             JobStatus.RUNNING
@@ -152,12 +150,39 @@ def test_a_job_that_finishes_between_the_checks_is_not_failed(tmp_path, monkeypa
     assert result.exit_code == 0
 
 
-def test_a_job_launched_before_the_marker_rename_is_read_back(tmp_path):
-    # A job still running across the upgrade writes the pre-0.8.0 marker.
-    (tmp_path / "exit_code").write_text("3\n")
-    result = LocalBackend().poll(_record(tmp_path, pid=None))
-    assert result.status is JobStatus.FAILED
-    assert result.exit_code == 3
+def test_a_file_the_app_calls_exit_code_does_not_end_the_job(tmp_path):
+    gate = _gate(tmp_path)
+    backend = LocalBackend()
+    launched = backend.launch(
+        ["sh", "-c", f'echo 3 > tmp; mv tmp exit_code; cat "{gate}"'],
+        job_dir=tmp_path,
+        log_path=tmp_path / "job.log",
+        backend_options={},
+    )
+    record = _record(tmp_path, pid=launched.pid)
+    try:
+        deadline = time.monotonic() + 5
+        while not (tmp_path / "exit_code").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert (tmp_path / "exit_code").read_text() == "3\n"
+        assert backend.poll(record).status is JobStatus.RUNNING
+    finally:
+        _open_gate(gate)
+    _wait_for_marker(tmp_path)
+    assert backend.poll(record).status is JobStatus.DONE
+
+
+def test_a_restart_in_place_keeps_a_file_the_app_calls_exit_code(tmp_path):
+    (tmp_path / "exit_code").write_text("7\n")
+    backend = LocalBackend()
+    backend.launch(
+        ["true"],
+        job_dir=tmp_path,
+        log_path=tmp_path / "job.log",
+        backend_options={},
+    )
+    _wait_for_marker(tmp_path)
+    assert (tmp_path / "exit_code").read_text() == "7\n"
 
 
 def test_poll_no_pid_no_marker_is_failed(tmp_path):
