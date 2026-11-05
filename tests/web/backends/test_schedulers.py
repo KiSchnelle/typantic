@@ -238,6 +238,7 @@ def test_pbs_launch_writes_script(tmp_path):
     assert "#PBS --nodes=1" in script
     assert runner.calls[0] == [
         "qsub",
+        "-V",
         "-N",
         _job_name(tmp_path.name),
         "-o",

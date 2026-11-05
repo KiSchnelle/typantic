@@ -625,8 +625,9 @@ click **Launch**. The dashboard writes your values to a config file, runs
 - **Backends decide *where* a job runs**, chosen per launch in the form.
   `local` (a subprocess on this machine) is the default and needs no setup;
   `slurm` / `pbs` submit to an HPC cluster, `docker` / `podman` / `apptainer`
-  run in a container, and `ssh` runs on another host. You can register your own
-  under the `typantic.web_backends` entry-point group.
+  run in a container, and `ssh` runs on another host. A `slurm` or `pbs` job gets
+  the dashboard server's environment. You can register your own under the
+  `typantic.web_backends` entry-point group.
 - **Brand it as your own.** A package can show the dashboard under its own
   name, mark and accent colour by registering a brand (a `Brand` or a plain
   mapping of its fields) under the `typantic.web_brand` entry-point group:

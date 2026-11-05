@@ -33,6 +33,7 @@ class PbsBackend(SchedulerBackend):
 
     def _control_args(self, *, job_dir: Path, log_path: Path) -> list[str]:
         return [
+            "-V",  # the submit environment, so a bare app name is found on PATH
             "-N",
             _job_name(job_dir.name),
             "-o",

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PBS jobs get the submit environment.** `qsub` now runs with `-V`, as Slurm's
+  `sbatch` exports by default. Without it, a job started with the compute node's login
+  environment, so an app on the PATH of the server's virtualenv was not found and the
+  job ended with exit 127. **This has not been tested on a real PBS installation,**
+  only that `qsub` receives `-V`. The server's environment now reaches the job.
 - **An ssh job's remote directory may start with `-`.** `cd` read `-work` as an option
   and the job failed, and a bare `-` changed to the previous directory instead.
 - **Cancelling or restarting an unknown job id leaves nothing behind.** Each such
