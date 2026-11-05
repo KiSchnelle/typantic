@@ -37,6 +37,18 @@ SEQUENCES = (
 )
 
 
+def is_union(tp: object) -> bool:
+    """Whether ``tp`` is a union, in either the ``X | Y`` or the ``Union`` spelling."""
+    return get_origin(tp) in (Union, types.UnionType)
+
+
+def union_members(tp: object) -> tuple[object, ...]:
+    """The non-``None`` members of a union, or ``tp`` itself when it is not one."""
+    if is_union(tp):
+        return tuple(arg for arg in get_args(tp) if arg is not type(None))
+    return (tp,)
+
+
 def extract_base_type(annotation: object) -> object:
     """Strip ``Annotated`` validator metadata, keeping the structural type.
 
@@ -68,7 +80,7 @@ def extract_base_type(annotation: object) -> object:
     origin = get_origin(annotation)
     args = get_args(annotation)
 
-    if origin in (Union, types.UnionType):
+    if is_union(annotation):
         cleaned = tuple(extract_base_type(a) for a in args)
         return Union[cleaned]  # noqa: UP007
 
@@ -307,23 +319,19 @@ def field_input_key(model_cls: type[BaseModel], name: str, field: FieldInfo) -> 
 def nested_model(annotation: object) -> type[BaseModel] | None:
     """The model a field holds, directly or as the one member of ``X | None``."""
     base = extract_base_type(annotation)
-    if is_model_type(base):
-        return base
-    if get_origin(base) in (Union, types.UnionType):
-        members = [arg for arg in get_args(base) if arg is not type(None)]
-        if len(members) == 1 and is_model_type(members[0]):
-            return members[0]
+    members = union_members(base)
+    if len(members) == 1 and is_model_type(members[0]):
+        return members[0]
     return None
 
 
 def item_model(annotation: object) -> type[BaseModel] | None:
     """The model a list/set/tuple field holds per item (``X | None`` unwrapped)."""
     base = extract_base_type(annotation)
-    if get_origin(base) in (Union, types.UnionType):
-        members = [arg for arg in get_args(base) if arg is not type(None)]
-        if len(members) != 1:
-            return None
-        base = members[0]
+    members = union_members(base)
+    if len(members) != 1:
+        return None
+    base = members[0]
     args = get_args(base)
     if get_origin(base) is list and len(args) == 1 and is_model_type(args[0]):
         return args[0]

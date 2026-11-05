@@ -5,7 +5,6 @@ import dataclasses
 import inspect
 import json
 import math
-import types
 from collections.abc import Callable, Iterable
 from decimal import Decimal
 from enum import Enum
@@ -16,7 +15,6 @@ from typing import (
     Any,
     Literal,
     NamedTuple,
-    Union,
     cast,
     get_args,
     get_origin,
@@ -38,8 +36,10 @@ from typantic._introspect import SEQUENCES as _SEQUENCES
 from typantic._introspect import extract_base_type as _extract_base_type
 from typantic._introspect import field_input_key as _field_input_key
 from typantic._introspect import is_model_type as _is_model_type
+from typantic._introspect import is_union as _is_union
 from typantic._introspect import model_hints as _model_hints
 from typantic._introspect import nested_model as _nested_model
+from typantic._introspect import union_members as _union_members
 from typantic._introspect import unwrap as _unwrap
 
 
@@ -417,12 +417,9 @@ def _numeric_type(typer_type: object) -> type | None:
     so a ``T | None`` union is unwrapped to recover the numeric member (Typer
     still applies ``min`` / ``max`` to the option).
     """
-    if typer_type is int or typer_type is float:
-        return cast("type", typer_type)
-    if get_origin(typer_type) in (Union, types.UnionType):
-        non_none = [arg for arg in get_args(typer_type) if arg is not type(None)]
-        if len(non_none) == 1 and non_none[0] in (int, float):
-            return cast("type", non_none[0])
+    members = _union_members(typer_type)
+    if len(members) == 1 and members[0] in (int, float):
+        return cast("type", members[0])
     return None
 
 
@@ -702,7 +699,8 @@ def _is_structure(tp: object) -> bool:
     origin = get_origin(tp)
     base = origin or tp
     return (
-        origin in (list, tuple, Union, types.UnionType)
+        origin in (list, tuple)
+        or _is_union(tp)
         or tp is tuple
         or base in _MAPPINGS
         or (base in _SEQUENCES and not get_args(tp))
@@ -741,7 +739,7 @@ def _cli_type(tp: object) -> tuple[object, str | None] | None:
     field then needs ``config_file="only"``.
     """
     origin = get_origin(tp)
-    if origin in (Union, types.UnionType):
+    if _is_union(tp):
         return _union_cli_type(tp)
     if origin in (list, tuple):
         return _sequence_cli_type(tp)
@@ -752,7 +750,7 @@ def _cli_type(tp: object) -> tuple[object, str | None] | None:
 
 def _union_cli_type(tp: object) -> tuple[object, str | None] | None:
     """A union: ``X | None`` stays optional ``X``; a union of values is text."""
-    members = [arg for arg in get_args(tp) if arg is not type(None)]
+    members = _union_members(tp)
     if len(members) == 1:  # X | None: a one-member union is always optional
         inner = _cli_type(members[0])
         return None if inner is None else (inner[0] | None, inner[1])  # type: ignore[operator]
@@ -787,11 +785,10 @@ _CONCRETE_COLLECTIONS: dict[object, Callable[[Iterable[Any]], object]] = {
 def _declared_container(annotation: object) -> Callable[[Iterable[Any]], object] | None:
     """The collection a field declares where the CLI would hand it a list."""
     tp = _unwrap(annotation)
-    if get_origin(tp) in (Union, types.UnionType):
-        members = [arg for arg in get_args(tp) if arg is not type(None)]
-        if len(members) != 1:
-            return None
-        tp = _unwrap(members[0])
+    members = _union_members(tp)
+    if len(members) != 1:
+        return None
+    tp = _unwrap(members[0])
     origin = get_origin(tp)
     if origin in _CONCRETE_COLLECTIONS:
         return _CONCRETE_COLLECTIONS[origin]
@@ -909,13 +906,6 @@ def _secret_type(base_type: object) -> type | None:
         if candidate is SecretStr or candidate is SecretBytes:
             return cast("type", candidate)
     return None
-
-
-def _union_members(typer_type: object) -> tuple[object, ...]:
-    """``typer_type`` itself, or the non-``None`` members of a ``T | None`` union."""
-    if get_origin(typer_type) in (Union, types.UnionType):
-        return tuple(arg for arg in get_args(typer_type) if arg is not type(None))
-    return (typer_type,)
 
 
 def _is_bool(typer_type: object) -> bool:
