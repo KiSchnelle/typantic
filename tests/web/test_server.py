@@ -1,6 +1,8 @@
 import os
+import subprocess
 import time
 
+import pytest
 import uvicorn
 
 from typantic.web import gallery, server
@@ -80,19 +82,37 @@ def test_local_server_name_falls_back_to_bare_name(monkeypatch):
     assert server.local_server_name() == "node1"
 
 
-def test_fqdn_via_hostname_reads_command(monkeypatch):
-    class _Result:
-        stdout = "node1.example.org\n"
+def _fake_hostname(tmp_path, monkeypatch, script):
+    tool = tmp_path / "hostname"
+    tool.write_text(f"#!/bin/sh\n{script}\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
 
-    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: _Result())
+
+def test_fqdn_via_hostname_reads_command(tmp_path, monkeypatch):
+    _fake_hostname(tmp_path, monkeypatch, "echo node1.example.org")
     assert server._fqdn_via_hostname() == "node1.example.org"
 
 
-def test_fqdn_via_hostname_swallows_failure(monkeypatch):
-    def _boom(*a, **k):
-        raise FileNotFoundError
+def test_fqdn_via_hostname_survives_output_that_is_not_utf8(tmp_path, monkeypatch):
+    _fake_hostname(tmp_path, monkeypatch, r"printf 'node\377.example.org\n'")
+    assert server._fqdn_via_hostname() == "node\ufffd.example.org"
 
-    monkeypatch.setattr(server.subprocess, "run", _boom)
+
+def test_fqdn_via_hostname_ignores_a_failed_command(tmp_path, monkeypatch):
+    _fake_hostname(tmp_path, monkeypatch, "echo node1.example.org; exit 1")
+    assert server._fqdn_via_hostname() == ""
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [FileNotFoundError(), subprocess.TimeoutExpired("hostname", 2)],
+)
+def test_fqdn_via_hostname_swallows_failure(monkeypatch, failure):
+    def _boom(*a, **k):
+        raise failure
+
+    monkeypatch.setattr(server, "run_tool", _boom)
     assert server._fqdn_via_hostname() == ""
 
 

@@ -13,6 +13,7 @@ import subprocess
 from urllib.parse import quote
 
 from typantic.web import gallery
+from typantic.web._subprocess import run_tool
 from typantic.web.api import make_api
 from typantic.web.launcher import Launcher
 from typantic.web.models import Brand
@@ -83,16 +84,10 @@ def _fqdn_via_hostname() -> str:
     the OS resolver. Capped at two seconds so a slow resolver cannot hang startup.
     """
     try:
-        result = subprocess.run(
-            ["hostname", "-f"],  # noqa: S607 - fixed argv, no shell
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=True,
-        )
+        result = run_tool(["hostname", "-f"], timeout=2)
     except (OSError, subprocess.SubprocessError):
         return ""
-    return result.stdout.strip()
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def local_server_name() -> str:

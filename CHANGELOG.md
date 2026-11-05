@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A hostname that is not valid UTF-8 no longer stops `serve`.** The lookup for the
+  SSH tunnel line crashed the startup with a `UnicodeDecodeError`.
 - **A refused `serve` creates nothing.** `--no-token` on a routable host left a new job
   store behind, and logged the "No commands discovered" warning, before refusing.
 - **PBS jobs get the submit environment.** `qsub` now runs with `-V`, as Slurm's
