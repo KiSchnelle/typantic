@@ -60,6 +60,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: more field types are refused when a command is decorated.** A mapping
+  other than `dict` (`Mapping`, `MutableMapping`, `OrderedDict`, `Counter`,
+  `defaultdict`), a `TypedDict`, a dataclass, and a collection with no item type (a
+  bare `set`, `frozenset`, `deque`, `Sequence` or `typing.List`) now raise the "no CLI
+  flag can express" `ValueError`, as `dict[str, int]` does. They got a text flag that
+  failed at run time, or, for a bare `Sequence`, gave the field a `str`. **This also
+  refuses a field with a validator that made the flag work,** such as
+  `Annotated[Mapping[str, int], BeforeValidator(json.loads)]`, a bare `set` with a
+  `mode="before"` validator, or `Annotated[SomeDataclass, BeforeValidator(...)]`, and
+  an app that never passed such a flag now fails at import. Declare the field as
+  `str` and parse it yourself, or set `config_file="only"`.
+- **Breaking: a field cannot take a flag Typer adds.** A field named `help`,
+  `install_completion` or `show_completion` is refused unless a `cli_name` gives it
+  another flag. A field named `help` took `--help` away, so the command's help could
+  no longer be shown, and Typer's completion options overrode the others on a
+  single-command app.
 - **Deleting a job or project can now delete its output folder too.** The dialog
   shows the exact path of each absolute `output_folder` that goes, and everything
   under that path goes with it. Before, a folder outside the job's own stayed on

@@ -1,6 +1,7 @@
 """Core decorator for converting Pydantic models to Typer CLI interfaces."""
 
 import collections
+import dataclasses
 import inspect
 import json
 import math
@@ -33,6 +34,7 @@ from typantic._config_file import (
     unknown_config_keys,
     write_config_template,
 )
+from typantic._introspect import SEQUENCES as _SEQUENCES
 from typantic._introspect import extract_base_type as _extract_base_type
 from typantic._introspect import field_input_key as _field_input_key
 from typantic._introspect import is_model_type as _is_model_type
@@ -107,6 +109,16 @@ _CONFIG_FLAGS = {
     "--generate-config": "config_file=True injects to write a template",
     "--schema": "config_file=True injects to print the JSON Schema",
 }
+# The flags Typer adds to a command itself, and what each is for. Click drops its
+# help option when a field claims the flag, and Typer's eager completion options
+# win over a field of a root command.
+_TYPER_FLAGS = {
+    "--help": "Typer uses to show the command's help",
+    "--install-completion": "Typer uses to install shell completion",
+    "--show-completion": "Typer uses to print shell completion",
+}
+# Click also keeps one value per parameter name, whatever flag a field declares.
+_TYPER_PARAMS = frozenset(flag[2:].replace("-", "_") for flag in _TYPER_FLAGS)
 _EXPLICIT_SOURCES = frozenset({"COMMANDLINE", "ENVIRONMENT", "PROMPT"})
 
 
@@ -637,6 +649,10 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
             continue
 
         cli_name = "_".join(path)
+        if cli_name in _TYPER_PARAMS and (
+            field_info.kw_only is False or "cli_name" in _cli_extra(field_info)
+        ):
+            cli_name += "_"
         panel = _panel_for_field(model_cls, name) if subpanels else None
         param, annotated, flags = _build_leaf(
             cli_name=cli_name,
@@ -660,6 +676,15 @@ def _build_params(  # noqa: PLR0913 - a recursive builder; each arg tracks one a
 # matches them: an int subclass such as ByteSize, or a Path subclass, is not.
 _NATIVE: tuple[object, ...] = (str, int, float, bool, UUID, Path)
 _NO_FLAG = object()  # a type no CLI flag can express
+# The mappings Pydantic validates, none of which it builds from text.
+_MAPPINGS: tuple[object, ...] = (
+    dict,
+    collections.abc.Mapping,
+    collections.abc.MutableMapping,
+    collections.OrderedDict,
+    collections.defaultdict,
+    collections.Counter,
+)
 
 
 def _is_native(tp: object) -> bool:
@@ -669,11 +694,20 @@ def _is_native(tp: object) -> bool:
 
 
 def _is_structure(tp: object) -> bool:
-    """Whether ``tp`` is a container, a union or a model rather than one value."""
+    """Whether ``tp`` is a container, a union or a model rather than one value.
+
+    A set, a deque or a ``Sequence`` with an item type reaches here as a list
+    (``extract_base_type``); without one it has no item a flag could parse.
+    """
     origin = get_origin(tp)
+    base = origin or tp
     return (
-        origin in (list, tuple, dict, Union, types.UnionType)
-        or tp in (list, tuple, dict)
+        origin in (list, tuple, Union, types.UnionType)
+        or tp is tuple
+        or base in _MAPPINGS
+        or (base in _SEQUENCES and not get_args(tp))
+        or hasattr(base, "__required_keys__")  # a TypedDict, of either module
+        or dataclasses.is_dataclass(base)
         or _is_model_type(tp)
     )
 
@@ -702,8 +736,9 @@ def _cli_type(tp: object) -> tuple[object, str | None] | None:
     ``Decimal``, a date, a URL, an IP address, ``Any``, a union of values) is
     taken as text for Pydantic to parse, with a metavar naming what it must be
     (``<decimal>``). Lists and fixed tuples of such values work item by item.
-    ``None`` means no flag can express the type (a dict, a list of lists or of
-    models); the field then needs ``config_file="only"``.
+    ``None`` means no flag can express the type (a mapping, a ``TypedDict``, a
+    dataclass, a collection with no item type, a list of lists or of models); the
+    field then needs ``config_file="only"``.
     """
     origin = get_origin(tp)
     if origin in (Union, types.UnionType):
@@ -730,7 +765,7 @@ def _union_cli_type(tp: object) -> tuple[object, str | None] | None:
 def _sequence_cli_type(tp: object) -> tuple[object, str | None] | None:
     """A list (a repeated flag) or a fixed tuple (a multi-value flag)."""
     items = [_item_type(arg) for arg in get_args(tp)]
-    if _NO_FLAG in items:
+    if not items or _NO_FLAG in items:
         return None
     parsed = [cast("tuple[object, str | None]", item) for item in items]
     if get_origin(tp) is list:
@@ -805,8 +840,9 @@ def _check_name_collisions(
     even when their parameter names differ. Click keeps only the last such option,
     so the other field would silently stop being settable. The same goes for a
     flag typantic injects itself (``reserved``, flag -> purpose), such as
-    ``--config``.
+    ``--config``, and for one Typer adds, such as ``--help``.
     """
+    taken = _TYPER_FLAGS | (reserved or {})
     seen: dict[str, tuple[str, ...]] = {}
     flags: dict[str, tuple[str, ...]] = {}
     for leaf in mapping:
@@ -823,10 +859,10 @@ def _check_name_collisions(
         seen[cli_name] = name_path
 
         for flag in declared:
-            if reserved and flag in reserved:
+            if flag in taken:
                 msg = (
                     f"CLI flag collision: field '{'.'.join(name_path)}' declares "
-                    f"'{flag}', which {reserved[flag]}. Give the field a cli_name."
+                    f"'{flag}', which {taken[flag]}. Give the field a cli_name."
                 )
                 raise ValueError(msg)
             if flag in flags:

@@ -128,10 +128,16 @@ Your function receives the **validated model instance**, exactly as `Model(**wha
 Validators that raise `ValueError` / `AssertionError` surface as Typer
 parameter errors; other exception types propagate unchanged.
 
-A type no flag can express (a `dict`, a list of lists, a list of models) is
-refused when the command is decorated, naming the field. Such a model belongs in
-a file: `config_file="only"` (see [Config files](#config-files)) makes the command
-read every field from `--config`.
+A type no flag can express is refused when the command is decorated, naming the
+field: a mapping (`dict`, `Mapping`, `OrderedDict`, `Counter`...), a `TypedDict`, a
+dataclass, a list of lists or of models, or a collection with no item type (a bare
+`set` or `Sequence`). A `BeforeValidator` that parses text does not change this. Such
+a model belongs in a file: `config_file="only"` (see [Config files](#config-files))
+makes the command read every field from `--config`.
+
+A field can't take a flag Typer adds itself (`--help`, `--install-completion`,
+`--show-completion`): one named `help` is refused until a `cli_name` gives it another
+flag.
 
 ## Per-field CLI hints
 

@@ -2,10 +2,12 @@
 
 import collections
 import collections.abc
+import dataclasses
 import datetime as dt
 import decimal
 import inspect
 import ipaddress
+import json
 import re
 import types
 import typing
@@ -17,17 +19,21 @@ from typing import Annotated, ClassVar, Literal, get_args
 import annotated_types
 import pytest
 import typer
+import typing_extensions
 from pydantic import (
     AfterValidator,
     AliasChoices,
     AliasPath,
     BaseModel,
+    BeforeValidator,
     ByteSize,
     ConfigDict,
     Field,
     HttpUrl,
     SecretBytes,
     SecretStr,
+    create_model,
+    field_validator,
     model_validator,
 )
 from pydantic.alias_generators import to_camel
@@ -2169,6 +2175,202 @@ def test_a_type_no_flag_can_express_is_refused_at_decoration(annotation) -> None
     with pytest.raises(ValueError, match="blob") as exc:
         pydantic_to_typer(Cfg)(lambda config: config)
     assert 'config_file="only"' in str(exc.value)
+
+
+class _Point(typing.TypedDict):
+    x: int
+
+
+class _ExtendedPoint(typing_extensions.TypedDict):
+    x: int
+
+
+class _GenericPoint[T](typing.TypedDict):
+    x: T
+
+
+@dataclasses.dataclass
+class _Place:
+    x: int = 0
+
+
+@dataclasses.dataclass
+class _GenericPlace[T]:
+    x: T
+
+
+_NO_FLAG_TYPES = [
+    collections.abc.Mapping[str, int],
+    collections.abc.MutableMapping[str, int],
+    collections.OrderedDict[str, int],
+    collections.Counter[str],
+    collections.defaultdict[str, int],
+    collections.abc.Mapping,
+    collections.abc.Mapping[str, int] | None,
+    _Point,
+    _ExtendedPoint,
+    _GenericPoint[int],
+    _Place,
+    _GenericPlace[int],
+    _Place | None,
+    _Place | int,
+    list[_Point],
+    list[_Place],
+    tuple[_Place, int],
+    set,
+    frozenset,
+    collections.deque,
+    collections.abc.Sequence,
+    collections.abc.MutableSequence,
+    collections.abc.Set,
+    collections.abc.MutableSet,
+    typing.List,  # noqa: UP006
+    typing.Tuple,  # noqa: UP006
+    typing.Set,  # noqa: UP006
+    typing.FrozenSet,  # noqa: UP006
+    typing.Deque,  # noqa: UP006
+    typing.Sequence,
+    typing.MutableSequence,
+    typing.AbstractSet,
+    typing.MutableSet,
+    typing.Mapping,
+    set | None,
+    list[set],
+    tuple[()],
+]
+
+
+@pytest.mark.parametrize("annotation", _NO_FLAG_TYPES)
+def test_a_mapping_or_bare_collection_is_refused_at_decoration(annotation) -> None:
+    class Cfg(BaseModel):
+        blob: Annotated[annotation, Field(kw_only=True)]
+
+    with pytest.raises(ValueError, match="blob") as exc:
+        pydantic_to_typer(Cfg)(lambda config: config)
+    assert 'config_file="only"' in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        collections.abc.Mapping[str, int],
+        _Point,
+        _Place,
+        collections.abc.Sequence,
+    ],
+)
+def test_a_type_no_flag_can_express_still_loads_from_a_file(
+    annotation,
+    tmp_path: Path,
+) -> None:
+    class Cfg(BaseModel):
+        blob: annotation
+
+    seen: list[Cfg] = []
+    app = typer.Typer()
+
+    @app.command()
+    @pydantic_to_typer(Cfg, config_file="only")
+    def go(config: Cfg) -> None:
+        seen.append(config)
+
+    value = {"x": 1} if annotation is not collections.abc.Sequence else ["a"]
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"blob": value}))
+    result = runner.invoke(app, ["--config", str(path)])
+    assert result.exit_code == 0, result.output
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        Annotated[collections.abc.Mapping[str, int], BeforeValidator(json.loads)],
+        Annotated[_Place, BeforeValidator(lambda text: {"x": int(text)})],
+    ],
+)
+def test_a_validator_does_not_make_a_refused_type_expressible(annotation) -> None:
+    class Cfg(BaseModel):
+        blob: Annotated[annotation, Field(kw_only=True)]
+
+    with pytest.raises(ValueError, match="blob"):
+        pydantic_to_typer(Cfg)(lambda config: config)
+
+
+def test_a_bare_set_with_a_before_validator_is_refused_too() -> None:
+    class Cfg(BaseModel):
+        blob: set
+
+        @field_validator("blob", mode="before")
+        @classmethod
+        def split(cls, value: str) -> set[str]:
+            return set(value.split(","))
+
+    with pytest.raises(ValueError, match="blob"):
+        pydantic_to_typer(Cfg)(lambda config: config)
+
+
+@pytest.mark.parametrize(
+    ("field", "flag"),
+    [
+        ("help", "--help"),
+        ("install_completion", "--install-completion"),
+        ("show_completion", "--show-completion"),
+    ],
+)
+@pytest.mark.parametrize("config_file", [False, True])
+def test_a_field_cannot_take_a_flag_typer_owns(field, flag, config_file) -> None:
+    model = create_model("Cfg", **{field: (str, "x")})
+
+    with pytest.raises(ValueError, match=flag) as exc:
+        pydantic_to_typer(model, config_file=config_file)(lambda config: config)
+    assert field in str(exc.value)
+    assert "cli_name" in str(exc.value)
+
+
+@pytest.mark.parametrize("field", ["help", "install_completion", "show_completion"])
+def test_a_cli_name_frees_a_field_named_like_a_typer_flag(field) -> None:
+    model = create_model(
+        "Cfg",
+        **{
+            field: (
+                str,
+                Field(default="x", json_schema_extra={"cli_name": "--hint"}),
+            ),
+        },
+    )
+
+    app, seen = _make_app(model)
+    assert "--hint" in _plain(runner.invoke(app, ["--help"]).output)
+    result = runner.invoke(app, ["--hint", "y"])
+    assert result.exit_code == 0, result.output
+    assert getattr(seen[0], field) == "y"
+
+
+def test_a_cli_name_frees_a_typer_flag_in_config_mode_too(tmp_path: Path) -> None:
+    class Cfg(BaseModel):
+        help: Annotated[
+            str,
+            Field(default="x", kw_only=True, json_schema_extra={"cli_name": "--hint"}),
+        ]
+
+    app, seen = _make_app_config(Cfg)
+    path = tmp_path / "c.json"
+    path.write_text('{"help": "file"}')
+    result = runner.invoke(app, ["--config", str(path), "--hint", "flag"])
+    assert result.exit_code == 0, result.output
+    assert seen[0].help == "flag"
+
+
+def test_a_positional_field_named_help_claims_no_flag() -> None:
+    class Cfg(BaseModel):
+        help: Annotated[str, Field(kw_only=False)]
+
+    app, seen = _make_app(Cfg)
+    assert runner.invoke(app, ["--help"]).exit_code == 0
+    result = runner.invoke(app, ["y"])
+    assert result.exit_code == 0, result.output
+    assert seen[0].help == "y"
 
 
 class TestOptionalNestedModels:

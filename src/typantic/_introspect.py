@@ -25,7 +25,7 @@ from pydantic.fields import FieldInfo
 
 # Collections the CLI gathers as a repeated flag (a list); Pydantic coerces the
 # list back into the declared collection.
-_SEQUENCES = (
+SEQUENCES = (
     list,
     set,
     frozenset,
@@ -72,7 +72,7 @@ def extract_base_type(annotation: object) -> object:
         cleaned = tuple(extract_base_type(a) for a in args)
         return Union[cleaned]  # noqa: UP007
 
-    repeated = origin in _SEQUENCES or (origin is tuple and _is_variadic_tuple(args))
+    repeated = origin in SEQUENCES or (origin is tuple and _is_variadic_tuple(args))
     if repeated and args:
         return list[extract_base_type(args[0])]  # type: ignore[misc]
 
